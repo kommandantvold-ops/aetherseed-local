@@ -20,13 +20,13 @@ class AudioCapture:
     """Captures audio from microphone using arecord (no PyAudio dependency)."""
 
     def __init__(self, device: str = "hw:2,0", sample_rate: int = 16000,
-                 channels: int = 1, chunk_duration: float = 0.5):
+                 channels: int = 2, chunk_duration: float = 0.5):
         self.device = device
         self.sample_rate = sample_rate
         self.channels = channels
         self.chunk_duration = chunk_duration
         self.chunk_samples = int(sample_rate * chunk_duration)
-
+        
     def record_chunk(self) -> Optional[np.ndarray]:
         """Record a single chunk of audio. Returns float32 numpy array."""
         duration = self.chunk_duration
@@ -50,6 +50,8 @@ class AudioCapture:
             with wave.open(tmp, 'rb') as wf:
                 frames = wf.readframes(self.chunk_samples)
                 audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                if self.channels == 2 and len(audio) > 0:
+                    audio = audio.reshape(-1, 2).mean(axis=1)
                 return audio
 
         except Exception:
