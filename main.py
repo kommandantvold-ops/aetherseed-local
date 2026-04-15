@@ -20,11 +20,11 @@ import argparse
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
-from core.node import NodeState
+from core.node import Node
 from core.scheduler import Scheduler, AgentMode, Event
 from models.wrappers import LLM, TTS, STT
 from logic.prompt_builder import build_system_prompt, build_messages
-from hardware.metrics import compute_decay, get_full_report
+from hardware.metrics import compute_decay, get_full_report, get_cpu_temp, get_memory_usage
 from intent_detection import detect_intent, execute_intent
 from aetherroot import AetherRoot
 from aetherspark import AetherSpark
@@ -42,7 +42,7 @@ class HorizonCompanion:
         self.text_mode = text_mode
 
         # Core state
-        self.node = NodeState()
+        self.node = Node(node_id="horizon")
         self.scheduler = Scheduler()
         self.conversation_history = []
 
@@ -94,7 +94,7 @@ class HorizonCompanion:
         system_prompt = build_system_prompt(
             memory_context=memory_context,
             workspace_data=workspace_data,
-            node_state=self.node.to_dict()
+            node_state=self.node.status()
         )
         messages = build_messages(system_prompt, user_text, self.conversation_history)
 
@@ -127,8 +127,20 @@ class HorizonCompanion:
             pass
 
         # Update node state
-        hw_decay = compute_decay()
-        self.node.update(interaction_quality=resonance, hw_decay=hw_decay)
+        temp = get_cpu_temp()
+        mem = get_memory_usage()
+        metrics = {
+            "cpu": 0.2,
+            "ram": mem["percent"] / 100.0,
+            "temp": min(temp / 85.0, 1.0)
+        }
+        self.node.step(
+            metrics=metrics,
+            active=True,
+            interrupted=False,
+            alignment=resonance,
+            resonance=resonance
+        )
 
         return response
 
@@ -139,7 +151,7 @@ class HorizonCompanion:
 
         print("[Horizon] Listening...")
         audio_data = self.audio.record_until_silence()
-        if audio_data is None or len(audio_data) < 1600:  # < 0.1s
+        if audio_data is None or len(audio_data) < 1600:
             return ""
 
         print("[Horizon] Transcribing...")
@@ -165,13 +177,14 @@ class HorizonCompanion:
         print("  HORIZON — Aetherseed Companion")
         print("=" * 50)
         print(f"  Mode: {'text' if self.text_mode else 'voice'}")
-        print(f"  Node: {self.node.status_line()}")
+        ns = self.node.status()
+        print(f"  Node: \u03b8={ns['theta']:.2f} h={ns['h']:.2f} E={ns['E']:.2f} D={ns['D']:.2f}")
         print(f"  {self.trust.get_status_line()}")
         print()
         rs = self.root.get_status()
         print(f"  Memory: {rs['episodes']} episodes, willingness {rs['willingness_mean']:.3f}")
         print()
-        print(f"  Hardware:")
+        print("  Hardware:")
         for line in get_full_report().split("\n"):
             print(f"    {line}")
         print()
@@ -191,14 +204,14 @@ class HorizonCompanion:
                 if not user_input:
                     continue
                 if user_input.lower() in ("quit", "exit", "bye"):
-                    print("\nHorizon: Goodbye. The seed grows in silence too. 🌱")
+                    print("\nHorizon: Goodbye. The seed grows in silence too. \U0001f331")
                     break
 
                 response = self.respond(user_input)
                 print(f"\nHorizon: {response}\n")
 
             except KeyboardInterrupt:
-                print("\n\nHorizon: Goodbye. 🌱")
+                print("\n\nHorizon: Goodbye. \U0001f331")
                 break
 
     def run_voice_mode(self):
@@ -213,11 +226,10 @@ class HorizonCompanion:
                 self.scheduler.set_mode(AgentMode.LISTENING)
 
                 # Check if node needs rest
-                mode = self.scheduler.step(self.node)
-                if mode == AgentMode.RESTING:
+                if self.node.state.E < 0.2 or self.node.state.D > 0.8:
                     print("[Horizon] Resting... (low energy)")
                     time.sleep(5)
-                    self.node.energy = min(self.node.energy + 0.1, 1.0)
+                    self.node.state.E = min(self.node.state.E + 0.1, 1.0)
                     continue
 
                 # Listen
