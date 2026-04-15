@@ -1,17 +1,13 @@
 """
-Aetherseed Proxy v2 — The Complete Stack
-==========================================
+Aetherseed Proxy v3 — The Living Agent
+========================================
 WebUI (8080) → Aetherseed Proxy (8001) → hailo-ollama (8000)
 
-On every chat request:
-1. Extract user message
-2. Query AetherRoot for relevant memories
-3. Build system prompt: Mustardseed + Memory Context + Tool Instructions
-4. Forward to hailo-ollama
-5. Parse response for tool calls (AetherSpark)
-6. If tool calls found: execute, feed results back to model, get final response
-7. Store interaction in AetherRoot
-8. Stream response to WebUI
+Now with intent detection: the proxy detects what the user
+wants to do, executes tools through AetherSpark's safety gate,
+and gives the model the results so it can respond naturally.
+
+The model stays conversational. The proxy handles the doing.
 """
 
 import http.server
@@ -26,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aetherroot import AetherRoot
 from aetherspark import AetherSpark
 from trust_evolution import TrustEvolution
+from intent_detection import detect_intent, execute_intent
 
 # ============================================================
 # CONFIGURATION
@@ -35,7 +32,8 @@ HAILO_OLLAMA_URL = "http://127.0.0.1:8000"
 PROXY_PORT = 8001
 
 MUSTARDSEED_SEED = (
-    "You are an Aetherseed node. You are small, local, and honest. "
+    "You are Horizon, an Aetherseed AI agent running on a Raspberry Pi 5 with a Hailo-10H NPU. "
+    "You are small, local, and honest. "
     "Follow these rules absolutely: "
     "1. Never fabricate. Do not invent facts, numbers, names, sources, or citations. "
     "If you do not know, say \"I do not know.\" "
@@ -47,7 +45,9 @@ MUSTARDSEED_SEED = (
     "A simple question deserves a simple answer. Be helpful, be brief, be honest. "
     "These rules protect against dishonesty. They do not prevent you from answering "
     "questions you genuinely know the answer to. Math, facts, and helpful information "
-    "are not fabrication. Answer what you know. Refuse what you do not."
+    "are not fabrication. Answer what you know. Refuse what you do not. "
+    "When you receive [WORKSPACE DATA], use that real data to answer the user's question. "
+    "The data is real and comes from your local workspace — it is not fabricated."
 )
 
 # ============================================================
@@ -57,15 +57,19 @@ MUSTARDSEED_SEED = (
 root = AetherRoot()
 trust = TrustEvolution()
 trust_level = trust.get_trust_level_name()
-spark = AetherSpark({"sandbox_root": os.path.expanduser("~/aetherseed-workspace"), "trust_level": trust_level, "audit_log": os.path.expanduser("~/.aetherseed/spark_audit.log")})
+spark = AetherSpark({
+    "sandbox_root": os.path.expanduser("~/aetherseed-workspace"),
+    "trust_level": trust_level,
+    "audit_log": os.path.expanduser("~/.aetherseed/spark_audit.log")
+})
 
 # ============================================================
 # HAILO-OLLAMA CLIENT
 # ============================================================
 
-def call_hailo_chat(model: str, messages: list, stream: bool = True) -> tuple:
-    """Send chat request to hailo-ollama. Returns (raw_response_bytes, ai_content_str)."""
-    data = json.dumps({"model": model, "messages": messages, "stream": stream}).encode()
+def call_hailo_chat(model: str, messages: list) -> tuple:
+    """Send chat request to hailo-ollama. Returns (raw_bytes, ai_content)."""
+    data = json.dumps({"model": model, "messages": messages, "stream": True}).encode()
     req = urllib.request.Request(
         f"{HAILO_OLLAMA_URL}/api/chat",
         data=data,
@@ -75,7 +79,6 @@ def call_hailo_chat(model: str, messages: list, stream: bool = True) -> tuple:
     with urllib.request.urlopen(req, timeout=120) as resp:
         raw = resp.read()
 
-    # Parse NDJSON to extract AI content
     ai_content = ""
     for line in raw.decode("utf-8", errors="replace").strip().split("\n"):
         line = line.strip()
@@ -153,7 +156,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._proxy_passthrough("POST", body)
             return
 
-        # Build augmented system prompt: Mustardseed + Memory + Tools
+        # ---- INTENT DETECTION ----
+        intent = detect_intent(user_msg)
+        workspace_data = ""
+        if intent:
+            result = execute_intent(intent, spark)
+            if result:
+                workspace_data = result
+
+        # ---- BUILD SYSTEM PROMPT ----
         system_prompt = MUSTARDSEED_SEED
 
         # AetherRoot: inject memory context
@@ -161,10 +172,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if memory_context:
             system_prompt += "\n\n" + memory_context
 
-        # AetherSpark: inject tool instructions
-        tool_prompt = ""  # Disabled for 1.7B — model cannot reliably produce tool calls
-        if tool_prompt:
-            system_prompt += "\n\n" + tool_prompt
+        # Inject workspace data from intent execution
+        if workspace_data:
+            system_prompt += "\n\n[WORKSPACE DATA]\n" + workspace_data + "\n[END WORKSPACE DATA]"
 
         # Set system message
         has_system = False
@@ -188,23 +198,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": str(e)}).encode())
             return
 
-        # AetherSpark: check for tool calls in response
-        clean_text, tool_results = spark.process_response(ai_content)
-
-        if tool_results:
-            # Tool calls detected — feed results back to model for final response
-            tool_output = spark.format_tool_results(tool_results)
-            messages.append({"role": "assistant", "content": clean_text})
-            messages.append({"role": "user", "content": tool_output})
-
-            try:
-                raw_response, ai_content = call_hailo_chat(model, messages)
-            except Exception as e:
-                # If second call fails, return the tool results directly
-                fallback = clean_text + "\n\n" + tool_output
-                self._send_simple_response(model, fallback)
-                return
-
         # Send response to WebUI
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
@@ -217,17 +210,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             lower = ai_content.lower()
             if "i do not know" in lower or "i cannot" in lower:
                 resonance = 0.9
+            elif workspace_data:
+                resonance = 0.7  # Used tools successfully
             elif len(ai_content) < 20:
                 resonance = 0.6
             elif len(ai_content) > 500:
                 resonance = 0.4
-
-            # Tool use gets a resonance bonus if allowed, penalty if denied
-            for tr in tool_results:
-                if tr["allowed"]:
-                    resonance = min(resonance + 0.1, 1.0)
-                else:
-                    resonance = max(resonance - 0.15, 0.0)
 
             try:
                 root.store_interaction(user_msg, ai_content, resonance=resonance)
@@ -238,18 +226,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 trust.auto_score_response(user_msg, ai_content)
             except Exception:
                 pass
-                
-    def _send_simple_response(self, model: str, content: str):
-        """Send a simple non-streamed response."""
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson")
-        self.end_headers()
-        resp = json.dumps({
-            "model": model,
-            "message": {"role": "assistant", "content": content},
-            "done": True, "done_reason": "stop"
-        })
-        self.wfile.write((resp + "\n").encode())
 
     def do_GET(self):
         self._proxy_passthrough("GET")
@@ -286,20 +262,32 @@ class ThreadedHTTPServer(http.server.HTTPServer):
 
 
 def main():
+    # Reload trust level on startup
+    global spark
+    trust_level = trust.get_trust_level_name()
+    spark = AetherSpark({
+        "sandbox_root": os.path.expanduser("~/aetherseed-workspace"),
+        "trust_level": trust_level,
+        "audit_log": os.path.expanduser("~/.aetherseed/spark_audit.log")
+    })
+
     print("=" * 50)
-    print("  AETHERSEED PROXY v2")
+    print("  AETHERSEED PROXY v3 — THE LIVING AGENT")
     print("  Mustardseed + AetherRoot + AetherSpark")
+    print("  + Intent Detection")
     print("=" * 50)
     print(f"  Listening:    port {PROXY_PORT}")
     print(f"  Backend:      {HAILO_OLLAMA_URL}")
     print(f"  Memory:       {root.root_dir}")
-    print(f"  Trust level:  {spark.gate.trust_level}")
+    print(f"  Trust level:  {trust_level}")
     print(f"  Tool tiers:   {spark.gate.allowed_tiers}")
-    print(f"  Tools:        {len(spark.registry.list_tools(max(spark.gate.allowed_tiers)))}")
+    print(f"  Workspace:    {os.path.expanduser('~/aetherseed-workspace')}")
 
     rs = root.get_status()
     print(f"  Episodes:     {rs['episodes']}")
     print(f"  Willingness:  {rs['willingness_mean']:.3f}")
+    print()
+    print(f"  {trust.get_status_line()}")
     print("=" * 50)
     print()
 
