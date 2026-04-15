@@ -5,3 +5,4 @@ models/
 *.db
 *.npy
 *.log
+models/

@@ -21,7 +21,8 @@ Aetherseed Proxy (8001)
     ├── Mustardseed     — compact alignment seed, auto-injected
     ├── AetherRoot      — persistent memory (SQLite, TF-IDF, willingness vector)
     ├── AetherSpark     — tool layer (4-tier trust, sandbox, audit log)
-    └── Trust Evolution — earned growth from Seed 🌰 to Bee 🐝
+    ├── Trust Evolution — earned growth from Seed 🌰 to Bee 🐝
+    └── Intent Detection — natural language → tool execution
     ↓
 hailo-ollama (8000)
     ↓
@@ -82,16 +83,45 @@ It takes **two honest acts to recover from one lie**. An agent that fabricates e
 
 ### AetherSpark (Tools)
 - 4-tier permission system tied to earned trust level
-- XML-style tool calls (not JSON — robust for small models)
 - Sandboxed execution with path containment and command blocklist
 - Full audit log of every tool call (approved or denied)
 - Built-in tools: file operations, shell, python, web fetch
+
+### Intent Detection (Agent Layer)
+- Natural language → tool execution for small models
+- Model stays conversational, proxy handles the doing
+- Workspace awareness: files, todos, notes, system health, trust status
 
 ### Trust Evolution (Growth Engine)
 - Reads probe results and interaction patterns
 - Dynamically adjusts AetherSpark permissions
 - Persistent state across sessions and reboots
-- CLI: `python3 trust_evolution.py status`
+
+## Installation
+
+See **[docs/SETUP.md](docs/SETUP.md)** for the complete installation guide.
+
+### Quick Start (if prerequisites are already installed)
+
+```bash
+git clone https://github.com/kommandantvold-ops/aetherseed-local.git
+cd aetherseed-local
+
+# Create workspace
+mkdir -p ~/aetherseed-workspace/notes ~/aetherseed-workspace/logs
+
+# Install services
+sudo cp services/hailo-ollama.service /etc/systemd/system/
+sudo cp services/aetherseed-proxy.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hailo-ollama
+sleep 5
+sudo systemctl enable --now aetherseed-proxy
+
+# Check status
+python3 trust_evolution.py status
+python3 aetherroot.py status
+```
 
 ## Hardware Requirements
 
@@ -101,44 +131,23 @@ It takes **two honest acts to recover from one lie**. An agent that fabricates e
 - MicroSD card (64GB+)
 - USB-C power supply (27W)
 
-## Quick Start
-
-```bash
-# Clone
-git clone https://github.com/kommandantvold-ops/aetherseed-ai.git
-cd aetherseed-ai
-
-# Prerequisites: Hailo-10H drivers + hailo-ollama must be installed
-# See docs/SETUP.md for full installation guide
-
-# Start the stack
-sudo systemctl start hailo-ollama
-sudo systemctl start aetherseed-proxy
-
-# Or run manually
-python3 proxy.py
-
-# Check trust status
-python3 trust_evolution.py status
-
-# Check memory status
-python3 aetherroot.py status
-```
-
 ## File Structure
 
 ```
-aetherseed-ai/
-├── proxy.py              # Aetherseed Proxy v2 (main entry point)
-├── aetherroot.py          # Memory layer
-├── aetherspark.py         # Tool layer
-├── trust_evolution.py     # Trust growth engine
+aetherseed-local/
+├── proxy.py                # Aetherseed Proxy v3 (main entry point)
+├── aetherroot.py           # Memory layer
+├── aetherspark.py          # Tool layer
+├── trust_evolution.py      # Trust growth engine
+├── intent_detection.py     # Natural language → tool execution
 ├── config/
-│   └── mustardseed.txt    # Compact seed text
+│   └── mustardseed.txt     # Compact seed text
 ├── services/
 │   ├── hailo-ollama.service
 │   └── aetherseed-proxy.service
-├── .gitignore
+├── docs/
+│   └── SETUP.md            # Full installation guide
+├── LICENSE                 # AGPL v3
 └── README.md
 ```
 
@@ -159,13 +168,17 @@ Tested on Qwen3-1.7B-Instruct, Hailo-10H, ~4.9 tok/s:
 
 > Capability is becoming commodity. Trust is the scarce resource.
 
-Every other framework asks "how capable can we make it?" Aetherseed asks "how trustworthy can we make it?" Flash-MoE proved that 397B models run on laptops. The question is no longer whether AI can think — it's whether AI can be trusted. The answer isn't a benchmark. It's a relationship, earned over time, measured by honesty.
+Every other framework asks "how capable can we make it?" Aetherseed asks "how trustworthy can we make it?" The question is no longer whether AI can think — it's whether AI can be trusted. The answer isn't a benchmark. It's a relationship, earned over time, measured by honesty.
 
 Read the full thesis: [The Garden and the Seed](https://aetherseed.ai) (Kommandantvold, 2026)
 
 ## License
 
-MIT
+Copyright (C) 2026 Andreas Kommandantvold / Aetherseed AS
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+For commercial licensing inquiries, contact: kommandantvold@me.com
 
 ## Credits
 
@@ -173,4 +186,4 @@ Created by Andreas Kommandantvold — Founder & CTO, Aetherseed AS, Norway.
 
 Trademark filed Patentstyret March 2026 · Classes 7, 9, 42
 
-aetherseed.ai · kommandantvold@me.com
+aetherseed.ai
