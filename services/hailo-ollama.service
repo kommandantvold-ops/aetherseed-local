@@ -1,0 +1,14 @@
+[Unit]
+Description=Hailo-Ollama LLM Server
+After=network.target
+
+[Service]
+Type=simple
+User=andreas
+Environment=HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED
+ExecStart=/usr/local/bin/hailo-ollama
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

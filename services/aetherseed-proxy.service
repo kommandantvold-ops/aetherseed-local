@@ -1,0 +1,15 @@
+[Unit]
+Description=Aetherseed Proxy v2
+After=hailo-ollama.service
+Wants=hailo-ollama.service
+
+[Service]
+Type=simple
+User=andreas
+WorkingDirectory=/home/andreas/aetherseed-ai
+ExecStart=/usr/bin/python3 /home/andreas/aetherseed-ai/proxy.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+.state/
+__pycache__/
+*.pyc
+models/
+*.db
+*.npy
+*.log
