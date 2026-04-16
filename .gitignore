@@ -1,8 +1,16 @@
 .state/
 __pycache__/
 *.pyc
+*.pyo
 models/
 *.db
 *.npy
+*.db-shm
+*.db-wal
 *.log
-models/
+piper/
+piper_linux_aarch64.tar.gz
+*.onnx
+*.onnx.json
+.DS_Store
+aetherseed-workspace/

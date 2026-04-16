@@ -170,7 +170,7 @@ Tested on Qwen3-1.7B-Instruct, Hailo-10H, ~4.9 tok/s:
 
 Every other framework asks "how capable can we make it?" Aetherseed asks "how trustworthy can we make it?" The question is no longer whether AI can think — it's whether AI can be trusted. The answer isn't a benchmark. It's a relationship, earned over time, measured by honesty.
 
-Read the full thesis: [The Garden and the Seed](https://aetherseed.ai) (Kommandantvold, 2026)
+Read the full thesis: [The Garden and the Seed](docs/The%20Garden%20and%20the%20Seed.pdf) (Kommandantvold, 2026)
 
 ## License
 
