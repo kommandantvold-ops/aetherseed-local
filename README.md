@@ -174,15 +174,15 @@ Read the full thesis: [The Garden and the Seed](docs/The%20Garden%20and%20the%20
 
 ## License
 
-Copyright (C) 2026 Andreas Kommandantvold / Aetherseed AS
+TBD
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+Copyright (C) 2026 Aetherseed AS
 
-For commercial licensing inquiries, contact: kommandantvold@me.com
+
 
 ## Credits
 
-Created by Andreas Kommandantvold — Founder & CTO, Aetherseed AS, Norway.
+Created by Andreas Kommandantvold — Chairman and Co-Founder Aetherseed AS, Norway.
 
 Trademark filed Patentstyret March 2026 · Classes 7, 9, 42
 
