@@ -1,0 +1,18 @@
+# Aetherseed runtime dependencies.
+# Derived from the actual imports in this tree, not from memory.
+#
+#   numpy   — AetherRoot embeddings, willingness vector, audio buffers
+#   PyYAML  — config/hardware.yaml (config/settings.py)
+#
+# On Raspberry Pi OS these need --break-system-packages, or a venv:
+#   pip install -r requirements.txt --break-system-packages
+#
+# Not listed here because they are not Python packages:
+#   hailo-ollama   — serves the LLM on :8000 (see docs/SETUP.md Phase 4)
+#   piper/         — TTS binaries, bundled in this repo
+#
+# Not listed because it is gitignored and must be supplied locally:
+#   models/wrappers.py — see docs/SETUP.md Phase 11
+
+numpy>=1.24
+PyYAML>=6.0

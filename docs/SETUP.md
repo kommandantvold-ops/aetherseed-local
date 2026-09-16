@@ -225,3 +225,74 @@ Proxy injects:
 **Model not found:** Run `curl --silent http://localhost:8000/hailo/v1/list` to see available models. The model name is `manifests:qwen3`.
 
 **VLM fails with status 6:** The Hailo device is in use by hailo-ollama. Stop it first: `sudo systemctl stop hailo-ollama`
+
+---
+
+## Phase 11: The v2 agent layer (voice mode)
+
+Phases 1-10 bring up the **proxy stack** — Open WebUI to `proxy.py` to
+hailo-ollama. That path is complete and needs nothing below. `main.py` is the
+separate voice/agent entry point and has two extra requirements.
+
+**Dependencies.** The v2 layer adds PyYAML on top of numpy:
+
+```bash
+pip install -r requirements.txt --break-system-packages
+```
+
+**The `models/` package is not in this repository.** It is listed in
+`.gitignore`, so a fresh clone does not contain it and `main.py` will fail at
+import with `ModuleNotFoundError: No module named 'models'`. Everything else in
+the tree imports cleanly without it — only voice mode is affected.
+
+`main.py` needs `models/wrappers.py` to export three classes:
+
+| Class | Methods used by `main.py` | Backed by |
+|-------|---------------------------|-----------|
+| `LLM` | `.chat(messages)` , `.is_available()` | hailo-ollama at `LLM_ENDPOINT` (`config/settings.py`) |
+| `TTS` | `.speak(text)` , `.stop()` | the bundled `piper/` binaries |
+| `STT` | `.transcribe_array(audio_data)` | Whisper on the Hailo (`STT_HEF` in `config/hardware.yaml`) |
+
+Copy your existing `models/` directory into the clone, or write the three
+wrappers against that contract.
+
+**Verify the split:**
+
+```bash
+# proxy stack — should print nothing and exit 0
+python3 -c "import proxy, aetherroot, aetherspark, trust_evolution, intent_detection, honesty_check"
+
+# v2 layer minus voice — should also be silent
+python3 -c "import core.node, core.scheduler, hardware.metrics, logic.prompt_builder, sensors.audio, config.settings"
+
+# voice mode — fails until models/ is present
+python3 -c "import main"
+```
+
+---
+
+## Phase 12: Honesty scoring
+
+`honesty_check.py` scores responses by provenance: a citation, DOI, URL,
+percentage or measurement is trusted only if it appears in what the node read
+that turn. It replaces the keyword matching in `auto_score_response()`.
+
+It ships **inert**. The flags at the top of `trust_evolution.py`:
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `AUTO_TASK_CREDIT` | `False` | was `True` in effect — credited +3 for any reply over ten characters |
+| `PROVENANCE_REPORT_ONLY` | `True` | log would-be penalties without moving standing |
+| `PROVENANCE_STRICT` | `False` | `True` also flags unsourced figures, not just citations |
+| `ENFORCE_MODULE_GATING` | `False` | require curriculum modules before a tier promotion |
+
+Run in report-only mode first and read the observations before enforcing:
+
+```bash
+python3 test_trust_scoring.py          # 14 unit tests
+python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.aetherseed/trust_state.json'))).get('observations', []))"
+```
+
+`test_proxy_integration.py` drives four turns through the real proxy against a
+stubbed hailo-ollama, if you want the end-to-end check without the NPU. Stop
+the `hailo-ollama` unit first — it needs port 8000.
