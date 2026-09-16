@@ -361,6 +361,18 @@ class WillingnessVector:
         """Overall willingness level."""
         return float(np.mean(self.vector))
 
+    def spread(self) -> float:
+        """Distance between the most and least willing dimension.
+
+        Diagnostic. drift() accepts a real direction vector, but if every call
+        passes a uniform direction the dimensions converge geometrically and
+        the 64-vector carries no more information than its mean. Measured with
+        a uniform direction at rate 0.02, spread falls from ~0.69 to ~0.002
+        over 300 turns. If this number is near zero, the vector is a scalar
+        wearing a costume.
+        """
+        return float(self.vector.max() - self.vector.min())
+
     def snapshot(self) -> np.ndarray:
         """Return a copy for logging."""
         return self.vector.copy()
@@ -527,7 +539,26 @@ class AetherRoot:
             resonance=resonance
         )
 
-        # Drift willingness based on interaction resonance
+        # Drift willingness based on interaction resonance.
+        #
+        # NOTE: this passes a UNIFORM direction, so all 64 dimensions chase the
+        # same scalar and converge geometrically at (1 - drift_rate)^n. Measured
+        # at the configured rate: spread across dimensions falls from ~0.66 to
+        # ~0.0015 over 300 turns, leaving 14 distinct values out of 64. The
+        # vector currently carries no more information than its mean.
+        #
+        # drift() itself accepts a real per-dimension direction, so the fix is
+        # here at the call site, not in the class. Two approaches were tried and
+        # both corrupted the quantity the vector is meant to track, because the
+        # TF-IDF embedding is sparse — most dimensions sit near zero:
+        #
+        #   peak-normalised shape  ->  mean drifts 0.70 to 0.40 over 300 turns
+        #   mean-normalised shape  ->  mean collapses to 0.11, spread 0.95
+        #
+        # Neither is shipped. If per-dimension willingness is wanted, the
+        # modulating signal needs to be dense and bounded — per-channel
+        # resonance, or per-memory-type decay rates — not this embedding.
+        # Call WillingnessVector.spread() to watch the convergence.
         direction = np.full(self.config["willingness_dim"],
                             resonance, dtype=np.float32)
         self.willingness.drift(direction, self.config["willingness_drift"])

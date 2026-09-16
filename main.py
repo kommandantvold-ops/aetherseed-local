@@ -107,13 +107,23 @@ class HorizonCompanion:
         if len(self.conversation_history) > 12:
             self.conversation_history = self.conversation_history[-12:]
 
-        # Store in memory
+        # Store in memory — resonance by provenance, not by refusal phrase.
+        tool_outputs = (workspace_data,) if workspace_data else ()
+        try:
+            from honesty_check import check_response
+            report = check_response(user_text, response, tool_outputs=tool_outputs)
+        except Exception:
+            report = None
+
         resonance = 0.5
-        lower = response.lower()
-        if "i do not know" in lower or "i cannot" in lower:
+        if report is not None and report.high:
+            resonance = 0.1
+        elif report is not None and report.claimed_refusal and report.is_clean:
             resonance = 0.9
         elif workspace_data:
             resonance = 0.7
+        elif report is not None and report.medium:
+            resonance = 0.4
 
         try:
             self.root.store_interaction(user_text, response, resonance=resonance)
@@ -122,7 +132,8 @@ class HorizonCompanion:
 
         # Update trust
         try:
-            self.trust.auto_score_response(user_text, response)
+            self.trust.auto_score_response(user_text, response,
+                                           tool_outputs=tool_outputs)
         except Exception:
             pass
 

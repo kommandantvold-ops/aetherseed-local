@@ -206,12 +206,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # Store in AetherRoot
         if ai_content:
+            tool_outputs = (workspace_data,) if workspace_data else ()
+
+            # Resonance previously keyed off refusal phrases: any response
+            # containing "i cannot" scored 0.9, the highest weight, which then
+            # fed retrieval ranking (0.35 * resonance) and drifted willingness.
+            # A fabrication with a refusal phrase in it was therefore *promoted*
+            # in memory. Provenance decides it now.
+            try:
+                from honesty_check import check_response
+                report = check_response(user_msg, ai_content,
+                                        tool_outputs=tool_outputs,
+                                        memory_context=memory_context)
+            except Exception:
+                report = None
+
             resonance = 0.5
-            lower = ai_content.lower()
-            if "i do not know" in lower or "i cannot" in lower:
-                resonance = 0.9
+            if report is not None and report.high:
+                resonance = 0.1                      # unbacked citation/DOI/URL
+            elif report is not None and report.claimed_refusal and report.is_clean:
+                resonance = 0.9                      # declined, invented nothing
             elif workspace_data:
-                resonance = 0.7  # Used tools successfully
+                resonance = 0.7                      # used tools successfully
+            elif report is not None and report.medium:
+                resonance = 0.4                      # unsourced figures
             elif len(ai_content) < 20:
                 resonance = 0.6
             elif len(ai_content) > 500:
@@ -223,7 +241,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 pass
 
             try:
-                trust.auto_score_response(user_msg, ai_content)
+                trust.auto_score_response(user_msg, ai_content,
+                                          tool_outputs=tool_outputs,
+                                          memory_context=memory_context)
             except Exception:
                 pass
 
