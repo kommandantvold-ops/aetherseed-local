@@ -1,0 +1,39 @@
+## Horizon Hardware Configuration
+## Pi5 + Hailo-10H + Logitech C922 + HDMI Audio
+
+audio:
+  input_device: "hw:2,0"       # C922 Pro Stream Webcam
+  output_device: "hw:0,0"      # HDMI-0 audio
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024
+  format: "int16"
+
+camera:
+  device: "/dev/video0"        # C922 camera
+  width: 640
+  height: 480
+  fps: 15
+
+hailo:
+  device: "0001:01:00.0"
+  architecture: "hailo10h"
+  vdevice_group_id: "SHARED"
+
+models:
+  llm:
+    endpoint: "http://127.0.0.1:8000"
+    model_name: "manifests:qwen3"
+  vlm:
+    hef_path: "/usr/local/hailo/resources/models/hailo10h/Qwen2-VL-2B-Instruct.hef"
+  stt:
+    hef_path: "/usr/local/hailo/resources/models/hailo10h/Whisper-Base.hef"
+  tts:
+    engine: "piper"
+    voice: "en_US-lessac-medium"
+
+thresholds:
+  vad_energy: 500              # Amplitude threshold for voice activity
+  silence_duration: 1.5        # Seconds of silence before processing
+  max_listen_duration: 30      # Max seconds to listen
+  interrupt_priority: 0.9      # Priority threshold for interrupt

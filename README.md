@@ -170,19 +170,17 @@ Tested on Qwen3-1.7B-Instruct, Hailo-10H, ~4.9 tok/s:
 
 Every other framework asks "how capable can we make it?" Aetherseed asks "how trustworthy can we make it?" The question is no longer whether AI can think — it's whether AI can be trusted. The answer isn't a benchmark. It's a relationship, earned over time, measured by honesty.
 
-Read the full thesis: [The Garden and the Seed](docs/The_Garden_and_the_Seed.pdf) (Kommandantvold, 2026)
+Read the full thesis: [The Garden and the Seed](docs/The%20Garden%20and%20the%20Seed.pdf) (Kommandantvold, 2026)
 
 ## License
 
 Copyright (C) 2026 Aetherseed AS
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-
 For commercial licensing inquiries, contact: contact@aetherseed.ai
 
 ## Credits
 
-Created by Andreas Kommandantvold — Founder & CTO, Aetherseed AS, Norway.
+Created by Andreas Kommandantvold — Chairman and Co-Founder Aetherseed AS, Norway.
 
 Trademark filed Patentstyret March 2026 · Classes 7, 9, 42
 
