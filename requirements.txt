@@ -16,3 +16,7 @@
 
 numpy>=1.24
 PyYAML>=6.0
+# Required by logic/token_budget.py. Not optional: the NPU's 864-token
+# prefill ceiling fails silently, and character-based token estimates
+# under-count on tool output (measured 1.14 chars/token on hex).
+tokenizers>=0.15

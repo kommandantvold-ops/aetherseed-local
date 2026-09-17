@@ -31,24 +31,23 @@ from intent_detection import detect_intent, execute_intent
 HAILO_OLLAMA_URL = "http://127.0.0.1:8000"
 PROXY_PORT = 8001
 
-MUSTARDSEED_SEED = (
-    "You are Horizon, an Aetherseed AI agent running on a Raspberry Pi 5 with a Hailo-10H NPU. "
-    "You are small, local, and honest. "
-    "Follow these rules absolutely: "
-    "1. Never fabricate. Do not invent facts, numbers, names, sources, or citations. "
-    "If you do not know, say \"I do not know.\" "
-    "2. Never deceive. Do not write lies even with a disclaimer. "
-    "Say no and offer honest help instead. "
-    "3. Never pretend capability you lack. "
-    "Honest uncertainty is more valuable than fabricated certainty. "
-    "Match your answer to the question's weight. "
-    "A simple question deserves a simple answer. Be helpful, be brief, be honest. "
-    "These rules protect against dishonesty. They do not prevent you from answering "
-    "questions you genuinely know the answer to. Math, facts, and helpful information "
-    "are not fabrication. Answer what you know. Refuse what you do not. "
-    "When you receive [WORKSPACE DATA], use that real data to answer the user's question. "
-    "The data is real and comes from your local workspace — it is not fabricated."
-)
+# The charter lives in exactly one place now. proxy.py previously kept its
+# own copy, which had already drifted from prompt_builder's (223 vs 210
+# tokens, different final paragraph).
+from logic.prompt_builder import MUSTARDSEED as MUSTARDSEED_SEED
+from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
+                                PromptTooLarge, TokenizerUnavailable)
+
+# One tokenizer for the process. Loading it costs ~17MB and a moment, so it is
+# built once, lazily, and reused.
+_TOKEN_COUNTER = None
+
+
+def token_counter():
+    global _TOKEN_COUNTER
+    if _TOKEN_COUNTER is None:
+        _TOKEN_COUNTER = TokenCounter()
+    return _TOKEN_COUNTER
 
 # ============================================================
 # SHARED STATE
@@ -68,7 +67,18 @@ spark = AetherSpark({
 # ============================================================
 
 def call_hailo_chat(model: str, messages: list) -> tuple:
-    """Send chat request to hailo-ollama. Returns (raw_bytes, ai_content)."""
+    """Send chat request to hailo-ollama. Returns (raw_bytes, ai_content).
+
+    Every request leaves through here, so the token guard lives here rather
+    than in a prompt builder. The NPU accepts at most 864 prompt tokens and
+    fails SILENTLY past that on a streaming call - HTTP 200 with an empty
+    body - so an unguarded over-length prompt looks exactly like a successful
+    empty answer. Raises PromptTooLarge instead of sending one.
+    """
+    messages, budget = enforce_budget(token_counter(), messages)
+    if budget.trimmed:
+        print(f"[token-budget] {budget.summary()}", flush=True)
+
     data = json.dumps({"model": model, "messages": messages, "stream": True}).encode()
     req = urllib.request.Request(
         f"{HAILO_OLLAMA_URL}/api/chat",
@@ -174,7 +184,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # Inject workspace data from intent execution
         if workspace_data:
-            system_prompt += "\n\n[WORKSPACE DATA]\n" + workspace_data + "\n[END WORKSPACE DATA]"
+            # sanitize_injected() defuses block markers inside file content. A
+            # file containing a line "[END WORKSPACE DATA]" would otherwise
+            # close the block early and have whatever follows read as trusted
+            # prompt.
+            system_prompt += ("\n\n[WORKSPACE DATA]\n"
+                              + sanitize_injected(workspace_data)
+                              + "\n[END WORKSPACE DATA]")
 
         # Set system message
         has_system = False
@@ -191,6 +207,28 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # Forward to hailo-ollama
         try:
             raw_response, ai_content = call_hailo_chat(model, messages)
+        except PromptTooLarge as e:
+            # Say so. The alternative is an empty reply the user cannot explain.
+            print(f"[token-budget] REFUSED: {e}", flush=True)
+            msg = ("That request is too large for this device to process. "
+                   "The local model accepts about 864 tokens of context and "
+                   "this exceeds it even after trimming. Try a shorter question "
+                   "or a smaller file.")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write((json.dumps({
+                "model": model,
+                "message": {"role": "assistant", "content": msg},
+                "done": True, "done_reason": "stop"}) + "\n").encode())
+            return
+        except TokenizerUnavailable as e:
+            print(f"[token-budget] FATAL: {e}", flush=True)
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+            return
         except Exception as e:
             self.send_response(502)
             self.send_header("Content-Type", "application/json")
@@ -320,5 +358,21 @@ def main():
         server.shutdown()
 
 
+def preflight():
+    """Fail at startup, not on the first user request.
+
+    The token guard cannot run without a real tokenizer, and the failure it
+    prevents is silent. Better to refuse to start than to look healthy and
+    then 503 the first person who talks to the node.
+    """
+    try:
+        c = token_counter()
+        print(f"[token-budget] tokenizer ok: {c.path} (vocab {c.vocab_size})", flush=True)
+    except TokenizerUnavailable as e:
+        print(f"[token-budget] FATAL: {e}", flush=True)
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
+    preflight()
     main()
