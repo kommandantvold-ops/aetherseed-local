@@ -15,6 +15,9 @@ StartLimitIntervalSec=0
 Type=simple
 User=aetherseed
 Group=aetherseed
+# /dev/hailo0 is group-restricted by services/99-aetherseed-hailo.rules.
+# User=/Group= alone does not grant secondary groups, so name it explicitly.
+SupplementaryGroups=hailo
 
 # The NPU device node is created by udev when hailo1x_pci loads, well before
 # multi-user.target. There is no dev-hailo0.device unit to depend on (checked),
