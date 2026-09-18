@@ -1,0 +1,35 @@
+# AetherSeed Companion — cartridge manifest
+#
+# THIS IS THE DEVELOPMENT UNIT (aetherseed, 192.168.1.51), not a shipped
+# build. It is committed as the reference point the device is currently
+# known-good against. Recapture on a real build and commit that instead;
+# git history then records exactly what each cartridge contained.
+#
+#   tools/cartridge.sh capture tools/cartridge.manifest
+#   tools/cartridge.sh verify  tools/cartridge.manifest    -> 0 match, 1 drift
+#
+# cartridge-id is a hash over every line below it. Quote that one value to
+# name a build; the lines exist to say what differs when it does not match.
+# Captured 2026-09-18 on the dev unit.
+#
+cartridge-id	6fdaecb3d0def8bc63d53b44cb2168e5f7207668f3a0c522cdb325ddc0096bdd
+device.node_mode	660 root:hailo
+file./etc/systemd/system/hailo-ollama.service	795efc1df785adb9592fa98fe5fc1d4d882a130df23f2ee1f67c1325854183fe
+file./etc/udev/rules.d/99-aetherseed-hailo.rules	9943a61b6fbc5dfb4c9e7aea5ccb1faeacfc4fe5df671462771ab919f06a6949
+file./etc/xdg/hailo-ollama/hailo-ollama.json	b350ac9ecb75e2376293c281c3f71636f683e84ba6cc55524c54a4f34f3b952b
+file.prompt_builder	e2fddfbfa694d3075b5195f1f720cee0e51e9a6e2afffb4f6ec5565935330611
+firmware.version	version 2226a853 (release) (embedded)
+kernel.arch	aarch64
+kernel.release	6.18.50+rpt-rpi-2712
+model.bytes	3370416230
+model.file	sha256_1129f5f8384e4e45c5890104dc4ec1aee77e800ce1484ddc3aa942399aada425
+model.sha256	1129f5f8384e4e45c5890104dc4ec1aee77e800ce1484ddc3aa942399aada425
+packages.count	1650
+packages.digest	6f52b141feead2f8a62facc2c24151e0a4e900f8dcdce83d78f765cac63a3e6b
+packages.held	linux-headers-6.18.50+rpt-common-rpi,linux-headers-6.18.50+rpt-rpi-2712,linux-headers-6.18.50+rpt-rpi-v8,linux-headers-rpi-2712,linux-headers-rpi-v8,linux-image-6.18.50+rpt-rpi-2712,linux-image-6.18.50+rpt-rpi-v8,linux-image-rpi-2712,linux-image-rpi-v8
+pkg.dkms	3.2.2-1~deb13u1
+pkg.h10-hailort	5.1.1
+pkg.h10-hailort-pcie-driver	5.1.1
+pkg.hailo-gen-ai-model-zoo	5.1.1
+pkg.python3-h10-hailort	5.1.1-1
+service.enabled	enabled
