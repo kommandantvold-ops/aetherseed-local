@@ -24,6 +24,7 @@ from core.node import Node
 from core.scheduler import Scheduler, AgentMode, Event
 from models.wrappers import LLM, TTS, STT
 from logic.prompt_builder import build_system_prompt, build_messages
+from logic.token_budget import sanitize_model_output
 from hardware.metrics import compute_decay, get_full_report, get_cpu_temp, get_memory_usage
 from intent_detection import detect_intent, execute_intent
 from aetherroot import AetherRoot
@@ -100,6 +101,17 @@ class HorizonCompanion:
 
         # Generate response
         response = self.llm.chat(messages)
+
+        # Strip control tokens before the response reaches history, memory or
+        # the user. hailo-ollama does not filter <|start_header_id|> (it is not
+        # in the manifest's stop_tokens), and AetherRoot stores the message
+        # verbatim - a stored control token is re-tokenized as the real token
+        # and forges a conversation header in a later prompt. Sanitised here,
+        # at the single point everything downstream flows from, because
+        # models/wrappers.py is gitignored and cannot be guarded directly.
+        response, _stripped = sanitize_model_output(response)
+        if _stripped:
+            print(f"[sanitize] stripped {_stripped} control token(s) from model output")
 
         # Update conversation history (keep last 6 turns)
         self.conversation_history.append({"role": "user", "content": user_text})

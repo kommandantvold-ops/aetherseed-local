@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -316,6 +317,42 @@ def sanitize_injected(text: str) -> str:
         # marker but a reader can still see what the file said.
         text = text.replace(tag, tag.replace("[", "(").replace("]", ")"))
     return text
+
+
+# Llama 3.2's 256 special tokens all have the form <|name|>. Verified against
+# the tokenizer's added_tokens: this pattern matches 256/256 of them, and
+# matches none of "a < b and c > d", "use the <| symbol", "x <|> y" or a DOI.
+_CONTROL_TOKEN = re.compile(r"<\|[^|>\s]{1,64}\|>")
+
+
+def sanitize_model_output(text: str):
+    """Strip control tokens the model emitted into its own output.
+
+    Returns (clean_text, count_stripped).
+
+    NOT cosmetic. hailo-ollama's stop_tokens are <|end_of_text|>, <|eom_id|>
+    and <|eot_id|>; <|start_header_id|> is not among them, so when the model
+    emits one the server passes it straight through to the caller. Measured
+    2026-09-18, a live reply: '_OK_<|start_header_id|> assistant'.
+
+    The danger is not the display. AetherRoot stores the assistant message
+    verbatim and later re-injects it inside [MEMORY CONTEXT]. That text is
+    tokenized with the same vocabulary, so '<|start_header_id|>' becomes token
+    128006 - the REAL header token, not literal characters. Measured: a prompt
+    carrying one such memory line contained 4 start_header_id tokens where the
+    chat template should produce exactly 3.
+
+    So the model's own output is a prompt-injection channel into its own future
+    prompts. This is the same shape as the [END WORKSPACE DATA] hole that
+    sanitize_injected() closes, except the untrusted source is the model.
+
+    The count is returned rather than discarded so the caller can log it: a
+    silent strip would hide that the node emitted something it should not.
+    """
+    if not text:
+        return text, 0
+    n = len(_CONTROL_TOKEN.findall(text))
+    return (_CONTROL_TOKEN.sub("", text), n) if n else (text, 0)
 
 
 def _split_block(text: str, open_tag: str, close_tag: str):

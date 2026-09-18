@@ -37,7 +37,8 @@ PROXY_PORT = 8001
 from logic.prompt_builder import MUSTARDSEED as MUSTARDSEED_SEED
 from logic.prompt_builder import DATA_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
-                                PromptTooLarge, TokenizerUnavailable)
+                                sanitize_model_output, PromptTooLarge,
+                                TokenizerUnavailable)
 
 # One tokenizer for the process. Loading it costs ~17MB and a moment, so it is
 # built once, lazily, and reused.
@@ -90,18 +91,39 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     with urllib.request.urlopen(req, timeout=120) as resp:
         raw = resp.read()
 
+    # Strip control tokens the model emitted into its own output, on BOTH
+    # paths: the stream forwarded to the caller, and ai_content, which is what
+    # AetherRoot stores and later re-injects as [MEMORY CONTEXT]. The second is
+    # the one that matters - a stored <|start_header_id|> is re-tokenized as
+    # the real token 128006 and forges a conversation header in a later prompt.
     ai_content = ""
+    stripped_total = 0
+    clean_lines = []
     for line in raw.decode("utf-8", errors="replace").strip().split("\n"):
         line = line.strip()
         if not line:
             continue
         try:
             token_data = json.loads(line)
-            msg = token_data.get("message", {})
-            if msg.get("role") == "assistant":
-                ai_content += msg.get("content", "")
         except json.JSONDecodeError:
+            clean_lines.append(line)      # pass through anything unparseable
             continue
+        msg = token_data.get("message", {})
+        if msg.get("role") == "assistant":
+            clean, n = sanitize_model_output(msg.get("content", ""))
+            if n:
+                stripped_total += n
+                msg["content"] = clean
+                token_data["message"] = msg
+            ai_content += clean
+        clean_lines.append(json.dumps(token_data))
+
+    if stripped_total:
+        # Logged, never silently dropped: the node emitted something it should
+        # not have, and the audit trail should say so.
+        print(f"[sanitize] stripped {stripped_total} control token(s) from model output",
+              flush=True)
+        raw = ("\n".join(clean_lines) + "\n").encode("utf-8")
 
     return raw, ai_content
 
