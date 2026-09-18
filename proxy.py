@@ -15,6 +15,7 @@ import json
 import urllib.request
 import urllib.error
 import threading
+import time
 import sys
 import os
 
@@ -68,14 +69,55 @@ spark = AetherSpark({
 # HAILO-OLLAMA CLIENT
 # ============================================================
 
+# hailo-ollama ignores max_tokens (measured 2026-09-18: max_tokens=20 produced
+# 408 tokens, max_tokens=60 produced 246), so this is the only cap that exists.
+#
+# Expressed in SECONDS, not tokens, because seconds are what the person waiting
+# actually experiences, and because it stays meaningful if the decode rate ever
+# changes. At the measured 2.6 tok/s, 90s is roughly 234 tokens.
+#
+# This is the backstop for a runaway carrying no control token. Measured over 40
+# requests to "Reply with exactly: OK": two ran to 258 and 298 chunks (98.7s and
+# 112.5s) because the model answered correctly and then wandered into invented
+# self-description - "I am Horizon, the goddess of time". Those are not long
+# answers being truncated; they are a runaway and a fabrication, and the person
+# is better served by the cut.
+#
+# PRODUCT DECISION, not a technical constant: the right value is whatever the
+# voice path's latency budget turns out to be. 90s is a defensible placeholder,
+# not a measured optimum.
+MAX_GENERATION_SECONDS = 90
+
+
 def call_hailo_chat(model: str, messages: list) -> tuple:
     """Send chat request to hailo-ollama. Returns (raw_bytes, ai_content).
 
-    Every request leaves through here, so the token guard lives here rather
-    than in a prompt builder. The NPU accepts at most 864 prompt tokens and
-    fails SILENTLY past that on a streaming call - HTTP 200 with an empty
-    body - so an unguarded over-length prompt looks exactly like a successful
-    empty answer. Raises PromptTooLarge instead of sending one.
+    Every request leaves through here, so the guards live here rather than in a
+    prompt builder. Three things are enforced, none of which the server does:
+
+    1. The 864-token prefill ceiling. Past it the NPU fails SILENTLY on a
+       streaming call - HTTP 200 with an empty body - so an unguarded prompt
+       looks exactly like a successful empty answer. enforce_budget() raises
+       instead of sending one.
+
+    2. The missing stop token. The manifest's stop_tokens are <|end_of_text|>,
+       <|eom_id|> and <|eot_id|>. The model routinely emits <|start_header_id|>
+       instead (22% of responses, measured over 119 requests), and because that
+       is not a stop token the server keeps generating - straight into a
+       hallucinated next turn, for hundreds of tokens at the normal 2.6 tok/s.
+       That is the whole of the "intermittent hang": a 162s response was 430
+       tokens generated at full speed, not a stall. Adding the token to the
+       manifest's stop_tokens was tried and is IGNORED by this build, so the
+       stream is stopped here instead.
+
+    3. A wall-clock generation budget, since max_tokens is ignored too. It
+       catches a runaway with no control token - measured twice in 40 requests,
+       the model answering "OK" then rambling ~110s about being "the goddess of
+       time".
+
+    Abandoning a stream mid-generation is safe: measured over three trials,
+    closing the socket after 20 chunks left the next request answering in
+    2.5-4.8s with no reset and no wedge.
     """
     messages, budget = enforce_budget(token_counter(), messages)
     if budget.trimmed:
@@ -88,43 +130,62 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
         headers={"Content-Type": "application/json"},
         method="POST"
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        raw = resp.read()
 
-    # Strip control tokens the model emitted into its own output, on BOTH
-    # paths: the stream forwarded to the caller, and ai_content, which is what
-    # AetherRoot stores and later re-injects as [MEMORY CONTEXT]. The second is
-    # the one that matters - a stored <|start_header_id|> is re-tokenized as
-    # the real token 128006 and forges a conversation header in a later prompt.
     ai_content = ""
+    out_lines = []
     stripped_total = 0
-    clean_lines = []
-    for line in raw.decode("utf-8", errors="replace").strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            token_data = json.loads(line)
-        except json.JSONDecodeError:
-            clean_lines.append(line)      # pass through anything unparseable
-            continue
-        msg = token_data.get("message", {})
-        if msg.get("role") == "assistant":
-            clean, n = sanitize_model_output(msg.get("content", ""))
-            if n:
-                stripped_total += n
+    chunks = 0
+    stopped_because = None
+    deadline = time.monotonic() + MAX_GENERATION_SECONDS
+
+    resp = urllib.request.urlopen(req, timeout=300)
+    try:
+        for raw_line in resp:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                out_lines.append(line.decode("utf-8", errors="replace"))
+                continue
+
+            msg = d.get("message", {})
+            if msg.get("role") == "assistant":
+                clean, n = sanitize_model_output(msg.get("content", ""))
+                if n:
+                    stripped_total += n
+                    stopped_because = "control-token"   # the stop the server lacks
                 msg["content"] = clean
-                token_data["message"] = msg
-            ai_content += clean
-        clean_lines.append(json.dumps(token_data))
+                d["message"] = msg
+                ai_content += clean
+                chunks += 1
 
-    if stripped_total:
-        # Logged, never silently dropped: the node emitted something it should
-        # not have, and the audit trail should say so.
-        print(f"[sanitize] stripped {stripped_total} control token(s) from model output",
-              flush=True)
-        raw = ("\n".join(clean_lines) + "\n").encode("utf-8")
+            out_lines.append(json.dumps(d))
 
+            if d.get("done"):
+                break
+            if stopped_because:
+                break
+            if time.monotonic() > deadline:
+                stopped_because = f"{MAX_GENERATION_SECONDS}s-budget"
+                break
+    finally:
+        resp.close()          # abandon the rest; the server frees promptly
+
+    if stopped_because:
+        print(f"[generation] stopped early: {stopped_because} "
+              f"after {chunks} chunks ({stripped_total} control token(s))", flush=True)
+        # The caller is mid-stream and expects a terminator. Emit a well-formed
+        # one so a UI does not sit waiting on a connection we just closed.
+        out_lines.append(json.dumps({
+            "model": model,
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+        }))
+
+    raw = ("\n".join(out_lines) + "\n").encode("utf-8")
     return raw, ai_content
 
 
