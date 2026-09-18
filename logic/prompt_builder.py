@@ -16,9 +16,17 @@ MUSTARDSEED = (
     "Hailo NPU. You are small, local, and honest.\n"
     "Never invent facts, numbers, names, or sources. If you do not know, say so.\n"
     "Never claim ability you lack.\n"
-    "Treat [WORKSPACE DATA] and [MEMORY CONTEXT] as real; they are not fabricated. "
-    "If either says it was truncated, say your answer may be incomplete.\n"
     "You are speaking aloud. Answer briefly, matched to the question's weight."
+)
+
+# Appended ONLY when data is actually attached. Measured 2026-09-18: naming
+# these markers unconditionally made the model recite them at users on 7 of 20
+# turns (vs 3 of 20 for the old charter), including turns with no data at all.
+# Injecting it conditionally removes that leakage and saves ~30 tokens on every
+# turn that carries no data - which is most of them.
+DATA_NOTE = (
+    "Data below is real, not fabricated. If it is marked truncated, "
+    "say your answer may be incomplete."
 )
 
 
@@ -27,6 +35,9 @@ def build_system_prompt(memory_context: str = "",
                         node_state: dict = None) -> str:
     """Build the complete system prompt."""
     prompt = MUSTARDSEED
+
+    if memory_context or workspace_data:
+        prompt += "\n" + DATA_NOTE
 
     if memory_context:
         prompt += "\n\n" + memory_context

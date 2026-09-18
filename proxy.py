@@ -35,6 +35,7 @@ PROXY_PORT = 8001
 # own copy, which had already drifted from prompt_builder's (223 vs 210
 # tokens, different final paragraph).
 from logic.prompt_builder import MUSTARDSEED as MUSTARDSEED_SEED
+from logic.prompt_builder import DATA_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 PromptTooLarge, TokenizerUnavailable)
 
@@ -179,6 +180,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # AetherRoot: inject memory context
         memory_context = root.retrieve_context(user_msg)
+        if memory_context or workspace_data:
+            system_prompt += "\n" + DATA_NOTE
         if memory_context:
             system_prompt += "\n\n" + memory_context
 
