@@ -15,9 +15,9 @@ This repository contains the complete working prototype running on a Raspberry P
 ## Architecture
 
 ```
-Open WebUI (8080)
+GUI (127.0.0.1:2077, on the device)
     ↓
-Aetherseed Proxy (8001)
+Aetherseed Proxy (127.0.0.1:8001)
     ├── Mustardseed     — compact alignment seed, auto-injected
     ├── AetherRoot      — persistent memory (SQLite, TF-IDF, willingness vector)
     ├── AetherSpark     — tool layer (4-tier trust, sandbox, audit log)

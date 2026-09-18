@@ -1,7 +1,11 @@
 """
 Aetherseed Proxy v3 — The Living Agent
 ========================================
-WebUI (8080) → Aetherseed Proxy (8001) → hailo-ollama (8000)
+GUI (127.0.0.1:2077) → Aetherseed Proxy (127.0.0.1:8001) → hailo-ollama (127.0.0.1:8000)
+
+Every hop is loopback. Decided 2026-09-18 (build log, step 13): the GUI runs on
+the device itself, so nothing on the LAN needs to reach the proxy and the
+bind stays 127.0.0.1. Port 2077 was free and is unregistered in /etc/services.
 
 Now with intent detection: the proxy detects what the user
 wants to do, executes tools through AetherSpark's safety gate,

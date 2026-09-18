@@ -32,6 +32,7 @@ IDENTITY_FILES=(
   /etc/systemd/system/hailo-ollama.service
   /etc/systemd/system/aetherseed-proxy.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
+  /etc/nftables.conf
 )
 APP_DIR=/opt/aetherseed
 
@@ -121,6 +122,7 @@ collect() {
   emit device.node_mode  "$(stat -c '%a %U:%G' /dev/hailo0 2>/dev/null || echo MISSING)"
   emit service.hailo_ollama.enabled "$(systemctl is-enabled hailo-ollama 2>/dev/null || echo unknown)"
   emit service.proxy.enabled        "$(systemctl is-enabled aetherseed-proxy 2>/dev/null || echo unknown)"
+  emit service.nftables.enabled     "$(systemctl is-enabled nftables 2>/dev/null || echo unknown)"
 }
 
 fingerprint() {  # one hash over the whole sorted body
