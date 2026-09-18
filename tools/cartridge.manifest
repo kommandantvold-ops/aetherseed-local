@@ -10,10 +10,10 @@
 #
 # cartridge-id is a hash over every line below it. Quote that one value to
 # name a build; the lines exist to say what differs when it does not match.
-# Captured 2026-09-18 on the dev unit, after the v2 proxy was deployed.
+# Captured 2026-09-18 on the dev unit, after step 12 (generation bounds).
 #
-cartridge-id	ee111391c5f30ccaa6de2c5071d793f5af10730437c9a0d679084e223296005f
-app.digest	5d55af0e8d514d7cbf8627e578176b015f3fd8e83fda8a2d0cf0e2f98f100390
+cartridge-id	ff8a4d0d94b7cb2618f52eb801678ca89c046eb977543ca5c81863967b2b875a
+app.digest	f736bc777087107dc5944e0b68cbb22db944042e70f5dd549b65f8f65074c1ba
 app.files	12
 app.numpy	2.2.4
 app.tokenizers	0.23.2

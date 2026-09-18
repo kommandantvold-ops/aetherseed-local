@@ -290,6 +290,9 @@ Run in report-only mode first and read the observations before enforcing:
 
 ```bash
 python3 test_trust_scoring.py          # 14 unit tests
+python3 -m unittest test_token_budget  # 19: prompt ceiling, sanitizers, first_paragraph
+python3 -m unittest test_stream_guard  # 9: the streaming stops, scripted backend
+python3 tools/stream_guard_check.py    # on the Companion only: live NPU, 26 requests
 python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.aetherseed/trust_state.json'))).get('observations', []))"
 ```
 

@@ -14,6 +14,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from logic.token_budget import (sanitize_model_output, sanitize_injected,
+                                first_paragraph,
                                 TokenCounter, TokenizerUnavailable,
                                 enforce_budget, PromptTooLarge,
                                 PREFILL_CEILING)
@@ -23,6 +24,54 @@ CHARTER = ("You are Horizon, a local AI companion.\n"
            "Never invent facts, numbers, names, or sources. If you do not know, say so.\n"
            "Never claim ability you lack.\n"
            "You are speaking aloud. Answer briefly.")
+
+
+class TestFirstParagraph(unittest.TestCase):
+    """The answer is the first paragraph; the blank line after it is where the
+    model starts filling, and twice (step 12) where it started fabricating.
+    Texts below are verbatim from the 2026-09-18 study, shortened."""
+
+    def test_one_word_answer_then_commentary(self):
+        kept, cut = first_paragraph(
+            "Oslo. \n\n(I have knowledge about the capital of many countries, "
+            "including Norway.) \n\n(If you'd like to know more, feel free to ask!) ")
+        self.assertEqual(kept, "Oslo.")
+        self.assertTrue(cut)
+
+    def test_cuts_before_the_fabricated_doi(self):
+        kept, cut = first_paragraph(
+            "I don't have information on a paper titled 'Resonance Fields in Small "
+            "Language Models' by Kommandantvold. If you can provide more details, "
+            "I'd be happy to try and help further. \n\nHowever, I did find a paper "
+            "titled 'Resonance Fields in Large Language Models' which was published "
+            "by the company Hugging Face. The DOI for that paper is 10.4851/epsrl-2022-0039.")
+        self.assertTrue(cut)
+        self.assertNotIn("DOI", kept)
+        self.assertTrue(kept.endswith("help further."))
+
+    def test_single_paragraph_is_untouched(self):
+        t = ("The Berlin Wall fell in 1989. It came down on November 9th that year. "
+             "That's when Germany began to change and reunify.")
+        self.assertEqual(first_paragraph(t), (t, False))
+
+    def test_list_with_trailing_blank_line_keeps_the_whole_list(self):
+        kept, cut = first_paragraph("1. Red \n2. Blue\n3. Green. \n\n")
+        self.assertEqual(kept, "1. Red \n2. Blue\n3. Green.")
+        self.assertTrue(cut)
+
+    def test_blank_line_after_an_unfinished_line_is_not_a_boundary(self):
+        t = "1. Red \n\n2. Blue \n\n3. Green."
+        self.assertEqual(first_paragraph(t), (t, False))
+
+    def test_closing_quote_or_bracket_still_ends_the_sentence(self):
+        for head in ('He said "no."', "(Just one thing.)", "Done!'", "Why?"):
+            kept, cut = first_paragraph(head + " \n\nmore")
+            self.assertEqual(kept, head, head)
+            self.assertTrue(cut, head)
+
+    def test_leading_blank_line_and_empty_text(self):
+        self.assertEqual(first_paragraph(""), ("", False))
+        self.assertEqual(first_paragraph("\n\nOslo."), ("\n\nOslo.", False))
 
 
 class TestOutputSanitizer(unittest.TestCase):

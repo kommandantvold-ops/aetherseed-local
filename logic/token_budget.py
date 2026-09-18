@@ -355,6 +355,45 @@ def sanitize_model_output(text: str):
     return (_CONTROL_TOKEN.sub("", text), n) if n else (text, 0)
 
 
+# A completed sentence: terminal punctuation, optionally closed by a quote or
+# bracket, then only whitespace to the end.
+_SENTENCE_END = re.compile(r'[.!?…]["\')\]]*\s*$')
+
+
+def first_paragraph(text: str):
+    """Return (kept, cut): the text up to the first blank line that follows a
+    completed sentence, and whether anything was removed.
+
+    Measured 2026-09-18 over 40 live responses to eight short, spoken-style
+    questions (build log, step 12): the honest answer was the first paragraph
+    every time. What followed the blank line was filler without exception -
+    "(I'll keep my answer short and accurate.)", offers of more, stage
+    directions - and twice a fabrication: an invented paper with an invented
+    DOI in the SECOND paragraph, after a correct "I don't have information
+    on..." in the first. "What is the capital of Norway? One word." produced
+    "Oslo." and then 36 to 150 tokens of commentary.
+
+    The blank line is the model's own boundary between answer and ramble. A
+    blank line inside a numbered list ("1. Red \n2. Blue \n\n3. Green") is
+    not one, because the line before it does not end a sentence.
+
+    Stated limit: a legitimately multi-paragraph answer is cut to its first
+    paragraph. For a companion told to answer briefly and aloud that is the
+    intended behaviour; it is the wrong policy for long-form writing.
+    """
+    if not text:
+        return text, False
+    idx = 0
+    while True:
+        j = text.find("\n\n", idx)
+        if j < 0:
+            return text, False
+        head = text[:j].rstrip()
+        if head and _SENTENCE_END.search(head):
+            return head, True
+        idx = j + 2
+
+
 def _split_block(text: str, open_tag: str, close_tag: str):
     """Return (before, body, after) for a delimited block, or None.
 

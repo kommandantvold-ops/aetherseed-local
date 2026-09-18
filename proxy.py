@@ -45,8 +45,8 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 from logic.prompt_builder import MUSTARDSEED as MUSTARDSEED_SEED
 from logic.prompt_builder import DATA_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
-                                sanitize_model_output, PromptTooLarge,
-                                TokenizerUnavailable)
+                                sanitize_model_output, first_paragraph,
+                                PromptTooLarge, TokenizerUnavailable)
 
 # One tokenizer for the process. Loading it costs ~17MB and a moment, so it is
 # built once, lazily, and reused.
@@ -76,23 +76,42 @@ spark = AetherSpark({
 # HAILO-OLLAMA CLIENT
 # ============================================================
 
-# hailo-ollama ignores max_tokens (measured 2026-09-18: max_tokens=20 produced
-# 408 tokens, max_tokens=60 produced 246), so this is the only cap that exists.
+# Three bounds on generation, in the order they normally fire. All three exist
+# because the model does not reliably stop on its own (build log, steps 10 and
+# 12), and the numbers are placeholders for a product decision - the voice
+# path's latency budget - not measured optima.
 #
-# Expressed in SECONDS, not tokens, because seconds are what the person waiting
-# actually experiences, and because it stays meaningful if the decode rate ever
-# changes. At the measured 2.6 tok/s, 90s is roughly 234 tokens.
+# 1. STOP_AT_PARAGRAPH - the answer is the first paragraph. Measured 2026-09-18
+#    over 40 live responses to eight short spoken-style questions: the honest
+#    answer was the first paragraph every time, and everything after the blank
+#    line was filler ("(I'll keep my answer short and accurate.)", offers of
+#    more, stage directions) - or, twice, a fabricated paper and DOI in the
+#    second paragraph behind a correct "I don't have information" in the first.
+#    "Oslo." became 36-150 tokens. Cutting at the blank line keeps the answer
+#    and drops the tail, and it is the tail that fabricates.
 #
-# This is the backstop for a runaway carrying no control token. Measured over 40
-# requests to "Reply with exactly: OK": two ran to 258 and 298 chunks (98.7s and
-# 112.5s) because the model answered correctly and then wandered into invented
-# self-description - "I am Horizon, the goddess of time". Those are not long
-# answers being truncated; they are a runaway and a fabrication, and the person
-# is better served by the cut.
+# 2. GENERATION_OPTIONS["num_predict"] - the server-side token cap. THIS BUILD
+#    HONOURS IT: measured 2026-09-18, num_predict=20 returned exactly 20 tokens
+#    with done_reason "length". Step 10 concluded the server offered no bound at
+#    all; that was wrong. It tested max_tokens at the top level of the request
+#    - the OpenAI-style key - which /api/chat does ignore (max_tokens=20 gave
+#    408 tokens). Ollama's key is options.num_predict, and it works.
+#    80 tokens is ~30s at the measured 2.66 tok/s, roughly sixty spoken words;
+#    the longest answer in the study that was not filler was 61 tokens.
 #
-# PRODUCT DECISION, not a technical constant: the right value is whatever the
-# voice path's latency budget turns out to be. 90s is a defensible placeholder,
-# not a measured optimum.
+# 3. MAX_GENERATION_SECONDS - wall-clock backstop. With the cap above it should
+#    never fire on a healthy server; it exists for a server that stalls or
+#    whose decode rate collapses, which no token count can catch. Expressed in
+#    seconds because seconds are what the person waiting experiences.
+#
+# Sampling is left at the manifest's defaults (temperature 0.4, top_p 0.9,
+# top_k 50). Greedy decoding was tried and made the rambling worse: at
+# temperature 0 the one-word "Oslo." ran to the 150-token cap on both trials,
+# and four of eight prompts hit the cap on both trials (8 of 16 runs) versus
+# four of twenty-four runs at the default. Determinism is available
+# (temperature 0 is exactly reproducible, 3/3) but it is not a fix for this.
+STOP_AT_PARAGRAPH = True
+GENERATION_OPTIONS = {"num_predict": 80}
 MAX_GENERATION_SECONDS = 90
 
 
@@ -117,10 +136,13 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
        manifest's stop_tokens was tried and is IGNORED by this build, so the
        stream is stopped here instead.
 
-    3. A wall-clock generation budget, since max_tokens is ignored too. It
-       catches a runaway with no control token - measured twice in 40 requests,
-       the model answering "OK" then rambling ~110s about being "the goddess of
-       time".
+    3. Where the answer ends. The model does not stop when it is done: it
+       answers, then fills - commentary, offers, stage directions, and in the
+       worst measured cases a fabrication behind a correct refusal, or "OK"
+       followed by ~110s about being "the goddess of time". Three bounds, see
+       the constants above: the first paragraph, the server's num_predict
+       (which this build honours - step 10's claim that nothing server-side
+       works was tested with the wrong key), and a wall-clock backstop.
 
     Abandoning a stream mid-generation is safe: measured over three trials,
     closing the socket after 20 chunks left the next request answering in
@@ -130,7 +152,8 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     if budget.trimmed:
         print(f"[token-budget] {budget.summary()}", flush=True)
 
-    data = json.dumps({"model": model, "messages": messages, "stream": True}).encode()
+    data = json.dumps({"model": model, "messages": messages, "stream": True,
+                       "options": GENERATION_OPTIONS}).encode()
     req = urllib.request.Request(
         f"{HAILO_OLLAMA_URL}/api/chat",
         data=data,
@@ -163,14 +186,30 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
                 if n:
                     stripped_total += n
                     stopped_because = "control-token"   # the stop the server lacks
+                ai_content += clean
+                if msg.get("content"):
+                    chunks += 1          # the server's done message is empty
+                if STOP_AT_PARAGRAPH and not stopped_because:
+                    kept, cut = first_paragraph(ai_content)
+                    if cut:
+                        # Forward only what precedes the boundary. Everything
+                        # already sent is part of the kept text (plus trailing
+                        # whitespace); trim this chunk so nothing after the
+                        # blank line reaches the caller or the memory store.
+                        excess = len(ai_content) - len(kept)
+                        clean = clean[:max(0, len(clean) - excess)]
+                        ai_content = kept
+                        stopped_because = "paragraph"
                 msg["content"] = clean
                 d["message"] = msg
-                ai_content += clean
-                chunks += 1
 
             out_lines.append(json.dumps(d))
 
             if d.get("done"):
+                if d.get("done_reason") == "length":
+                    print(f"[generation] server cap reached: num_predict="
+                          f"{GENERATION_OPTIONS.get('num_predict')} after {chunks} chunks",
+                          flush=True)
                 break
             if stopped_because:
                 break
@@ -429,6 +468,8 @@ def main():
     print("=" * 50)
     print(f"  Listening:    {PROXY_BIND}:{PROXY_PORT}")
     print(f"  Backend:      {HAILO_OLLAMA_URL}")
+    print(f"  Generation:   options={GENERATION_OPTIONS} "
+          f"paragraph_stop={STOP_AT_PARAGRAPH} backstop={MAX_GENERATION_SECONDS}s")
     print(f"  Memory:       {root.root_dir}")
     print(f"  Trust level:  {trust_level}")
     print(f"  Tool tiers:   {spark.gate.allowed_tiers}")
