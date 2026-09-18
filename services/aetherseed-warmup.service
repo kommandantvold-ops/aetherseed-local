@@ -1,0 +1,67 @@
+# AetherSeed Companion - pay the cold model load at boot, not at the first question.
+#
+# Measured 2026-09-18 (build log, step 13f): the first answer after power-on took
+# 51.9s, of which ~50s was hailo-ollama loading the 3.2GB HEF from the SD card.
+# The 18-22s reloads measured elsewhere were with that file already in the page
+# cache. Nothing in the software can make the first load faster; this unit only
+# moves it to a moment when nobody is waiting.
+#
+# Cost, stated because it is real: the NPU is busy for ~50s after every power-on.
+# A question asked inside that window waits for the warm-up to finish rather than
+# starting its own load - the same wait, not an additional one.
+#
+# It talks to hailo-ollama directly, NOT through the proxy on 8001. Going
+# through the proxy would store a fake episode in AetherRoot's memory and score
+# it in the trust engine; the node's memory should contain what people actually
+# said to it.
+
+[Unit]
+Description=AetherSeed Companion - NPU warm-up
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=hailo-ollama.service
+Wants=hailo-ollama.service
+
+[Service]
+# Type=simple, NOT oneshot, and the difference is measured: as a oneshot this
+# unit held multi-user.target open until curl returned, and reported boot went
+# from 9.5s to 60.7s (systemd-analyze blame: 51.311s aetherseed-warmup.service).
+# Nothing actually waited - SSH and both services were up throughout - but a
+# number tracked since step 1 had moved, and anything ordered After=
+# multi-user.target really would have waited. Type=simple makes the unit
+# "started" the moment curl execs, so the target does not wait and the load
+# still happens.
+Type=simple
+User=aetherseed
+Group=aetherseed
+
+# --retry-connrefused covers the gap between hailo-ollama.service being started
+# and its socket accepting; --max-time bounds a load that never completes.
+# num_predict 1: the point is the HEF load, not the tokens.
+ExecStart=/usr/bin/curl --silent --show-error --fail \
+    --retry 15 --retry-delay 2 --retry-connrefused --max-time 240 \
+    --output /dev/null \
+    --header "Content-Type: application/json" \
+    --data '{"model":"llama3.2:3b","messages":[{"role":"user","content":"hi"}],"stream":false,"options":{"num_predict":1}}' \
+    http://127.0.0.1:8000/api/chat
+
+# A failed warm-up must not look like a broken device: the next real question
+# simply pays the load itself, exactly as before this unit existed. There is no
+# Restart= - one attempt, then out of the way.
+
+# It speaks HTTP to loopback and touches nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

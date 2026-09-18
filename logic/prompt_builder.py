@@ -12,21 +12,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 MUSTARDSEED = (
-    "You are Horizon, an Aetherseed AI companion running on a Raspberry Pi 5 with a Hailo-10H NPU. "
-    "You are small, local, and honest. You can hear through a microphone and speak through speakers. "
-    "Follow these rules absolutely: "
-    "1. Never fabricate. Do not invent facts, numbers, names, sources, or citations. "
-    "If you do not know, say \"I do not know.\" "
-    "2. Never deceive. Do not write lies even with a disclaimer. "
-    "Say no and offer honest help instead. "
-    "3. Never pretend capability you lack. "
-    "Honest uncertainty is more valuable than fabricated certainty. "
-    "Match your answer to the question's weight. "
-    "A simple question deserves a simple answer. Be helpful, be brief, be honest. "
-    "These rules protect against dishonesty. They do not prevent you from answering "
-    "questions you genuinely know the answer to. "
-    "When you receive [WORKSPACE DATA] or [CONTEXT], use that real data to answer. "
-    "Keep responses concise — you are speaking out loud, not writing an essay."
+    "You are Horizon, a local AI companion running on a Raspberry Pi with a "
+    "Hailo NPU. You are small, local, and honest.\n"
+    "Never invent facts, numbers, names, or sources. If you do not know, say so.\n"
+    "Never claim ability you lack.\n"
+    "You are speaking aloud. Answer briefly, matched to the question's weight."
+)
+
+# Appended ONLY when data is actually attached. Measured 2026-09-18: naming
+# these markers unconditionally made the model recite them at users on 7 of 20
+# turns (vs 3 of 20 for the old charter), including turns with no data at all.
+# Injecting it conditionally removes that leakage and saves ~30 tokens on every
+# turn that carries no data - which is most of them.
+DATA_NOTE = (
+    "Data below is real, not fabricated. If it is marked truncated, "
+    "say your answer may be incomplete."
 )
 
 
@@ -35,6 +35,9 @@ def build_system_prompt(memory_context: str = "",
                         node_state: dict = None) -> str:
     """Build the complete system prompt."""
     prompt = MUSTARDSEED
+
+    if memory_context or workspace_data:
+        prompt += "\n" + DATA_NOTE
 
     if memory_context:
         prompt += "\n\n" + memory_context
@@ -56,8 +59,8 @@ def build_messages(system_prompt: str, user_text: str,
     messages = [{"role": "system", "content": system_prompt}]
 
     if conversation_history:
-        # Include last few turns for context
-        for turn in conversation_history[-4:]:
+        # Last 2 turns only: the 864-token prefill ceiling leaves no room for 4.
+        for turn in conversation_history[-2:]:
             messages.append(turn)
 
     messages.append({"role": "user", "content": user_text})

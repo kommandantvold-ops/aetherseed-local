@@ -38,7 +38,7 @@ DEFAULT_CONFIG = {
         "recency": 0.15
     },
     "max_retrieved": 5,
-    "max_context_chars": 1500,
+    "max_context_chars": 800,   # 1500 did not fit the 864-token prefill ceiling
     "consolidation_threshold": 50,  # episodes before auto-consolidation
     "embedding_dim": 64,            # TF-IDF dimensions (kept small for 1.7B context)
     "willingness_dim": 64,

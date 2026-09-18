@@ -1,14 +1,72 @@
+# AetherSeed Companion - Hailo LLM server
+#
+# Every non-obvious directive below is here because of something measured on
+# hardware on 2026-09-17, not because it is conventional. See the build log,
+# step 5, for the measurements.
+
 [Unit]
-Description=Hailo-Ollama LLM Server
+Description=AetherSeed Companion - Hailo LLM server
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
 After=network.target
+# An appliance must always come back. Never stop trying to restart.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=andreas
-Environment=HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED
-ExecStart=/usr/local/bin/hailo-ollama
+User=aetherseed
+Group=aetherseed
+# /dev/hailo0 is group-restricted by services/99-aetherseed-hailo.rules.
+# User=/Group= alone does not grant secondary groups, so name it explicitly.
+SupplementaryGroups=hailo
+
+# The NPU device node is created by udev when hailo1x_pci loads, well before
+# multi-user.target. There is no dev-hailo0.device unit to depend on (checked),
+# so the dependency is asserted here and Restart=always covers the race.
+ExecStartPre=/usr/bin/test -e /dev/hailo0
+ExecStart=/usr/bin/hailo-ollama
+
+# Mandatory, not cosmetic: without a stat-able cwd HailoRT fails to open its own
+# log - "CHECK failed - stat() on path "." failed. errno 25" - on every start.
+WorkingDirectory=/var/lib/aetherseed
+Environment=HOME=/var/lib/aetherseed
+StateDirectory=aetherseed
+
+# A healthy instance stops on SIGTERM in well under a second (measured: 0.68s).
+# A *wedged* instance - one deadlocked in hailo_vdma_context_wait - ignores
+# SIGTERM entirely and had to be SIGKILLed by hand. These three lines bound that
+# case to 10s instead of systemd's default 90s, so shutdown cannot hang.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+SendSIGKILL=yes
+
+# It can deadlock in a kernel DMA wait (hailo_vdma_context_wait) after an
+# over-limit prompt, at ~0% CPU, with the NPU itself idle. Nothing else on the
+# box would bring it back.
 Restart=always
 RestartSec=5
+
+# Logs go to the journal. Previously three log files were written into the
+# operator's home directory because HOME and cwd were inherited from a shell.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hailo-ollama
+
+# Hardening. ProtectSystem=strict makes /usr read-only, so the model tree is
+# re-opened explicitly - it is the only path under /usr the server must write.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/usr/share/hailo-ollama/models
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+DevicePolicy=closed
+DeviceAllow=/dev/hailo0 rw
 
 [Install]
 WantedBy=multi-user.target

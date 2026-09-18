@@ -134,6 +134,15 @@ pip install numpy --break-system-packages
 
 ## Phase 7: Install Open WebUI
 
+> **v1 prototype path — not the shipped configuration.** Decided 2026-09-18
+> (build log, step 13): the Companion's GUI runs on the device at
+> `127.0.0.1:2077`, the proxy binds `127.0.0.1:8001`, and nothing on the LAN
+> reaches either. An Open WebUI container pulled from a moving tag
+> (`:main`) is an update channel, which the cartridge model rules out; if
+> Open WebUI is used at all it must be pinned by image digest and started with
+> `-e HOST=127.0.0.1 -e PORT=2077` under `--net=host`. The instructions below
+> are kept as the record of how v1 was brought up.
+
 ```bash
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER
@@ -182,8 +191,8 @@ python3 trust_evolution.py status
 # Check memory
 python3 aetherroot.py status
 
-# Open WebUI
-# Navigate to http://horizon.local:8080
+# GUI (on the device)
+# Navigate to http://127.0.0.1:2077
 ```
 
 ## Phase 10: VLM and Whisper (Optional)
@@ -208,7 +217,7 @@ or start hailo-ollama with `HAILO_OLLAMA_VDEVICE_GROUP_ID=SHARED`.
 ## Service Architecture
 
 ```
-Open WebUI (8080) → Aetherseed Proxy (8001) → hailo-ollama (8000) → Hailo-10H NPU
+GUI (127.0.0.1:2077) → Aetherseed Proxy (127.0.0.1:8001) → hailo-ollama (127.0.0.1:8000) → Hailo-10H NPU
 
 Proxy injects:
   ├── Mustardseed seed (alignment)
@@ -290,6 +299,9 @@ Run in report-only mode first and read the observations before enforcing:
 
 ```bash
 python3 test_trust_scoring.py          # 14 unit tests
+python3 -m unittest test_token_budget  # 19: prompt ceiling, sanitizers, first_paragraph
+python3 -m unittest test_stream_guard  # 9: the streaming stops, scripted backend
+python3 tools/stream_guard_check.py    # on the Companion only: live NPU, 26 requests
 python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.aetherseed/trust_state.json'))).get('observations', []))"
 ```
 

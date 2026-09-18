@@ -1,0 +1,21 @@
+# Line endings: the repository is LF, the working tree is LF, on every OS.
+# Set 2026-09-18 (build log, step 13) after a Windows checkout with CRLF broke
+# shebangs and YAML when the files were copied to the device (step 11), made
+# 225 untouched files show as modified, and had silently corrupted
+# docs/DNAv2.pdf in the working tree (git guessed "text" from its first bytes
+# and inserted 231 carriage returns). text=auto lets git detect binary content;
+# the explicit entries are the files whose bytes must never be touched.
+* text=auto eol=lf
+
+*.pdf binary
+*.gz binary
+*.tar binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.onnx binary
+*.hef binary
+*.bin binary
+
+# Vendored, byte-for-byte as upstream ships it (espeak-ng data uses CRLF).
+piper/** -text

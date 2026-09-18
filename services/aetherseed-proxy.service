@@ -1,15 +1,61 @@
+# AetherSeed Companion - the proxy: charter, memory, trust gate, token guards.
+#
+# Sits between a UI and hailo-ollama. Every guard the frozen server lacks lives
+# in proxy.py's call_hailo_chat (build log, steps 7 and 10), so this unit is
+# what makes the device behave as specified. Same shape as hailo-ollama.service.
+
 [Unit]
-Description=Aetherseed Proxy v2
-After=hailo-ollama.service
+Description=AetherSeed Companion - proxy
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=hailo-ollama.service network.target
 Wants=hailo-ollama.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=andreas
-WorkingDirectory=/home/andreas/aetherseed-ai
-ExecStart=/usr/bin/python3 /home/andreas/aetherseed-ai/proxy.py
+User=aetherseed
+Group=aetherseed
+
+# The application is read-only to the service (ProtectSystem=strict); all state
+# - memory database, audit log, workspace sandbox - goes under StateDirectory,
+# which is where "~" resolves for this account.
+WorkingDirectory=/opt/aetherseed
+ExecStart=/opt/aetherseed/venv/bin/python3 /opt/aetherseed/proxy.py
+Environment=HOME=/var/lib/aetherseed
+Environment=PYTHONUNBUFFERED=1
+Environment=AETHERSEED_TOKENIZER=/var/lib/aetherseed/tokenizer.json
+# Loopback by default. A UI on another machine needs 0.0.0.0 here - a
+# deliberate, visible change, not a shipped default.
+Environment=AETHERSEED_PROXY_BIND=127.0.0.1
+StateDirectory=aetherseed
+
+# proxy.py preflight() exits 1 at startup if the tokenizer is missing, rather
+# than 503-ing the first person who talks to the node. Restart=always then keeps
+# retrying, which is the right behaviour for a transient and loud for a
+# permanent one: journalctl shows the reason every 5s.
 Restart=always
 RestartSec=5
+TimeoutStopSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aetherseed-proxy
+
+# Hardening. No device access: the proxy speaks HTTP to hailo-ollama on
+# loopback and never touches /dev/hailo0, so unlike hailo-ollama.service it
+# needs no hailo group and no DeviceAllow.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target
