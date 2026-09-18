@@ -360,6 +360,18 @@ def sanitize_model_output(text: str):
 _SENTENCE_END = re.compile(r'[.!?…]["\')\]]*\s*$')
 
 
+def ends_sentence(text: str) -> bool:
+    """True if text ends with a completed sentence: terminal punctuation,
+    optionally a closing quote or bracket, then nothing but whitespace.
+
+    Used by first_paragraph() and by the proxy's soft stop. Known false
+    positive, accepted: an abbreviation ("e.g.") followed by a space. Known
+    true negative, by design: "3." followed by "14" - the next token does not
+    start with whitespace, so the caller does not treat it as a boundary.
+    """
+    return bool(text) and _SENTENCE_END.search(text) is not None
+
+
 def first_paragraph(text: str):
     """Return (kept, cut): the text up to the first blank line that follows a
     completed sentence, and whether anything was removed.
@@ -389,7 +401,7 @@ def first_paragraph(text: str):
         if j < 0:
             return text, False
         head = text[:j].rstrip()
-        if head and _SENTENCE_END.search(head):
+        if ends_sentence(head):
             return head, True
         idx = j + 2
 

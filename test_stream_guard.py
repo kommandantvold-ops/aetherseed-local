@@ -78,7 +78,7 @@ class TestStreamGuard(unittest.TestCase):
         cls.thread.start()
         cls.saved = (proxy.HAILO_OLLAMA_URL, proxy.token_counter,
                      proxy.STOP_AT_PARAGRAPH, proxy.MAX_GENERATION_SECONDS,
-                     proxy.enforce_budget)
+                     proxy.enforce_budget, proxy.SOFT_STOP_TOKENS)
         proxy.HAILO_OLLAMA_URL = "http://127.0.0.1:%d" % cls.server.server_address[1]
         proxy.token_counter = lambda: None
         proxy.enforce_budget = lambda counter, messages: (messages, types.SimpleNamespace(trimmed=False))
@@ -88,10 +88,11 @@ class TestStreamGuard(unittest.TestCase):
         cls.server.shutdown()
         (proxy.HAILO_OLLAMA_URL, proxy.token_counter,
          proxy.STOP_AT_PARAGRAPH, proxy.MAX_GENERATION_SECONDS,
-         proxy.enforce_budget) = cls.saved
+         proxy.enforce_budget, proxy.SOFT_STOP_TOKENS) = cls.saved
 
     def setUp(self):
         proxy.STOP_AT_PARAGRAPH = True
+        proxy.SOFT_STOP_TOKENS = 0        # off unless a test turns it on
         proxy.MAX_GENERATION_SECONDS = 90
         SCRIPT["done_reason"] = "stop"
 
@@ -154,6 +155,43 @@ class TestStreamGuard(unittest.TestCase):
         chunks = ["Oslo", ".", " \n\n", "(more", ".)"]
         lines, text, ai = self.run_chunks(chunks)
         self.assertEqual(ai, "".join(chunks))
+
+    def test_soft_stop_ends_on_the_next_sentence_boundary(self):
+        proxy.SOFT_STOP_TOKENS = 3
+        chunks = ["The", " wall", " fell", ".", " It", " came", " down", "."]
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertEqual(ai, "The wall fell.")
+        self.assertEqual(text, "The wall fell.")
+        self.assertTrue(lines[-1]["done"])
+        self.assertNotIn("came", text)
+
+    def test_soft_stop_waits_for_the_token_count(self):
+        proxy.SOFT_STOP_TOKENS = 6
+        chunks = ["The", " wall", " fell", ".", " It", " came", " down", ".", " Yes", "."]
+        lines, text, ai = self.run_chunks(chunks)
+        # first boundary at 4 tokens is too early; the second, at 8, is taken
+        self.assertEqual(ai, "The wall fell. It came down.")
+
+    def test_soft_stop_ignores_a_decimal_point(self):
+        proxy.SOFT_STOP_TOKENS = 2
+        chunks = ["Pi", " is", " 3", ".", "14", "!"]
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertEqual(ai, "Pi is 3.14!")
+        self.assertEqual(lines[-1].get("done_reason"), "stop")
+
+    def test_soft_stop_off_by_default_in_these_tests_and_when_zero(self):
+        proxy.SOFT_STOP_TOKENS = 0
+        chunks = ["A", ".", " B", ".", " C", "."]
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertEqual(ai, "A. B. C.")
+
+    def test_committed_defaults_are_the_logged_ones(self):
+        # Step 13 of the build log records these; a change here without a
+        # change there is a discrepancy, which is what this test is for.
+        self.assertEqual(self.saved[5], 48)
+        self.assertEqual(proxy.GENERATION_OPTIONS, {"num_predict": 80})
+        self.assertEqual(self.saved[3], 90)
+        self.assertTrue(self.saved[2])
 
     def test_generation_options_are_sent(self):
         self.run_chunks(["OK"])

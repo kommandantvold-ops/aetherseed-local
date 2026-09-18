@@ -46,7 +46,8 @@ from logic.prompt_builder import MUSTARDSEED as MUSTARDSEED_SEED
 from logic.prompt_builder import DATA_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 sanitize_model_output, first_paragraph,
-                                PromptTooLarge, TokenizerUnavailable)
+                                ends_sentence, PromptTooLarge,
+                                TokenizerUnavailable)
 
 # One tokenizer for the process. Loading it costs ~17MB and a moment, so it is
 # built once, lazily, and reused.
@@ -76,10 +77,11 @@ spark = AetherSpark({
 # HAILO-OLLAMA CLIENT
 # ============================================================
 
-# Three bounds on generation, in the order they normally fire. All three exist
+# Four bounds on generation, in the order they normally fire. They exist
 # because the model does not reliably stop on its own (build log, steps 10 and
-# 12), and the numbers are placeholders for a product decision - the voice
-# path's latency budget - not measured optima.
+# 12). The values were set 2026-09-18 (step 13) on the step-12 measurements;
+# Andreas delegated the choice. They are recorded there with the reasoning, so
+# change them there too.
 #
 # 1. STOP_AT_PARAGRAPH - the answer is the first paragraph. Measured 2026-09-18
 #    over 40 live responses to eight short spoken-style questions: the honest
@@ -90,16 +92,24 @@ spark = AetherSpark({
 #    "Oslo." became 36-150 tokens. Cutting at the blank line keeps the answer
 #    and drops the tail, and it is the tail that fabricates.
 #
-# 2. GENERATION_OPTIONS["num_predict"] - the server-side token cap. THIS BUILD
+# 2. SOFT_STOP_TOKENS - once the answer is this long, end it at the next
+#    sentence boundary. Answers in the study were 1-15 tokens (one line),
+#    30-40 (two sentences) or 54-61 (five sentences, the last one filler);
+#    what ran past that was self-narration. 48 tokens is about thirty-six
+#    spoken words, and the stop lands on a full stop, which the hard cap below
+#    cannot promise. The boundary is "previous token closed a sentence, this
+#    token starts with whitespace", so "3." followed by "14" is not one.
+#
+# 3. GENERATION_OPTIONS["num_predict"] - the server-side hard cap. THIS BUILD
 #    HONOURS IT: measured 2026-09-18, num_predict=20 returned exactly 20 tokens
 #    with done_reason "length". Step 10 concluded the server offered no bound at
 #    all; that was wrong. It tested max_tokens at the top level of the request
 #    - the OpenAI-style key - which /api/chat does ignore (max_tokens=20 gave
 #    408 tokens). Ollama's key is options.num_predict, and it works.
-#    80 tokens is ~30s at the measured 2.66 tok/s, roughly sixty spoken words;
-#    the longest answer in the study that was not filler was 61 tokens.
+#    80 tokens is ~30s at the measured 2.66 tok/s. It fires only when no
+#    sentence ends between token 48 and token 80, and it cuts mid-sentence.
 #
-# 3. MAX_GENERATION_SECONDS - wall-clock backstop. With the cap above it should
+# 4. MAX_GENERATION_SECONDS - wall-clock backstop. With the cap above it should
 #    never fire on a healthy server; it exists for a server that stalls or
 #    whose decode rate collapses, which no token count can catch. Expressed in
 #    seconds because seconds are what the person waiting experiences.
@@ -111,6 +121,7 @@ spark = AetherSpark({
 # four of twenty-four runs at the default. Determinism is available
 # (temperature 0 is exactly reproducible, 3/3) but it is not a fix for this.
 STOP_AT_PARAGRAPH = True
+SOFT_STOP_TOKENS = 48
 GENERATION_OPTIONS = {"num_predict": 80}
 MAX_GENERATION_SECONDS = 90
 
@@ -139,10 +150,11 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     3. Where the answer ends. The model does not stop when it is done: it
        answers, then fills - commentary, offers, stage directions, and in the
        worst measured cases a fabrication behind a correct refusal, or "OK"
-       followed by ~110s about being "the goddess of time". Three bounds, see
-       the constants above: the first paragraph, the server's num_predict
-       (which this build honours - step 10's claim that nothing server-side
-       works was tested with the wrong key), and a wall-clock backstop.
+       followed by ~110s about being "the goddess of time". Four bounds, see
+       the constants above: the first paragraph, a sentence boundary once the
+       answer is long enough, the server's num_predict (which this build
+       honours - step 10's claim that nothing server-side works was tested
+       with the wrong key), and a wall-clock backstop.
 
     Abandoning a stream mid-generation is safe: measured over three trials,
     closing the socket after 20 chunks left the next request answering in
@@ -186,6 +198,14 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
                 if n:
                     stripped_total += n
                     stopped_because = "control-token"   # the stop the server lacks
+                if (not stopped_because and SOFT_STOP_TOKENS
+                        and chunks >= SOFT_STOP_TOKENS
+                        and clean[:1] in (" ", "\n") and ends_sentence(ai_content)):
+                    # Long enough, the previous token closed a sentence, and
+                    # this one opens the next. End here, on a boundary a voice
+                    # can end on; this token is not forwarded or stored.
+                    stopped_because = "sentence"
+                    clean = ""
                 ai_content += clean
                 if msg.get("content"):
                     chunks += 1          # the server's done message is empty
@@ -469,7 +489,8 @@ def main():
     print(f"  Listening:    {PROXY_BIND}:{PROXY_PORT}")
     print(f"  Backend:      {HAILO_OLLAMA_URL}")
     print(f"  Generation:   options={GENERATION_OPTIONS} "
-          f"paragraph_stop={STOP_AT_PARAGRAPH} backstop={MAX_GENERATION_SECONDS}s")
+          f"paragraph_stop={STOP_AT_PARAGRAPH} soft_stop={SOFT_STOP_TOKENS} "
+          f"backstop={MAX_GENERATION_SECONDS}s")
     print(f"  Memory:       {root.root_dir}")
     print(f"  Trust level:  {trust_level}")
     print(f"  Tool tiers:   {spark.gate.allowed_tiers}")
