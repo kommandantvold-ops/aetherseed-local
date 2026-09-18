@@ -140,8 +140,13 @@ aetherseed-local/
 ├── aetherspark.py          # Tool layer
 ├── trust_evolution.py      # Trust growth engine
 ├── intent_detection.py     # Natural language → tool execution
+├── honesty_check.py        # Provenance scoring for responses
+├── logic/
+│   ├── prompt_builder.py   # System prompt assembly + the charter
+│   └── token_budget.py     # 864-token prefill guard
 ├── config/
-│   └── mustardseed.txt     # Compact seed text
+│   ├── hardware.yaml
+│   └── settings.py
 ├── services/
 │   ├── hailo-ollama.service
 │   └── aetherseed-proxy.service
