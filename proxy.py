@@ -30,7 +30,14 @@ from intent_detection import detect_intent, execute_intent
 # ============================================================
 
 HAILO_OLLAMA_URL = "http://127.0.0.1:8000"
-PROXY_PORT = 8001
+PROXY_PORT = int(os.environ.get("AETHERSEED_PROXY_PORT", "8001"))
+
+# Bind address. Defaults to loopback: a device sold on "nothing leaves" should
+# not expose its LLM proxy to the LAN unless something on the LAN needs it. A
+# UI on another machine sets AETHERSEED_PROXY_BIND=0.0.0.0 in the unit. The
+# previous hardcoded 0.0.0.0 was the same default hailo-ollama shipped with
+# (build log, step 4, finding 1).
+PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 
 # The charter lives in exactly one place now. proxy.py previously kept its
 # own copy, which had already drifted from prompt_builder's (223 vs 210
@@ -420,7 +427,7 @@ def main():
     print("  Mustardseed + AetherRoot + AetherSpark")
     print("  + Intent Detection")
     print("=" * 50)
-    print(f"  Listening:    port {PROXY_PORT}")
+    print(f"  Listening:    {PROXY_BIND}:{PROXY_PORT}")
     print(f"  Backend:      {HAILO_OLLAMA_URL}")
     print(f"  Memory:       {root.root_dir}")
     print(f"  Trust level:  {trust_level}")
@@ -435,7 +442,7 @@ def main():
     print("=" * 50)
     print()
 
-    server = ThreadedHTTPServer(("0.0.0.0", PROXY_PORT), ProxyHandler)
+    server = ThreadedHTTPServer((PROXY_BIND, PROXY_PORT), ProxyHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

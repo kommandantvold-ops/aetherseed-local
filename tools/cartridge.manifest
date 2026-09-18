@@ -10,14 +10,19 @@
 #
 # cartridge-id is a hash over every line below it. Quote that one value to
 # name a build; the lines exist to say what differs when it does not match.
-# Captured 2026-09-18 on the dev unit.
+# Captured 2026-09-18 on the dev unit, after the v2 proxy was deployed.
 #
-cartridge-id	6fdaecb3d0def8bc63d53b44cb2168e5f7207668f3a0c522cdb325ddc0096bdd
+cartridge-id	ee111391c5f30ccaa6de2c5071d793f5af10730437c9a0d679084e223296005f
+app.digest	5d55af0e8d514d7cbf8627e578176b015f3fd8e83fda8a2d0cf0e2f98f100390
+app.files	12
+app.numpy	2.2.4
+app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
+file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
 file./etc/systemd/system/hailo-ollama.service	795efc1df785adb9592fa98fe5fc1d4d882a130df23f2ee1f67c1325854183fe
 file./etc/udev/rules.d/99-aetherseed-hailo.rules	9943a61b6fbc5dfb4c9e7aea5ccb1faeacfc4fe5df671462771ab919f06a6949
 file./etc/xdg/hailo-ollama/hailo-ollama.json	b350ac9ecb75e2376293c281c3f71636f683e84ba6cc55524c54a4f34f3b952b
-file.prompt_builder	e2fddfbfa694d3075b5195f1f720cee0e51e9a6e2afffb4f6ec5565935330611
+file.tokenizer_json	6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b
 firmware.version	version 2226a853 (release) (embedded)
 kernel.arch	aarch64
 kernel.release	6.18.50+rpt-rpi-2712
@@ -32,4 +37,5 @@ pkg.h10-hailort	5.1.1
 pkg.h10-hailort-pcie-driver	5.1.1
 pkg.hailo-gen-ai-model-zoo	5.1.1
 pkg.python3-h10-hailort	5.1.1-1
-service.enabled	enabled
+service.hailo_ollama.enabled	enabled
+service.proxy.enabled	enabled

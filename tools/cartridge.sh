@@ -30,8 +30,10 @@ BLOB_DIR=/usr/share/hailo-ollama/models/blob
 IDENTITY_FILES=(
   /etc/xdg/hailo-ollama/hailo-ollama.json
   /etc/systemd/system/hailo-ollama.service
+  /etc/systemd/system/aetherseed-proxy.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
 )
+APP_DIR=/opt/aetherseed
 
 die() { echo "cartridge: $*" >&2; exit 2; }
 
@@ -99,15 +101,26 @@ collect() {
     emit "file.$f" "$(hash_file "$f")"
   done
 
-  # The charter decides what the node says about itself, so it is part of the
-  # cartridge even though it lives in the application, not the OS.
-  local pb
-  pb="$(dirname "$0")/../logic/prompt_builder.py"
-  [ -r "$pb" ] || pb=/opt/aetherseed/logic/prompt_builder.py
-  emit file.prompt_builder "$(hash_file "$pb")"
+  # The application itself. Every guard the frozen server lacks lives here
+  # (build log steps 7 and 10), and the charter decides what the node says
+  # about itself, so all of it is part of the cartridge. The venv is excluded
+  # from the digest - pip writes timestamps into its metadata, which would make
+  # the hash differ between two identical installs - and the versions that
+  # matter are recorded explicitly instead.
+  if [ -d "$APP_DIR" ]; then
+    emit app.digest "$(cd "$APP_DIR" && find . -path ./venv -prune -o -type f -print \
+                        | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)"
+    emit app.files  "$(cd "$APP_DIR" && find . -path ./venv -prune -o -type f -print | wc -l | tr -d ' ')"
+    emit app.tokenizers "$("$APP_DIR/venv/bin/python3" -c 'import tokenizers;print(tokenizers.__version__)' 2>/dev/null || echo MISSING)"
+    emit app.numpy      "$("$APP_DIR/venv/bin/python3" -c 'import numpy;print(numpy.__version__)' 2>/dev/null || echo MISSING)"
+  else
+    emit app.digest MISSING
+  fi
+  emit file.tokenizer_json "$(hash_file /var/lib/aetherseed/tokenizer.json)"
 
   emit device.node_mode  "$(stat -c '%a %U:%G' /dev/hailo0 2>/dev/null || echo MISSING)"
-  emit service.enabled   "$(systemctl is-enabled hailo-ollama 2>/dev/null || echo unknown)"
+  emit service.hailo_ollama.enabled "$(systemctl is-enabled hailo-ollama 2>/dev/null || echo unknown)"
+  emit service.proxy.enabled        "$(systemctl is-enabled aetherseed-proxy 2>/dev/null || echo unknown)"
 }
 
 fingerprint() {  # one hash over the whole sorted body
