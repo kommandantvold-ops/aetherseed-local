@@ -31,7 +31,7 @@ for name, attrs in (("aetherroot", ["AetherRoot"]),
     sys.modules[name] = m
 
 import proxy
-print("MAX_GENERATED_CHUNKS =", proxy.MAX_GENERATED_CHUNKS)
+print("MAX_GENERATION_SECONDS =", proxy.MAX_GENERATION_SECONDS)
 print()
 
 CTRL_RUNS = 0
