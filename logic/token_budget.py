@@ -356,8 +356,16 @@ def sanitize_model_output(text: str):
 
 
 # A completed sentence: terminal punctuation, optionally closed by a quote or
-# bracket, then only whitespace to the end.
-_SENTENCE_END = re.compile(r'[.!?…]["\')\]]*\s*$')
+# bracket, then only whitespace - or one short parenthetical aside - to the end.
+#
+# The aside is not decoration. Measured 2026-09-18 (build log, step 14): the
+# model answered "Six. (Verified)" and then filled for another 40 tokens. The
+# blank line after it was a real boundary, but the text before it ended in ")",
+# so the earlier pattern saw no finished sentence and the bound never fired.
+# This model appends short parentheticals constantly - "(Verified)", "(pause)",
+# "(I do not know)" - so treating one as part of the sentence it follows is the
+# difference between the bound working and not.
+_SENTENCE_END = re.compile(r'[.!?…]["\')\]]*\s*(?:\([^()]{0,120}\)[\s.]*)?$')
 
 
 def ends_sentence(text: str) -> bool:
@@ -404,6 +412,43 @@ def first_paragraph(text: str):
         if ends_sentence(head):
             return head, True
         idx = j + 2
+
+
+def cut_at_scaffold_marker(text: str):
+    """Return (kept, cut): text truncated at the first block marker the MODEL
+    emitted, and whether anything was removed.
+
+    NOT cosmetic, for exactly the reason sanitize_model_output() is not.
+    Observed live 2026-09-18 (build log, step 14):
+
+        'Six. (Verified) \\n\\n[END MEMORY CONTEXT] \\n\\n(Note: ...)'
+
+    AetherRoot stores the assistant message verbatim and re-injects it inside
+    [MEMORY CONTEXT] ... [END MEMORY CONTEXT]. An episode containing the literal
+    closing marker therefore CLOSES THE MEMORY BLOCK EARLY on the next turn, and
+    whatever the scaffold placed after it reads as ordinary prompt text. That is
+    precisely the hole sanitize_injected() closes for files the model was asked
+    to read - the same shape, with the model itself as the untrusted source, and
+    the same shape again as the control-token leak of step 10.
+
+    Three injection paths into this node's prompt have now been found and all
+    three are the same bug: a file's contents, the model's control tokens, and
+    the model's ordinary prose. Anything that can reach the prompt is untrusted,
+    including the node's own words.
+
+    Cut rather than strip: a marker means the model has stopped answering and
+    started reciting its own scaffold, and what follows is never the answer.
+    """
+    if not text:
+        return text, False
+    first = -1
+    for tag in (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE):
+        i = text.find(tag)
+        if i >= 0 and (first < 0 or i < first):
+            first = i
+    if first < 0:
+        return text, False
+    return text[:first].rstrip(), True
 
 
 def _split_block(text: str, open_tag: str, close_tag: str):

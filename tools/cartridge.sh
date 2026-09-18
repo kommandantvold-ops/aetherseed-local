@@ -31,6 +31,7 @@ IDENTITY_FILES=(
   /etc/xdg/hailo-ollama/hailo-ollama.json
   /etc/systemd/system/hailo-ollama.service
   /etc/systemd/system/aetherseed-proxy.service
+  /etc/systemd/system/aetherseed-warmup.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
   /etc/nftables.conf
 )
@@ -123,6 +124,7 @@ collect() {
   emit service.hailo_ollama.enabled "$(systemctl is-enabled hailo-ollama 2>/dev/null || echo unknown)"
   emit service.proxy.enabled        "$(systemctl is-enabled aetherseed-proxy 2>/dev/null || echo unknown)"
   emit service.nftables.enabled     "$(systemctl is-enabled nftables 2>/dev/null || echo unknown)"
+  emit service.warmup.enabled       "$(systemctl is-enabled aetherseed-warmup 2>/dev/null || echo unknown)"
 }
 
 fingerprint() {  # one hash over the whole sorted body

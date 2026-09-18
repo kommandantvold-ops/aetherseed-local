@@ -193,6 +193,24 @@ class TestStreamGuard(unittest.TestCase):
         self.assertEqual(self.saved[3], 90)
         self.assertTrue(self.saved[2])
 
+    def test_scaffold_marker_split_across_chunks_still_stops(self):
+        # "[END MEMORY CONTEXT]" is several tokens. A per-chunk test would never
+        # see it, which is why the stop works on the accumulated text.
+        chunks = ["Six", ".", " (Verified)", " \n\n", "[END", " MEMORY", " CONTEXT", "]", " more"]
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertEqual(ai, "Six. (Verified)")
+        self.assertNotIn("MEMORY", text)
+        self.assertTrue(lines[-1]["done"])
+
+    def test_marker_arriving_whole_in_one_chunk(self):
+        lines, text, ai = self.run_chunks(["Answer", ".", " [END MEMORY CONTEXT]", " tail"])
+        self.assertEqual(ai, "Answer.")
+        self.assertNotIn("MEMORY", text)
+
+    def test_marker_stop_beats_the_paragraph_stop_when_it_comes_first(self):
+        lines, text, ai = self.run_chunks(["A", ".", " [WORKSPACE DATA]", " x", " \n\n", "y."])
+        self.assertEqual(ai, "A.")
+
     def test_generation_options_are_sent(self):
         self.run_chunks(["OK"])
         self.assertEqual(SCRIPT["last_request"]["options"], proxy.GENERATION_OPTIONS)

@@ -10,16 +10,17 @@
 #
 # cartridge-id is a hash over every line below it. Quote that one value to
 # name a build; the lines exist to say what differs when it does not match.
-# Captured 2026-09-18 on the dev unit, after step 13 (bounds set, firewall).
+# Captured 2026-09-18 on the dev unit, after step 14 (warm-up, marker cut).
 #
-cartridge-id	666f2c8e82944340630c9abbba8c6c4a14f207df60950f3ec9af6e609219a621
-app.digest	50bcd062dd79cd2e22f5492741a7ba3f0cc1bd41b345037aa6a366cff8e3f014
+cartridge-id	af1b031ca1f82331add08750dd8f70cf9594e95dcc798c5777c3afbaf412b6af
+app.digest	57fe2d2b82676704545e578d159378a770d29b055e932d10a09879f7706d5ec7
 app.files	12
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
 file./etc/nftables.conf	3eee0ef33e802a35fe3d25d2a95ad9d5ecdeb1c7a4b46381dbdefa46aef1d8b9
 file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
+file./etc/systemd/system/aetherseed-warmup.service	b43d3c487d742665f047f92bd3c094414ff4c31af5d3b3e8c15a6757ee65e45b
 file./etc/systemd/system/hailo-ollama.service	795efc1df785adb9592fa98fe5fc1d4d882a130df23f2ee1f67c1325854183fe
 file./etc/udev/rules.d/99-aetherseed-hailo.rules	9943a61b6fbc5dfb4c9e7aea5ccb1faeacfc4fe5df671462771ab919f06a6949
 file./etc/xdg/hailo-ollama/hailo-ollama.json	b350ac9ecb75e2376293c281c3f71636f683e84ba6cc55524c54a4f34f3b952b
@@ -41,3 +42,4 @@ pkg.python3-h10-hailort	5.1.1-1
 service.hailo_ollama.enabled	enabled
 service.nftables.enabled	enabled
 service.proxy.enabled	enabled
+service.warmup.enabled	enabled

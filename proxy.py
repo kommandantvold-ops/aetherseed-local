@@ -50,8 +50,8 @@ from logic.prompt_builder import MUSTARDSEED as MUSTARDSEED_SEED
 from logic.prompt_builder import DATA_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 sanitize_model_output, first_paragraph,
-                                ends_sentence, PromptTooLarge,
-                                TokenizerUnavailable)
+                                ends_sentence, cut_at_scaffold_marker,
+                                PromptTooLarge, TokenizerUnavailable)
 
 # One tokenizer for the process. Loading it costs ~17MB and a moment, so it is
 # built once, lazily, and reused.
@@ -213,6 +213,20 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
                 ai_content += clean
                 if msg.get("content"):
                     chunks += 1          # the server's done message is empty
+
+                # Both remaining stops work on the ACCUMULATED text, not this
+                # chunk: "[END MEMORY CONTEXT]" is several tokens and a blank
+                # line often arrives split across two, so neither is visible to
+                # a per-chunk test.
+                if not stopped_because:
+                    kept, cut = cut_at_scaffold_marker(ai_content)
+                    if cut:
+                        excess = len(ai_content) - len(kept)
+                        clean = clean[:max(0, len(clean) - excess)]
+                        msg["content"] = clean
+                        d["message"] = msg
+                        ai_content = kept
+                        stopped_because = "scaffold-marker"
                 if STOP_AT_PARAGRAPH and not stopped_because:
                     kept, cut = first_paragraph(ai_content)
                     if cut:

@@ -14,7 +14,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from logic.token_budget import (sanitize_model_output, sanitize_injected,
-                                first_paragraph,
+                                first_paragraph, cut_at_scaffold_marker,
+                                ends_sentence,
                                 TokenCounter, TokenizerUnavailable,
                                 enforce_budget, PromptTooLarge,
                                 PREFILL_CEILING)
@@ -24,6 +25,65 @@ CHARTER = ("You are Horizon, a local AI companion.\n"
            "Never invent facts, numbers, names, or sources. If you do not know, say so.\n"
            "Never claim ability you lack.\n"
            "You are speaking aloud. Answer briefly.")
+
+
+class TestScaffoldMarkerCut(unittest.TestCase):
+    """The model emits the scaffold's own block markers into its answers.
+    AetherRoot stores the answer verbatim and re-injects it inside
+    [MEMORY CONTEXT] ... [END MEMORY CONTEXT], so a stored closing marker
+    closes the block early on the next turn. Observed live 2026-09-18."""
+
+    def test_the_response_actually_observed(self):
+        kept, cut = cut_at_scaffold_marker(
+            "Six. (Verified) \n\n[END MEMORY CONTEXT] \n\n(Note: the answer is verified.)")
+        self.assertEqual(kept, "Six. (Verified)")
+        self.assertTrue(cut)
+
+    def test_every_block_marker_is_a_boundary(self):
+        for tag in ("[MEMORY CONTEXT]", "[END MEMORY CONTEXT]",
+                    "[WORKSPACE DATA]", "[END WORKSPACE DATA]"):
+            kept, cut = cut_at_scaffold_marker("Answer. " + tag + " tail")
+            self.assertEqual(kept, "Answer.", tag)
+            self.assertTrue(cut, tag)
+
+    def test_the_earliest_marker_wins(self):
+        kept, _ = cut_at_scaffold_marker(
+            "A. [END MEMORY CONTEXT] b [WORKSPACE DATA] c")
+        self.assertEqual(kept, "A.")
+
+    def test_a_marker_at_the_very_start_leaves_nothing(self):
+        self.assertEqual(cut_at_scaffold_marker("[WORKSPACE DATA] x"), ("", True))
+
+    def test_ordinary_answers_are_untouched(self):
+        for s in ("Oslo.", "A spider has eight legs.", "See [1] and [2].",
+                  "The array is [MEMORY] shaped.", ""):
+            self.assertEqual(cut_at_scaffold_marker(s), (s, False), s)
+
+    def test_a_stored_marker_would_have_closed_the_block(self):
+        # Why this matters, asserted rather than only described: the marker the
+        # model emitted is byte-identical to the one enforce_budget() splits on.
+        from logic.token_budget import _MEM_CLOSE
+        leaked = "Six. [END MEMORY CONTEXT] more"
+        self.assertIn(_MEM_CLOSE, leaked)
+        self.assertNotIn(_MEM_CLOSE, cut_at_scaffold_marker(leaked)[0])
+
+
+class TestEndsSentence(unittest.TestCase):
+    """A trailing parenthetical is part of the sentence it follows. Without
+    that, "Six. (Verified)" was not a sentence end, the blank line after it was
+    not a boundary, and the answer ran 40 tokens past its own end."""
+
+    def test_trailing_parenthetical_still_ends_the_sentence(self):
+        for t in ("Six. (Verified)", "Oslo. (I checked.)", "Eight legs. (pause)"):
+            self.assertTrue(ends_sentence(t), t)
+
+    def test_an_unfinished_line_is_still_unfinished(self):
+        for t in ("1. Red", "A spider has eight legs. Some species have more",
+                  "Why did the", ""):
+            self.assertFalse(ends_sentence(t), t)
+
+    def test_the_decimal_point_case_is_unchanged(self):
+        self.assertTrue(ends_sentence("Pi is 3."))
 
 
 class TestFirstParagraph(unittest.TestCase):
