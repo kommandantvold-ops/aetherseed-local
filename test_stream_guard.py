@@ -22,6 +22,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+_STUBBED = []
 for _name, _attrs in (("aetherroot", ["AetherRoot"]),
                       ("aetherspark", ["AetherSpark"]),
                       ("trust_evolution", ["TrustEvolution"]),
@@ -34,8 +35,15 @@ for _name, _attrs in (("aetherroot", ["AetherRoot"]),
             store_episode=lambda **_: 1, store_interaction=lambda *_, **__: None,
             get_status=lambda: {"episodes": 0, "willingness_mean": 0.0}))
     sys.modules[_name] = _m
+    _STUBBED.append(_name)
 
 import proxy  # noqa: E402
+
+# proxy is imported now, so the stubs have done their job. Leaving them in
+# sys.modules would hand the fakes to every test module that runs after this
+# one in the same process - which is exactly what happened to test_provenance.
+for _name in _STUBBED:
+    sys.modules.pop(_name, None)
 
 SCRIPT = {"chunks": [], "done_reason": "stop"}
 

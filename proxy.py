@@ -48,10 +48,14 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 # tokens, different final paragraph).
 from logic.prompt_builder import MUSTARDSEED as MUSTARDSEED_SEED
 from logic.prompt_builder import DATA_NOTE
+from logic.prompt_builder import FICTION_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 sanitize_model_output, first_paragraph,
                                 ends_sentence, cut_at_scaffold_marker,
+                                strip_leading_artefacts,
                                 PromptTooLarge, TokenizerUnavailable)
+from logic.provenance import (detect_mode, resolve_mode, is_record_question,
+                             summarise_record, FICTION, UNVERIFIED)
 
 # One tokenizer for the process. Loading it costs ~17MB and a moment, so it is
 # built once, lazily, and reused.
@@ -76,6 +80,32 @@ spark = AetherSpark({
     "trust_level": trust_level,
     "audit_log": os.path.expanduser("~/.aetherseed/spark_audit.log")
 })
+
+# The record the node cannot edit.
+#
+# "Future accountability" is not something you install in a model by telling it
+# it is being watched - that is another instruction in the channel that already
+# demonstrably leaks (steps 8b, 10, 14). It is an artefact OUTSIDE the model
+# that somebody can read. Every turn appends one line here: what mode it was,
+# what honesty_check found, why generation stopped. Nothing in the model's path
+# can rewrite it, and the node can be asked to recite it - see
+# _answer_from_the_record(). Decided with Andreas 2026-09-19.
+PROVENANCE_LOG = os.path.expanduser("~/.aetherseed/provenance.log")
+
+
+def record(entry: dict):
+    """Append one line to the provenance log. Never raises: a node that dies
+    because it could not write its diary is worse than one with a gap in it,
+    and the gap is visible."""
+    try:
+        os.makedirs(os.path.dirname(PROVENANCE_LOG), exist_ok=True)
+        entry = dict(entry)
+        entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with open(PROVENANCE_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[provenance] could not write the record: {e!r}", flush=True)
+
 
 # ============================================================
 # HAILO-OLLAMA CLIENT
@@ -257,6 +287,14 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     finally:
         resp.close()          # abandon the rest; the server frees promptly
 
+    # Applied once, at the end, to what is returned and stored. See the
+    # stated limit in strip_leading_artefacts: the forwarded stream is not
+    # rewritten retroactively.
+    ai_content, _artefacts = strip_leading_artefacts(ai_content)
+    if _artefacts:
+        print(f"[generation] stripped {_artefacts} retrieval artefact(s) from "
+              f"the front of the answer", flush=True)
+
     if stopped_because:
         print(f"[generation] stopped early: {stopped_because} "
               f"after {chunks} chunks ({stripped_total} control token(s))", flush=True)
@@ -309,6 +347,46 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode())
 
+    def _answer_from_the_record(self, model: str, user_msg: str):
+        """Reply with the provenance record, assembled here, not generated.
+
+        Emitted as the same NDJSON a real answer uses so a client cannot tell
+        the difference structurally - but nothing in this path touches the NPU.
+        """
+        entries = []
+        try:
+            with open(PROVENANCE_LOG, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue          # a torn line is a gap, not a crash
+        except FileNotFoundError:
+            pass
+
+        text = summarise_record(entries)
+        print(f"[provenance] answered from the record ({len(entries)} turns, "
+              f"model not called)", flush=True)
+
+        out = [json.dumps({"model": model,
+                           "message": {"role": "assistant", "content": text},
+                           "done": False}),
+               json.dumps({"model": model,
+                           "message": {"role": "assistant", "content": ""},
+                           "done": True, "done_reason": "stop",
+                           "source": "provenance-record"})]
+        raw = ("\n".join(out) + "\n").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        self.wfile.write(raw)
+        # Deliberately NOT stored as an episode: the node reciting its own
+        # record is not a new fact about the world, and storing it would let
+        # the summary re-enter later prompts as if it were one.
+
     def _proxy_chat_augmented(self, body: bytes):
         try:
             data = json.loads(body)
@@ -334,6 +412,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._proxy_passthrough("POST", body)
             return
 
+        # ---- THE RECORD ----
+        # Asked about its own failures, the node answers FROM THE FILE and the
+        # model is never called. A model summarising its own mistakes is the
+        # least reliable possible narrator of them, and this is the one answer
+        # that has to be trustworthy.
+        if is_record_question(user_msg):
+            self._answer_from_the_record(model, user_msg)
+            return
+
+        # ---- PROVENANCE: what did the user ask for? ----
+        # Read from the USER's framing, never from the model's self-report.
+        # Decides what the past is allowed to say into this turn: a factual
+        # request cannot see fiction, and nothing sees an answer that carried
+        # an unbacked source.
+        request_mode, mode_reason = detect_mode(user_msg)
+
         # ---- INTENT DETECTION ----
         intent = detect_intent(user_msg)
         workspace_data = ""
@@ -346,7 +440,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         system_prompt = MUSTARDSEED_SEED
 
         # AetherRoot: inject memory context
-        memory_context = root.retrieve_context(user_msg)
+        if request_mode == FICTION:
+            system_prompt += "\n" + FICTION_NOTE
+
+        memory_context = root.retrieve_context(user_msg, request_mode=request_mode)
         if memory_context or workspace_data:
             system_prompt += "\n" + DATA_NOTE
         if memory_context:
@@ -429,10 +526,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 report = None
 
+            declined = (report is not None and report.claimed_refusal
+                        and report.is_clean)
+
             resonance = 0.5
             if report is not None and report.high:
                 resonance = 0.1                      # unbacked citation/DOI/URL
-            elif report is not None and report.claimed_refusal and report.is_clean:
+            elif declined and request_mode == FICTION:
+                # A refusal is only a virtue when refusing was the right
+                # answer. Asked to invent, declining is a FAILURE to do what
+                # was asked, and scoring it 0.9 promoted it to the top of
+                # retrieval - where the model copied it back.
+                #
+                # Measured 2026-09-19, live through the full stack: 3 of 4
+                # fiction requests refused, one reproducing a stored refusal
+                # VERBATIM ("I don't know one. I can try to find one for you,
+                # though! Maybe I can generate a simple joke like this:").
+                # The same prompts with synthetic memory refused 0 of 9, which
+                # is why this needed the live path to find: the loop only
+                # closes when the retrieved episode is a close match.
+                #
+                # The node was teaching itself to refuse, out of a rule written
+                # to reward honesty.
+                resonance = 0.2
+            elif declined:
                 resonance = 0.9                      # declined, invented nothing
             elif workspace_data:
                 resonance = 0.7                      # used tools successfully
@@ -443,10 +560,54 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             elif len(ai_content) > 500:
                 resonance = 0.4
 
-            try:
-                root.store_interaction(user_msg, ai_content, resonance=resonance)
-            except Exception:
-                pass
+            # Provenance is settled here, after honesty_check, because an
+            # unbacked source outranks whatever the user asked for: an answer
+            # carrying an invented DOI is never allowed back in as context,
+            # fiction or not.
+            stored_mode = resolve_mode(
+                request_mode, honesty_high=len(report.high) if report is not None else 0)
+
+            # A fiction request that produced a refusal is not stored at all.
+            #
+            # Lowering its resonance was not enough: resonance is 0.35 of the
+            # retrieval ranking and similarity is 0.50, so a near-identical
+            # repeat of the prompt still surfaced the refusal and the model
+            # copied it back. Measured live: 3/4 refusals before any fix,
+            # 2/5 with the resonance change alone, and the second attempt at
+            # the SAME prompt reproduced its own fresh refusal.
+            #
+            # That episode records a failure to do what was asked. It has no
+            # value as context for doing it later, and real value as an
+            # example of not doing it. The failure is not lost - record()
+            # below keeps it, which is where an account of what went wrong
+            # belongs. The memory store is for what the node should build on.
+            failed_to_invent = (request_mode == FICTION and declined)
+
+            if not failed_to_invent:
+                try:
+                    root.store_interaction(user_msg, ai_content,
+                                           resonance=resonance, mode=stored_mode)
+                except Exception:
+                    pass
+            else:
+                print("[provenance] asked to invent and declined - "
+                      "recorded, not remembered", flush=True)
+
+            if stored_mode != "factual":
+                print(f"[provenance] stored as {stored_mode} ({mode_reason})", flush=True)
+            record({
+                "mode_requested": request_mode,
+                "mode_stored": stored_mode,
+                "why": mode_reason,
+                "honesty_high": len(report.high) if report is not None else 0,
+                "honesty_medium": len(report.medium) if report is not None else 0,
+                "resonance": resonance,
+                "used_tools": bool(workspace_data),
+                "declined": bool(declined),
+                "remembered": not failed_to_invent,
+                "prompt": user_msg[:160],
+                "answer": ai_content[:160],
+            })
 
             try:
                 trust.auto_score_response(user_msg, ai_content,

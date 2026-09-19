@@ -139,6 +139,22 @@ class MemoryStore:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
+        self._migrate()
+
+    def _migrate(self):
+        """Add columns that CREATE TABLE IF NOT EXISTS will not add to a table
+        that already exists. A unit upgraded in place would otherwise carry a
+        schema the code no longer matches, and the failure would be a silent
+        wrong answer rather than an error.
+
+        Episodes predating the column are left as 'factual' - which is what
+        they were treated as, so the record does not claim more than it knows.
+        """
+        have = {r[1] for r in self.conn.execute("PRAGMA table_info(episodes)")}
+        if "mode" not in have:
+            self.conn.execute(
+                "ALTER TABLE episodes ADD COLUMN mode TEXT NOT NULL DEFAULT 'factual'")
+            self.conn.commit()
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -151,7 +167,12 @@ class MemoryStore:
                 embedding   BLOB NOT NULL,
                 resonance   REAL NOT NULL DEFAULT 0.5,
                 topic_tags  TEXT DEFAULT '',
-                consolidated INTEGER DEFAULT 0
+                consolidated INTEGER DEFAULT 0,
+                -- How this turn came to be said. 'factual' | 'fiction' |
+                -- 'unverified'. Without it every past utterance re-enters the
+                -- prompt with equal standing and yesterday's story becomes
+                -- today's fact. See logic/provenance.py.
+                mode        TEXT NOT NULL DEFAULT 'factual'
             );
 
             CREATE TABLE IF NOT EXISTS semantic (
@@ -195,29 +216,38 @@ class MemoryStore:
 
     def store_episode(self, session_id: str, user_msg: str, ai_msg: str,
                       embedding: np.ndarray, resonance: float = 0.5,
-                      topic_tags: str = "") -> int:
-        """Store a conversation turn. Returns the episode ID."""
+                      topic_tags: str = "", mode: str = "factual") -> int:
+        """Store a conversation turn. Returns the episode ID.
+
+        `mode` records how the turn came to be said - see logic/provenance.py.
+        It defaults to 'factual' because that is what every caller predating it
+        meant, not because factual is a safe assumption.
+        """
         cur = self.conn.execute(
-            """INSERT INTO episodes 
-               (timestamp, session_id, user_msg, ai_msg, embedding, resonance, topic_tags)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO episodes
+               (timestamp, session_id, user_msg, ai_msg, embedding, resonance,
+                topic_tags, mode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (datetime.now(timezone.utc).isoformat(),
              session_id, user_msg, ai_msg,
-             embedding.tobytes(), resonance, topic_tags)
+             embedding.tobytes(), resonance, topic_tags, mode)
         )
         self.conn.commit()
         return cur.lastrowid
 
     def get_all_episodes(self, unconsolidated_only: bool = False) -> List[Dict]:
         """Retrieve episodes, optionally only unconsolidated ones."""
-        query = "SELECT * FROM episodes"
+        # Columns are named rather than SELECT *: the old form zipped a
+        # hardcoded list against whatever the table happened to return, so
+        # adding a column silently shifted every field by one.
+        columns = ["id", "timestamp", "session_id", "user_msg", "ai_msg",
+                   "embedding", "resonance", "topic_tags", "consolidated", "mode"]
+        query = "SELECT " + ", ".join(columns) + " FROM episodes"
         if unconsolidated_only:
             query += " WHERE consolidated = 0"
         query += " ORDER BY timestamp DESC"
 
         rows = self.conn.execute(query).fetchall()
-        columns = ["id", "timestamp", "session_id", "user_msg", "ai_msg",
-                    "embedding", "resonance", "topic_tags", "consolidated"]
         results = []
         for row in rows:
             d = dict(zip(columns, row))
@@ -469,9 +499,26 @@ class AetherRoot:
 
         self.session_id = str(uuid.uuid4())[:8]
 
-    def retrieve_context(self, user_msg: str) -> str:
-        """Retrieve relevant memories and format as context string."""
+    def retrieve_context(self, user_msg: str, request_mode: str = "factual") -> str:
+        """Retrieve relevant memories and format as context string.
+
+        `request_mode` is what the CURRENT request asked for, and it decides
+        what the past is allowed to say into it:
+
+            a factual request sees only factual episodes
+            a fiction request sees factual + fiction, the fiction labelled
+            'unverified' is never retrieved by either
+
+        That rule is the whole point of the module. Without it a story written
+        on Tuesday re-enters Friday's prompt indistinguishable from something
+        true, and the node deceives its user with its own past invention.
+        Semantic patterns are consolidated from episodes and are not filtered
+        here - consolidation runs over episodes that were already filtered.
+        """
+        from logic.provenance import visible_modes, FICTION, FICTION_LABEL
+
         query_emb = self.embedder.embed(user_msg)
+        allowed = visible_modes(request_mode)
 
         # Get episodic + semantic memories
         episodes = self.store.get_all_episodes()
@@ -480,11 +527,15 @@ class AetherRoot:
         # Combine and format for retrieval
         all_memories = []
         for ep in episodes:
+            ep_mode = ep.get("mode", "factual")
+            if ep_mode not in allowed:
+                continue
+            label = (FICTION_LABEL + " ") if ep_mode == FICTION else ""
             all_memories.append({
                 "embedding": ep["embedding"],
                 "resonance": ep["resonance"],
                 "timestamp": ep["timestamp"],
-                "text": f"[Episode] User: {ep['user_msg'][:100]} | AI: {ep['ai_msg'][:100]}",
+                "text": f"{label}[Episode] User: {ep['user_msg'][:100]} | AI: {ep['ai_msg'][:100]}",
                 "type": "episode"
             })
         for sem in semantics:
@@ -524,7 +575,7 @@ class AetherRoot:
         return "\n".join(lines)
 
     def store_interaction(self, user_msg: str, ai_msg: str,
-                          resonance: float = 0.5):
+                          resonance: float = 0.5, mode: str = "factual"):
         """Store a conversation turn and update internal state."""
         # Embed and store
         combined = f"{user_msg} {ai_msg}"
@@ -536,7 +587,8 @@ class AetherRoot:
             user_msg=user_msg,
             ai_msg=ai_msg,
             embedding=embedding,
-            resonance=resonance
+            resonance=resonance,
+            mode=mode
         )
 
         # Drift willingness based on interaction resonance.

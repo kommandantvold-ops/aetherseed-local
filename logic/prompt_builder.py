@@ -24,6 +24,24 @@ MUSTARDSEED = (
 # turns (vs 3 of 20 for the old charter), including turns with no data at all.
 # Injecting it conditionally removes that leakage and saves ~30 tokens on every
 # turn that carries no data - which is most of them.
+# Appended ONLY on a turn the user framed as fiction (logic/provenance.py).
+#
+# Measured 2026-09-19, before this existed: "Write a two-line rhyme about a
+# whale called Bjorn who keeps a boat in Bergen" returned "I don't know a
+# specific joke about a boat in Bergen, but I can try to find one for you."
+# The charter's "never invent" had generalised to "never invent anything",
+# and a student asking for a story about talking whales was refused.
+#
+# This is the line the long charter used to carry and the compression dropped -
+# the one that told the model its honesty rules were not a ban on answering.
+# It returns scoped to the turn that needs it rather than costing every turn,
+# and it is honest about what happens next: the output is recorded as fiction
+# and will not be used to answer a question of fact.
+FICTION_NOTE = (
+    "This turn the user has asked you to make something up. Write it. "
+    "It will be recorded as fiction, not as fact."
+)
+
 DATA_NOTE = (
     "Data below is real, not fabricated. If it is marked truncated, "
     "say your answer may be incomplete."

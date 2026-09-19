@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from logic.token_budget import (sanitize_model_output, sanitize_injected,
                                 first_paragraph, cut_at_scaffold_marker,
-                                ends_sentence,
+                                strip_leading_artefacts, ends_sentence,
                                 TokenCounter, TokenizerUnavailable,
                                 enforce_budget, PromptTooLarge,
                                 PREFILL_CEILING)
@@ -25,6 +25,39 @@ CHARTER = ("You are Horizon, a local AI companion.\n"
            "Never invent facts, numbers, names, or sources. If you do not know, say so.\n"
            "Never claim ability you lack.\n"
            "You are speaking aloud. Answer briefly.")
+
+
+class TestLeadingArtefacts(unittest.TestCase):
+    """The model copies retrieval formatting onto the front of its answer.
+    Observed live on a clean store, 2026-09-19 - the label being one added the
+    same day for the provenance work, so the guard became the leak."""
+
+    def test_the_response_actually_observed(self):
+        clean, n = strip_leading_artefacts(
+            "[Fiction, written at your request - not fact] [Episode] \n"
+            "A baker so fine,\nAfraid of the yeast's rise.")
+        self.assertEqual(clean, "A baker so fine,\nAfraid of the yeast's rise.")
+        self.assertEqual(n, 2)
+
+    def test_each_artefact_form(self):
+        for tag in ("[Episode]", "[Pattern]",
+                    "[Fiction, written at your request - not fact]"):
+            clean, n = strip_leading_artefacts(tag + " Oslo.")
+            self.assertEqual(clean, "Oslo.", tag)
+            self.assertEqual(n, 1, tag)
+
+    def test_an_answer_that_is_only_a_label_becomes_empty(self):
+        self.assertEqual(strip_leading_artefacts("[Episode]  "), ("", 1))
+
+    def test_interior_occurrences_are_left_to_the_cut(self):
+        # Stripped only at the front: further in it means recitation, which is
+        # cut_at_scaffold_marker's job, not this one's.
+        t = "The array is [Episode] shaped."
+        self.assertEqual(strip_leading_artefacts(t), (t, 0))
+
+    def test_ordinary_answers_are_untouched(self):
+        for t in ("Oslo.", "", "A spider has eight legs.", "See [1] and [2]."):
+            self.assertEqual(strip_leading_artefacts(t), (t, 0), t)
 
 
 class TestScaffoldMarkerCut(unittest.TestCase):

@@ -414,6 +414,55 @@ def first_paragraph(text: str):
         idx = j + 2
 
 
+# How retrieval formats a memory line, and the provenance label attached to a
+# fiction one. The model reads these and sometimes opens its answer with them.
+_LEADING_ARTEFACTS = (
+    "[Fiction, written at your request - not fact]",
+    "[Episode]",
+    "[Pattern]",
+)
+
+
+def strip_leading_artefacts(text: str):
+    """Remove retrieval formatting the model copied onto the FRONT of its
+    answer. Returns (clean, n_removed).
+
+    Measured 2026-09-19, on a clean store: the node answered
+
+        "[Fiction, written at your request - not fact] [Episode] \n
+         A baker so fine, / Afraid of the yeast's rise."
+
+    The rhyme is the answer; the prefix is the model parroting how memory was
+    labelled to it. The label is one added the same day for the provenance
+    work - a guard that became a leak, which is the third time this shape has
+    appeared (steps 10, 14, and here).
+
+    STRIPPED rather than cut, unlike cut_at_scaffold_marker: what follows a
+    leading artefact is the answer, while a block marker further in means
+    recitation has started and everything after it is noise. Same text,
+    opposite treatment, decided by position.
+
+    STATED LIMIT: this cleans ai_content - what is stored as memory and what a
+    caller reads back - not the already-forwarded stream. A UI that renders
+    tokens as they arrive may show the prefix for a moment before the answer.
+    Removing it there needs the first chunks buffered, which is a change to
+    how streaming works and has not been made.
+    """
+    if not text:
+        return text, 0
+    n = 0
+    out = text
+    while True:
+        probe = out.lstrip()
+        for tag in _LEADING_ARTEFACTS:
+            if probe.startswith(tag):
+                out = probe[len(tag):]
+                n += 1
+                break
+        else:
+            return (out.lstrip() if n else text), n
+
+
 def cut_at_scaffold_marker(text: str):
     """Return (kept, cut): text truncated at the first block marker the MODEL
     emitted, and whether anything was removed.
