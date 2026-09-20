@@ -219,6 +219,90 @@ class TestStreamGuard(unittest.TestCase):
         lines, text, ai = self.run_chunks(["A", ".", " [WORKSPACE DATA]", " x", " \n\n", "y."])
         self.assertEqual(ai, "A.")
 
+    # ---- the head buffer: what a UI actually renders --------------------
+    #
+    # Everything else here checks ai_content. These check the FORWARDED
+    # stream, because a GUI renders tokens as they arrive and a leak that is
+    # cleaned afterwards has already been read by then.
+    #
+    # WHICH OF THESE ACTUALLY TEST THE HOLD. Verified by disabling it and
+    # re-running, because a test that passes either way proves nothing:
+    #
+    #   FAILS without the hold (these are the regression tests):
+    #     test_artefact_split_across_chunks_never_reaches_the_stream
+    #     test_an_answer_that_is_only_an_artefact_yields_nothing_but_terminates
+    #
+    #   Passes either way - a whole artefact in one chunk is already handled
+    #   by the per-chunk strip, so this documents behaviour rather than
+    #   guarding the feature:
+    #     test_artefact_whole_in_the_first_chunk
+    #
+    #   Passes either way BY DESIGN - these assert the hold does no HARM
+    #   (no added latency, nothing swallowed, no runaway buffering), so they
+    #   must pass without it:
+    #     test_a_normal_answer_is_not_held_back_at_all
+    #     test_a_citation_opening_is_released_once_it_diverges
+    #     test_a_stream_that_ends_while_still_ambiguous_still_terminates
+    #     test_the_hold_cannot_run_away
+
+    def _content_lines(self, lines):
+        return [l for l in lines if l.get("message", {}).get("content")]
+
+    def test_artefact_split_across_chunks_never_reaches_the_stream(self):
+        # "[Fiction, written at your request - not fact]" is many tokens.
+        chunks = ["[Fic", "tion, written", " at your request", " - not fact]",
+                  " [Epi", "sode]", " \n", "A baker", " so fine."]
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertEqual(ai, "A baker so fine.")
+        self.assertEqual(text, "A baker so fine.")
+        self.assertNotIn("[", text)
+        self.assertTrue(lines[-1]["done"])
+
+    def test_artefact_whole_in_the_first_chunk(self):
+        lines, text, ai = self.run_chunks(
+            ["[Episode] ", "Oslo", "."])
+        self.assertEqual(text, "Oslo.")
+        self.assertEqual(ai, "Oslo.")
+
+    def test_a_normal_answer_is_not_held_back_at_all(self):
+        # The cost of the head buffer on the normal path must be zero. No
+        # artefact begins with "O", so the first chunk settles it and every
+        # chunk is forwarded separately - not coalesced into one late burst.
+        chunks = ["Oslo", " is", " the", " capital", "."]
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertEqual(text, "Oslo is the capital.")
+        self.assertEqual(len(self._content_lines(lines)), len(chunks),
+                         "a normal answer must stream chunk by chunk")
+
+    def test_a_citation_opening_is_released_once_it_diverges(self):
+        # "[1]" looks like an artefact for exactly one character.
+        chunks = ["[", "1", "] ", "see", " above."]
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertEqual(text, "[1] see above.")
+        self.assertEqual(ai, "[1] see above.")
+
+    def test_a_stream_that_ends_while_still_ambiguous_still_terminates(self):
+        # The whole answer is a prefix of an artefact and then stops. It must
+        # not be swallowed, and the stream must still carry a done.
+        lines, text, ai = self.run_chunks(["[Epi"])
+        self.assertEqual(ai, "[Epi")
+        self.assertEqual(text, "[Epi")
+        self.assertEqual(sum(1 for l in lines if l.get("done")), 1)
+
+    def test_an_answer_that_is_only_an_artefact_yields_nothing_but_terminates(self):
+        lines, text, ai = self.run_chunks(["[Epi", "sode]"])
+        self.assertEqual(ai, "")
+        self.assertEqual(text, "")
+        self.assertTrue(lines[-1]["done"])
+
+    def test_the_hold_cannot_run_away(self):
+        # A pathological opening that stays plausible must release by
+        # HEAD_HOLD_CHARS rather than buffering the whole answer.
+        chunks = ["[Fiction, written at your request"] + [" x"] * 60
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertTrue(text.startswith("[Fiction, written at your request"))
+        self.assertGreater(len(self._content_lines(lines)), 1)
+
     def test_generation_options_are_sent(self):
         self.run_chunks(["OK"])
         self.assertEqual(SCRIPT["last_request"]["options"], proxy.GENERATION_OPTIONS)

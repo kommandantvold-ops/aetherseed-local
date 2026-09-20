@@ -442,11 +442,11 @@ def strip_leading_artefacts(text: str):
     recitation has started and everything after it is noise. Same text,
     opposite treatment, decided by position.
 
-    STATED LIMIT: this cleans ai_content - what is stored as memory and what a
-    caller reads back - not the already-forwarded stream. A UI that renders
-    tokens as they arrive may show the prefix for a moment before the answer.
-    Removing it there needs the first chunks buffered, which is a change to
-    how streaming works and has not been made.
+    Used two ways: on the accumulated head while a stream is still opening
+    (see opening_may_be_artefact), and once at the end on ai_content as a
+    backstop. The earlier stated limit - that an already-forwarded stream kept
+    the prefix - no longer holds: proxy.call_hailo_chat withholds the opening
+    until it is decidable.
     """
     if not text:
         return text, 0
@@ -461,6 +461,30 @@ def strip_leading_artefacts(text: str):
                 break
         else:
             return (out.lstrip() if n else text), n
+
+
+def opening_may_be_artefact(text: str) -> bool:
+    """True while the start of a stream could still turn into an artefact.
+
+    The reason streaming can be cleaned at all without paying for it. A caller
+    holds the opening back only while this says yes, and for real answers it
+    says no on the very first token: no artefact begins with "O", so "Oslo"
+    is released immediately. Only output that actually starts with "[" is held,
+    and only until it diverges - "[1] see above" is decided at "[1".
+
+    So the cost is zero on the normal path, which is what makes withholding
+    acceptable on a voice path where first-token latency is the product.
+
+    Yes while the text so far is empty or whitespace (nothing to decide yet),
+    or is a PROPER prefix of some artefact. No once it is long enough to
+    settle the question either way - a complete artefact has by then been
+    removed by strip_leading_artefacts, leaving the answer behind it.
+    """
+    probe = (text or "").lstrip()
+    if not probe:
+        return True
+    return any(tag.startswith(probe) and len(probe) < len(tag)
+               for tag in _LEADING_ARTEFACTS)
 
 
 def cut_at_scaffold_marker(text: str):

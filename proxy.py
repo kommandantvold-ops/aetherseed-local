@@ -52,7 +52,7 @@ from logic.prompt_builder import FICTION_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 sanitize_model_output, first_paragraph,
                                 ends_sentence, cut_at_scaffold_marker,
-                                strip_leading_artefacts,
+                                strip_leading_artefacts, opening_may_be_artefact,
                                 PromptTooLarge, TokenizerUnavailable)
 from logic.provenance import (detect_mode, resolve_mode, is_record_question,
                              summarise_record, FICTION, UNVERIFIED)
@@ -212,6 +212,24 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     stripped_total = 0
     chunks = 0
     stopped_because = None
+
+    # The opening of the stream is held back until it is decidable.
+    #
+    # The model copies retrieval formatting onto the front of its answer -
+    # "[Fiction, written at your request - not fact] [Episode] \nA baker so
+    # fine," measured 2026-09-19. Cleaning ai_content afterwards fixed what is
+    # stored and returned but not what a UI had already rendered, and the GUI
+    # renders as it streams.
+    #
+    # Nothing is held once the opening cannot become an artefact, which for an
+    # ordinary answer is the first token: no artefact begins with "O", so
+    # "Oslo" goes out immediately. First-token latency on the normal path is
+    # unchanged, which is the only reason withholding is acceptable at all on
+    # a path that will be spoken aloud.
+    head_settled = False
+    head_raw = ""
+    head_artefacts = 0
+    HEAD_HOLD_CHARS = 96            # the longest artefact is 44
     deadline = time.monotonic() + MAX_GENERATION_SECONDS
 
     resp = urllib.request.urlopen(req, timeout=300)
@@ -232,6 +250,24 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
                 if n:
                     stripped_total += n
                     stopped_because = "control-token"   # the stop the server lacks
+                if msg.get("content"):
+                    chunks += 1          # the server's done message is empty
+
+                # Hold the opening while it could still be a retrieval
+                # artefact. Forced to settle by a stop or by the server's done
+                # message, so a stream can never end mid-hold with nothing
+                # forwarded and no terminator.
+                if not head_settled:
+                    head_raw += clean
+                    head_clean, n_art = strip_leading_artefacts(head_raw)
+                    if (not stopped_because and not d.get("done")
+                            and len(head_raw) < HEAD_HOLD_CHARS
+                            and opening_may_be_artefact(head_clean)):
+                        continue                 # nothing forwarded yet
+                    head_settled = True
+                    head_artefacts = n_art
+                    clean = head_clean           # ai_content is still empty
+
                 if (not stopped_because and SOFT_STOP_TOKENS
                         and chunks >= SOFT_STOP_TOKENS
                         and clean[:1] in (" ", "\n") and ends_sentence(ai_content)):
@@ -241,8 +277,6 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
                     stopped_because = "sentence"
                     clean = ""
                 ai_content += clean
-                if msg.get("content"):
-                    chunks += 1          # the server's done message is empty
 
                 # Both remaining stops work on the ACCUMULATED text, not this
                 # chunk: "[END MEMORY CONTEXT]" is several tokens and a blank
@@ -287,13 +321,14 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     finally:
         resp.close()          # abandon the rest; the server frees promptly
 
-    # Applied once, at the end, to what is returned and stored. See the
-    # stated limit in strip_leading_artefacts: the forwarded stream is not
-    # rewritten retroactively.
-    ai_content, _artefacts = strip_leading_artefacts(ai_content)
-    if _artefacts:
-        print(f"[generation] stripped {_artefacts} retrieval artefact(s) from "
-              f"the front of the answer", flush=True)
+    # Backstop. The head buffer above should leave nothing for this to do; it
+    # covers the case where the opening ran past HEAD_HOLD_CHARS before it
+    # could be decided.
+    ai_content, _late = strip_leading_artefacts(ai_content)
+    if head_artefacts or _late:
+        print(f"[generation] withheld {head_artefacts + _late} retrieval "
+              f"artefact(s) from the front of the answer - not forwarded, "
+              f"not stored", flush=True)
 
     if stopped_because:
         print(f"[generation] stopped early: {stopped_because} "
