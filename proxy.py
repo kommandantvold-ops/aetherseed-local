@@ -346,6 +346,30 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     return raw, ai_content
 
 
+def _annotate_terminator(raw: bytes, provenance: dict) -> bytes:
+    """Attach provenance to the last NDJSON line of a response.
+
+    The stream's shape is not changed and no new line type is invented: extra
+    keys on the terminator are ignored by an ollama-shaped client and read by
+    one that knows to look. That matters because the GUI is not the only thing
+    that may ever consume this.
+    """
+    try:
+        text = raw.decode("utf-8")
+        lines = [l for l in text.split("\n") if l.strip()]
+        if not lines:
+            return raw
+        last = json.loads(lines[-1])
+        last["aetherseed"] = provenance
+        lines[-1] = json.dumps(last)
+        return ("\n".join(lines) + "\n").encode("utf-8")
+    except Exception as e:
+        # A response the caller can read beats a provenance badge. Losing the
+        # badge is visible in the UI; corrupting the stream would not be.
+        print(f"[provenance] could not annotate the terminator: {e!r}", flush=True)
+        return raw
+
+
 # ============================================================
 # PROXY HANDLER
 # ============================================================
@@ -538,21 +562,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": str(e)}).encode())
             return
 
-        # Send response to WebUI
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson")
-        self.end_headers()
-        self.wfile.write(raw_response)
-
-        # Store in AetherRoot
+        # Provenance is computed BEFORE the response goes out, so it can go
+        # out with it. A UI that has to ask afterwards races the next turn,
+        # and a provenance badge that arrives late is a badge nobody trusts.
+        tool_outputs = (workspace_data,) if workspace_data else ()
+        report = None
         if ai_content:
-            tool_outputs = (workspace_data,) if workspace_data else ()
-
-            # Resonance previously keyed off refusal phrases: any response
-            # containing "i cannot" scored 0.9, the highest weight, which then
-            # fed retrieval ranking (0.35 * resonance) and drifted willingness.
-            # A fabrication with a refusal phrase in it was therefore *promoted*
-            # in memory. Provenance decides it now.
             try:
                 from honesty_check import check_response
                 report = check_response(user_msg, ai_content,
@@ -560,7 +575,36 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                         memory_context=memory_context)
             except Exception:
                 report = None
+        stored_mode = resolve_mode(
+            request_mode, honesty_high=len(report.high) if report is not None else 0)
 
+        # Carried on the final NDJSON line rather than a line of its own:
+        # an ollama-shaped client ignores keys it does not know, and inventing
+        # a new line type would break every existing consumer.
+        raw_response = _annotate_terminator(raw_response, {
+            "mode": stored_mode,
+            "mode_requested": request_mode,
+            "why": mode_reason,
+            "unbacked_sources": len(report.high) if report is not None else 0,
+            "unsourced_figures": len(report.medium) if report is not None else 0,
+            "used_tools": bool(workspace_data),
+            "memory_used": bool(memory_context),
+        })
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        self.wfile.write(raw_response)
+
+        # Store in AetherRoot
+        if ai_content:
+
+            # Resonance previously keyed off refusal phrases: any response
+            # containing "i cannot" scored 0.9, the highest weight, which then
+            # fed retrieval ranking (0.35 * resonance) and drifted willingness.
+            # A fabrication with a refusal phrase in it was therefore *promoted*
+            # in memory. Provenance decides it now. (report and stored_mode are
+            # computed above, before the response was sent.)
             declined = (report is not None and report.claimed_refusal
                         and report.is_clean)
 
@@ -594,13 +638,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 resonance = 0.6
             elif len(ai_content) > 500:
                 resonance = 0.4
-
-            # Provenance is settled here, after honesty_check, because an
-            # unbacked source outranks whatever the user asked for: an answer
-            # carrying an invented DOI is never allowed back in as context,
-            # fiction or not.
-            stored_mode = resolve_mode(
-                request_mode, honesty_high=len(report.high) if report is not None else 0)
 
             # A fiction request that produced a refusal is not stored at all.
             #
@@ -651,7 +688,64 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _send_json(self, obj, status=200):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
+        # The node's own routes. Everything else is passed through to
+        # hailo-ollama so an ollama client still works unchanged.
+        if self.path == "/aetherseed/status":
+            try:
+                rs = root.get_status()
+            except Exception:
+                rs = {}
+            self._send_json({
+                "trust_level": trust.get_trust_level_name(),
+                "episodes": rs.get("episodes"),
+                "willingness": rs.get("willingness_mean"),
+                "model": "llama3.2:3b",
+                "bounds": {
+                    "paragraph_stop": STOP_AT_PARAGRAPH,
+                    "soft_stop_tokens": SOFT_STOP_TOKENS,
+                    "num_predict": GENERATION_OPTIONS.get("num_predict"),
+                    "wall_clock_s": MAX_GENERATION_SECONDS,
+                    "prompt_ceiling": 864,
+                },
+            })
+            return
+        if self.path == "/aetherseed/record":
+            entries = []
+            try:
+                with open(PROVENANCE_LOG, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue      # a torn line is a gap, not a crash
+            except FileNotFoundError:
+                pass
+            self._send_json({
+                "turns": len(entries),
+                "summary": summarise_record(entries),
+                # Only the flagged ones. The whole log is not the UI's business
+                # and shipping it wholesale would put every past prompt on a
+                # screen someone else might be standing in front of.
+                "flagged": [
+                    {"at": e.get("at"), "prompt": (e.get("prompt") or "")[:120],
+                     "answer": (e.get("answer") or "")[:200]}
+                    for e in entries
+                    if e.get("mode_stored") == UNVERIFIED or e.get("honesty_high")
+                ][-20:],
+            })
+            return
         self._proxy_passthrough("GET")
 
     def do_POST(self):

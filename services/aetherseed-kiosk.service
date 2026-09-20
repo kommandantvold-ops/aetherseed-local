@@ -1,0 +1,70 @@
+# AetherSeed Companion - the console on the attached screen.
+#
+# labwc (a single-app Wayland compositor, ALREADY in the package set so it adds
+# nothing to the cartridge) running one fullscreen Chromium, pointed at the
+# console on 127.0.0.1:2077. No desktop, no launcher, no second window.
+#
+# WHY NOT CHROMIUM STRAIGHT ONTO DRM/KMS, which was the first choice: Debian's
+# Chromium is not built with the drm or gbm ozone backends. Measured
+# 2026-09-20 - "FATAL: Invalid ozone platform: drm" - after an earlier check
+# that appeared to say they existed and was wrong, because --headless
+# overrides the platform and hides the error. Only wayland and x11 are built
+# in, so a compositor is required and labwc is the one already here.
+#
+# PAMName=login with TTYPath is what makes this work at all. A Wayland
+# compositor needs a logind session on seat0 to open the VT and become DRM
+# master; started from an SSH shell it fails with "Could not open target tty:
+# Permission denied", which is the whole diagnosis of the first attempt.
+#
+# getty@tty2 is enabled alongside this. Ctrl+Alt+F2 always reaches a shell,
+# whatever the kiosk is doing - a device you cannot get into when the screen
+# misbehaves is not an appliance, it is a brick.
+
+[Unit]
+Description=AetherSeed Companion - kiosk console on tty1
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=aetherseed-gui.service systemd-user-sessions.service
+Wants=aetherseed-gui.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=andreas
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-force
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WLR_BACKENDS=drm
+Environment=HOME=/home/andreas
+
+# --app= rather than --kiosk: no tab strip, no omnibox, nothing to navigate
+# away with. The console is the only thing this browser can be.
+ExecStart=/usr/bin/labwc -s "/usr/bin/chromium \
+    --ozone-platform=wayland \
+    --app=http://127.0.0.1:2077/ \
+    --start-fullscreen \
+    --no-first-run --no-default-browser-check \
+    --disable-features=Translate,AutofillServerCommunication \
+    --disable-background-networking \
+    --disable-component-update \
+    --check-for-update-interval=31536000 \
+    --disable-sync \
+    --disable-breakpad \
+    --user-data-dir=/home/andreas/.aetherseed-kiosk"
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

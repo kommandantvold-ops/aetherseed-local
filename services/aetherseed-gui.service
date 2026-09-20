@@ -1,0 +1,48 @@
+# AetherSeed Companion - the console, on the device, on loopback.
+#
+# Serves the page on 127.0.0.1:2077 and relays its API calls to the proxy on
+# 8001. It never speaks to hailo-ollama on 8000: every guard - token budget,
+# sanitizers, all four generation bounds, provenance - lives at the proxy's
+# exit point, and a UI that went straight to the model would have none of them.
+#
+# Port 2077 was chosen 2026-09-18 (build log, step 13c). Bind is loopback and
+# the firewall drops inbound anyway; the console is for whoever is at the
+# device, which is what "closed local node" means.
+
+[Unit]
+Description=AetherSeed Companion - console
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=aetherseed-proxy.service network.target
+Wants=aetherseed-proxy.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=aetherseed
+Group=aetherseed
+WorkingDirectory=/opt/aetherseed/gui
+ExecStart=/opt/aetherseed/venv/bin/python3 /opt/aetherseed/gui/serve.py
+Environment=AETHERSEED_GUI_BIND=127.0.0.1
+Environment=AETHERSEED_GUI_PORT=2077
+Environment=AETHERSEED_BACKEND=http://127.0.0.1:8001
+Restart=always
+RestartSec=5
+
+# It serves fixed files and relays HTTP to loopback. It needs no device, no
+# home, and nothing writable at all - not even a state directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
