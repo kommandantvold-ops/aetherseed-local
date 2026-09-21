@@ -10,15 +10,19 @@
 #
 # cartridge-id is a hash over every line below it. Quote that one value to
 # name a build; the lines exist to say what differs when it does not match.
-# Captured 2026-09-20 on the dev unit, after step 17 (head buffer).
+# Captured 2026-09-21 on the dev unit, after step 18 (the console and
+# the kiosk; the two units and three enabled-states added to the
+# identity, which until then could not see the screen at all).
 #
-cartridge-id	fceef08f73ea6f9dd5f543acf13a5cf1f71dca7980cc8678b4a08a3e689438e3
-app.digest	033f3c61e6a637a350524941b1e8a36a5718cd184f5dd7ab3f88589141422b07
-app.files	13
+cartridge-id	721dd0ca73269e1d63b8ce0ce62203c8dbfe90ecf3b131e0bb40aa1b9ede304d
+app.digest	8b8226703cfbda16740c1c412ed9cc4a0aa94e50a7e387ed72b26c1835e971ff
+app.files	15
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
 file./etc/nftables.conf	3eee0ef33e802a35fe3d25d2a95ad9d5ecdeb1c7a4b46381dbdefa46aef1d8b9
+file./etc/systemd/system/aetherseed-gui.service	24187850a779344457e2a0e2c0ba8927bd7fa221ec079816dd7d0b1b8845c5f2
+file./etc/systemd/system/aetherseed-kiosk.service	6dd9847f1f96f54d98c2a50373e484a207f691f18cbb606a0a176cdc493c3579
 file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
 file./etc/systemd/system/aetherseed-warmup.service	b43d3c487d742665f047f92bd3c094414ff4c31af5d3b3e8c15a6757ee65e45b
 file./etc/systemd/system/hailo-ollama.service	795efc1df785adb9592fa98fe5fc1d4d882a130df23f2ee1f67c1325854183fe
@@ -39,7 +43,10 @@ pkg.h10-hailort	5.1.1
 pkg.h10-hailort-pcie-driver	5.1.1
 pkg.hailo-gen-ai-model-zoo	5.1.1
 pkg.python3-h10-hailort	5.1.1-1
+service.getty_tty2.enabled	enabled
+service.gui.enabled	enabled
 service.hailo_ollama.enabled	enabled
+service.kiosk.enabled	enabled
 service.nftables.enabled	enabled
 service.proxy.enabled	enabled
 service.warmup.enabled	enabled

@@ -32,6 +32,8 @@ IDENTITY_FILES=(
   /etc/systemd/system/hailo-ollama.service
   /etc/systemd/system/aetherseed-proxy.service
   /etc/systemd/system/aetherseed-warmup.service
+  /etc/systemd/system/aetherseed-gui.service
+  /etc/systemd/system/aetherseed-kiosk.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
   /etc/nftables.conf
 )
@@ -125,6 +127,14 @@ collect() {
   emit service.proxy.enabled        "$(systemctl is-enabled aetherseed-proxy 2>/dev/null || echo unknown)"
   emit service.nftables.enabled     "$(systemctl is-enabled nftables 2>/dev/null || echo unknown)"
   emit service.warmup.enabled       "$(systemctl is-enabled aetherseed-warmup 2>/dev/null || echo unknown)"
+  # The console and the screen. Added at step 18: until then the cartridge-id
+  # could not see the kiosk at all, so every flag that makes the screen work -
+  # the stateless profile, no keyring prompt, the scale - could have changed
+  # without the id changing. getty@tty2 is the escape hatch from the kiosk; a
+  # unit without it is a different and worse device.
+  emit service.gui.enabled          "$(systemctl is-enabled aetherseed-gui 2>/dev/null || echo unknown)"
+  emit service.kiosk.enabled        "$(systemctl is-enabled aetherseed-kiosk 2>/dev/null || echo unknown)"
+  emit service.getty_tty2.enabled   "$(systemctl is-enabled getty@tty2 2>/dev/null || echo unknown)"
 }
 
 fingerprint() {  # one hash over the whole sorted body
