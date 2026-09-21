@@ -14,11 +14,16 @@ of them.
 
 Static files only, read-only, no directory listing, no uploads, no writes.
 """
+import base64
+import hashlib
 import http.server
 import json
 import os
+import re
 import socketserver
 import sys
+import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -32,6 +37,90 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PROXIED_POST = ("/api/chat",)
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/api/tags")
 
+# The page's own script is pinned by the hash of its bytes.
+#
+# The first version of this header said default-src 'self' and never said
+# script-src at all, so default-src applied to scripts - and an inline
+# <script> is not 'self'. Chromium refused the page's entire script on every
+# load for as long as the console existed. HTML and CSS rendered, so it LOOKED
+# like a working console; every endpoint had been tested with curl, which runs
+# no JavaScript, and the page itself had never been opened in a browser.
+#
+# 'unsafe-inline' would fix it and say "any inline script may run here". A
+# hash says "this one may". Anything else - a script injected into the DOM at
+# runtime included - is refused. That is the same principle as pinning the
+# model by the hash of its blob, applied to the one piece of code on this
+# device that renders model output.
+#
+# The hash is taken from the file being served, so it is not protection
+# against someone editing that file; the cartridge manifest is. It is computed
+# once at startup, so if index.html changed underneath a running server the
+# page would stop working rather than run something unpinned - it fails
+# closed, which is the direction it should fail in.
+def inline_hashes(html):
+    """{'script': ["'sha256-...'", ...], 'style': [...]} for every inline block."""
+    out = {}
+    for tag in ("script", "style"):
+        out[tag] = ["'sha256-%s'" % base64.b64encode(
+            hashlib.sha256(m.group(1).encode("utf-8")).digest()).decode()
+            for m in re.finditer(r"<%s>(.*?)</%s>" % (tag, tag), html, re.S)]
+    return out
+
+
+def build_csp(html):
+    h = inline_hashes(html)
+    return ("default-src 'self'; "
+            "script-src 'self' %s; "
+            "style-src 'self' %s; "
+            "img-src 'self' data:; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+            % (" ".join(h["script"]), " ".join(h["style"])))
+
+
+CSP = None      # set in __main__, once index.html is known to exist
+
+
+# How the console says it is alive when nobody is standing in front of it.
+#
+# A kiosk has no other way to report itself: the screen is the output, and
+# if you cannot see the screen you cannot see the output. The page polls
+# /aetherseed/status on a timer, so counting those polls answers the only
+# question that matters remotely - is the browser still running the page, or
+# is it showing a frozen picture of one.
+#
+# Counts, and nothing else. Not paths, not bodies, not prompts. A per-request
+# log on this device would put everything anyone typed into the journal, and
+# the journal is not covered by any promise this node makes.
+HEARTBEAT_SECONDS = int(os.environ.get("AETHERSEED_GUI_HEARTBEAT", "300"))
+
+_counts = {"page": 0, "status": 0, "record": 0, "chat": 0, "refused": 0}
+_counts_lock = threading.Lock()
+
+
+def _tally(kind):
+    with _counts_lock:
+        _counts[kind] = _counts.get(kind, 0) + 1
+
+
+def _heartbeat():
+    """One line per interval, always - including when idle.
+
+    Silence has to mean "the server is gone", never "the server is quiet",
+    or the heartbeat cannot be used to tell those two apart.
+    """
+    while True:
+        time.sleep(HEARTBEAT_SECONDS)
+        with _counts_lock:
+            seen = dict(_counts)
+            for k in _counts:
+                _counts[k] = 0
+        if sum(seen.values()):
+            print("[gui] %ds  page=%d status=%d record=%d chat=%d refused=%d"
+                  % (HEARTBEAT_SECONDS, seen["page"], seen["status"],
+                     seen["record"], seen["chat"], seen["refused"]), flush=True)
+        else:
+            print("[gui] %ds  idle" % HEARTBEAT_SECONDS, flush=True)
+
 
 class Console(http.server.SimpleHTTPRequestHandler):
 
@@ -42,12 +131,18 @@ class Console(http.server.SimpleHTTPRequestHandler):
         pass
 
     def end_headers(self):
-        # The page loads nothing from anywhere. Saying so in a header means a
-        # typo in the HTML fails loudly instead of silently reaching out.
-        self.send_header("Content-Security-Policy",
-                         "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-                         "img-src 'self' data:; connect-src 'self'; "
-                         "frame-ancestors 'none'")
+        # The page loads nothing from anywhere, and runs only its own script.
+        # Saying so in a header means a mistake fails loudly instead of
+        # silently reaching out - see build_csp().
+        self.send_header("Content-Security-Policy", CSP)
+        # Nothing this server sends is kept. Measured 2026-09-21: Chromium had
+        # written the page and the status JSON to its disk cache, the page with
+        # Last-Modified and no Cache-Control - which makes it heuristically
+        # fresh, so after a new cartridge the kiosk could show the OLD console
+        # without asking. And /aetherseed/record carries excerpts of flagged
+        # prompts: cached, that is a second, unmanaged copy of what people
+        # typed, on the SD card, outside everything the node accounts for.
+        self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         super().end_headers()
@@ -87,19 +182,25 @@ class Console(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in PROXIED_GET:
+            _tally("status" if self.path.endswith("/status")
+                   else "record" if self.path.endswith("/record") else "page")
             self._relay("GET")
             return
         if self.path == "/":
             self.path = "/index.html"
         if self.path not in ("/index.html",):
+            _tally("refused")
             self.send_error(404)
             return
+        _tally("page")
         super().do_GET()
 
     def do_POST(self):
         if self.path not in PROXIED_POST:
+            _tally("refused")
             self.send_error(404)
             return
+        _tally("chat")
         n = int(self.headers.get("Content-Length", 0))
         self._relay("POST", self.rfile.read(n) if n else b"")
 
@@ -114,4 +215,10 @@ if __name__ == "__main__":
     if not os.path.exists(os.path.join(ROOT, "index.html")):
         print("[gui] FATAL: index.html is missing next to serve.py", flush=True)
         sys.exit(1)
+    with open(os.path.join(ROOT, "index.html"), encoding="utf-8") as f:
+        CSP = build_csp(f.read())
+    print("[gui] script pinned: %s" % " ".join(inline_hashes(
+        open(os.path.join(ROOT, "index.html"), encoding="utf-8").read())["script"]),
+        flush=True)
+    threading.Thread(target=_heartbeat, daemon=True).start()
     Threaded((BIND, PORT), Console).serve_forever()

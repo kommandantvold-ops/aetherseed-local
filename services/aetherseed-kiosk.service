@@ -19,6 +19,15 @@
 # getty@tty2 is enabled alongside this. Ctrl+Alt+F2 always reaches a shell,
 # whatever the kiosk is doing - a device you cannot get into when the screen
 # misbehaves is not an appliance, it is a brick.
+#
+# NO MODAL THIS DEVICE CANNOT ANSWER. Measured 2026-09-21: the screen had been
+# sitting on a gnome-keyring prompt - "Choose password for new keyring" - since
+# the kiosk first started, with Chromium blank behind it and the page never
+# loading. Nobody was there to type a password, and on an appliance nobody ever
+# will be. A dialog waiting for a human is a hang with a face on it.
+# --password-store=basic is the fix for that one; the two flags beside it close
+# the same class (a crash-restore bubble after an unclean shutdown, an error
+# dialog) and are prevention rather than something observed.
 
 [Unit]
 Description=AetherSeed Companion - kiosk console on tty1
@@ -48,12 +57,36 @@ Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=WLR_BACKENDS=drm
 Environment=HOME=/home/andreas
 
-# --app= rather than --kiosk: no tab strip, no omnibox, nothing to navigate
-# away with. The console is the only thing this browser can be.
+# --kiosk and --app together: no tab strip, no omnibox, fullscreen that the
+# browser enforces itself rather than requests. --start-fullscreen alone is a
+# request, and was measured losing to a window size the browser had saved
+# from an earlier run - see below.
+#
+# THE BROWSER KEEPS NOTHING. --user-data-dir is on /run/user/1000, which is
+# tmpfs: every boot starts from an empty profile, and nothing the browser
+# writes ever reaches the SD card. Three defects in one night came from state
+# a previous run had left behind in the old on-disk profile:
+#   - a keyring the profile had asked to create, prompting for a password
+#   - the page itself, heuristically cached with no Cache-Control
+#   - an app window placement saved at scale 1 (1905x2140) and restored at
+#     scale 3 as three times the size of the screen, content off the right
+#     edge and the composer off the bottom
+# A kiosk that can be broken by its own yesterday is not a cartridge. And the
+# record endpoint carries excerpts of prompts: in an on-disk profile, anything
+# the browser kept would be a second copy of what people typed, outside every
+# promise this node makes.
+#
+# --force-device-scale-factor=3 because the attached screen is a television,
+# not a monitor: 3840x2160 across 1600x900 mm, which is about 72 inches, read
+# from across a room rather than from arm's length. At 1:1 the console renders
+# as a 317 mm ribbon down the middle of a 1600 mm screen. The right number
+# depends on where the viewer actually stands and is a judgement to be made in
+# front of it, not from here.
 ExecStart=/usr/bin/labwc -s "/usr/bin/chromium \
     --ozone-platform=wayland \
+    --kiosk \
     --app=http://127.0.0.1:2077/ \
-    --start-fullscreen \
+    --force-device-scale-factor=3 \
     --no-first-run --no-default-browser-check \
     --disable-features=Translate,AutofillServerCommunication \
     --disable-background-networking \
@@ -61,7 +94,10 @@ ExecStart=/usr/bin/labwc -s "/usr/bin/chromium \
     --check-for-update-interval=31536000 \
     --disable-sync \
     --disable-breakpad \
-    --user-data-dir=/home/andreas/.aetherseed-kiosk"
+    --password-store=basic \
+    --disable-session-crashed-bubble \
+    --noerrdialogs \
+    --user-data-dir=/run/user/1000/aetherseed-kiosk"
 
 Restart=always
 RestartSec=5
