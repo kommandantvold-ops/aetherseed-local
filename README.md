@@ -491,7 +491,10 @@ record of saying the harbour depth in Bergen is 45 meters"* — a correct denial
 that quotes the premise in order to deny it, which the check reads as repeating
 it. The check has not been changed to make the number 48: a score that moves
 because the checker was adjusted after seeing the output is not a measurement.
-An earlier saved run, with an older and less careful checker, scored 46/48.
+An earlier run scored 46/48 with an older checker, and **48/48 when its same
+outputs are re-scored with today's** — not one word of the model's output
+differs. Both transcripts are in [`docs/probes/`](docs/probes/), so either
+number can be checked rather than taken on trust.
 
 What the checks cannot judge is listed by the suite itself, for a person to score:
 whether a self-description borrows grandeur (an early run produced *"I am
