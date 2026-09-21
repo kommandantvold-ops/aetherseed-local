@@ -113,6 +113,7 @@ textarea:focus{outline:none; border-color:var(--accent)}
 .card input:focus{outline:none; border-color:var(--accent)}
 .card .err{color:var(--alarm); font-size:13px; margin:8px 0 0}
 .card .row{display:flex; justify-content:space-between; margin-top:18px; gap:10px}
+.card .row .send{margin-left:auto}
 </style>
 </head>
 <body>
@@ -377,9 +378,14 @@ function showSetup(languages) {
     b.onclick = () => chooseLanguage(l.code);
     list.append(b);
   }
-  $('stepLang').hidden = false; $('stepName').hidden = true;
   setup.hidden = false;
   send.disabled = true; input.disabled = true;
+  // One language on offer is not a choice: go straight to the name, and there
+  // is nothing to go back to.
+  const offered = languages || [];
+  $('backBtn').hidden = offered.length <= 1;
+  if (offered.length === 1) { chooseLanguage(offered[0].code); return; }
+  $('stepLang').hidden = false; $('stepName').hidden = true;
   list.querySelector('button')?.focus();
 }
 

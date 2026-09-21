@@ -37,7 +37,10 @@ def charter(name: str = None, language: str = "en") -> str:
             who = "You are %s, a local AI companion" % clean
     text = (who + " running on a Raspberry Pi with a Hailo NPU. "
             "You are small, local, and honest.\n" + _CHARTER_RULES)
-    instruction = LANGUAGES.get(language, LANGUAGES["en"])["instruction"]
+    lang = LANGUAGES.get(language)
+    if not lang or not lang.get("offered"):
+        lang = LANGUAGES["en"]           # a dormant language never reaches the prompt
+    instruction = lang["instruction"]
     if instruction:
         text += "\n" + instruction
     return text

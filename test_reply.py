@@ -310,18 +310,22 @@ class TestFirstRun(_Handler):
         self.assertFalse(self._get("/aetherseed/status")["companion"]["configured"])
 
     def test_an_unoffered_language_is_refused(self):
-        status, body = self._post("/aetherseed/setup", {"name": "Lyra", "language": "de"})
-        self.assertEqual(status, 400)
-        self.assertEqual(body["code"], "unknown_language")
+        # "nb" is defined but switched off (English only, for now).
+        for code in ("de", "nb"):
+            with self.subTest(code=code):
+                status, body = self._post("/aetherseed/setup", {"name": "Lyra", "language": code})
+                self.assertEqual(status, 400)
+                self.assertEqual(body["code"], "unknown_language")
+        self.assertEqual([l["code"] for l in self._get("/aetherseed/status")["languages"]], ["en"])
 
-    def test_the_chosen_name_and_language_reach_the_charter(self):
-        status, body = self._post("/aetherseed/setup", {"name": "Lyra", "language": "nb"})
+    def test_the_chosen_name_reaches_the_charter(self):
+        status, body = self._post("/aetherseed/setup", {"name": "Lyra", "language": "en"})
         self.assertEqual(status, 200)
-        self.assertEqual(body["companion"], {"configured": True, "name": "Lyra", "language": "nb"})
-        self._ask("Hva er hovedstaden i Norge?", ["Oslo", "."])
+        self.assertEqual(body["companion"], {"configured": True, "name": "Lyra", "language": "en"})
+        self._ask("What is the capital of Norway?", ["Oslo", "."])
         system = SCRIPT["last_request"]["messages"][0]["content"]
         self.assertTrue(system.startswith("You are Lyra, a local AI companion"))
-        self.assertIn("Svar alltid på norsk (bokmål).", system)
+        self.assertNotIn("norsk", system)
         self.assertNotIn("Horizon", system)
 
     def test_before_setup_the_companion_has_no_borrowed_name(self):
@@ -331,27 +335,29 @@ class TestFirstRun(_Handler):
         self.assertNotIn("Horizon", system)
 
 
-class TestInNorwegian(_Handler):
+class TestNorwegianTypedToAnEnglishCompanion(_Handler):
+    """The companion speaks English; its users may not. The Norwegian gate
+    patterns stay active for exactly this case (build log, step 21)."""
 
     def setUp(self):
         super().setUp()
-        self._post("/aetherseed/setup", {"name": "Lyra", "language": "nb"})
+        self._post("/aetherseed/setup", {"name": "Lyra", "language": "en"})
 
-    def test_a_norwegian_story_request_is_kept_as_fiction(self):
-        # Before the Norwegian patterns this was stored as FACT.
+    def test_a_norwegian_story_request_is_still_kept_as_fiction(self):
+        # Without the Norwegian patterns this was stored as FACT (step 20).
         self._ask("Skriv et kort dikt om en hval som heter Bjørn.",
-                  ["Bjørn", " svømmer", " i", " havet", "."])
+                  ["Bjørn", " swims", " in", " the", " sea", "."])
         self.assertEqual(self._record()[-1]["mode_stored"], FICTION)
         self.assertEqual(proxy.root.stored[-1]["mode"], FICTION)
 
-    def test_the_record_question_is_answered_from_the_log_in_norwegian(self):
+    def test_a_norwegian_record_question_is_answered_from_the_log(self):
         SCRIPT["last_request"] = None
         raw = self._ask("Hva har du tatt feil om?", ["should", " not", " be", " called"])
         self.assertIsNone(SCRIPT["last_request"], "the model was asked about its own record")
         lines = _lines(raw)
         text = _text(lines)
-        self.assertIn("Jeg har ingen logg", text)
-        self.assertIn("rett og slett tok feil", text)
+        self.assertIn("I have no record yet", text)          # the companion's language
+        self.assertIn("simply wrong", text)
         # Tagged like every other reply: the reader can tell it is the log.
         self.assertEqual(lines[-1]["aetherseed"]["mode"], "record")
 

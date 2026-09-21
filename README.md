@@ -241,7 +241,8 @@ marker until the next token decides it. An answer without a `[` is never held.
 
 ### First run: the owner names it
 
-The console's first screen asks for a language, then a name. Until someone
+The console's first screen asks for a name (and first for a language, when
+more than one is offered). Until someone
 chooses, the companion has no name — not a borrowed one. The chat bar reads
 *"Talk to <name>…"*.
 
@@ -251,16 +252,21 @@ hyphens and apostrophes, at most 24 characters, and refuses brackets, angle
 brackets, pipes, colons and quotes. A hand-edited settings file is re-validated
 on every load and is not trusted.
 
-**Languages are offered only where the gates work.** `llama3.2:3b` is officially
-supported for eight languages (Meta's model card); Norwegian is not among them,
-and is offered anyway, with the label measured on this device: short answers
-are right, longer text often has errors. What decided the scope was the gates:
-they read the user's framing, and they read English only. Before the Norwegian
-patterns, *"Skriv et kort dikt om en hval"* was stored as fact. English and
-Norwegian (bokmål) have fiction framing, record questions, refusal phrases and
-the record itself in their own words. German and the other supported languages
-are **not** offered, because offering them would switch the fiction gate off
-for their speakers.
+**English only, for now.** `llama3.2:3b` is not built for Norwegian (Meta's
+model card lists eight supported languages; Norwegian is not one), and a probe
+on this device agreed: short answers right, longer text poor. Norwegian waits
+for a model that is — the plan is to compile one to a HEF with the Hailo
+Dataflow Compiler. Everything built for it stays in the code, switched off
+(`offered: False` in `logic/companion.py`): the label, the charter line, the
+record in Norwegian.
+
+What stays **on** is the part that reads the *user*: Norwegian fiction framing,
+record questions and refusal phrases. People in Norway will type Norwegian to an
+English companion, and without those patterns *"Skriv et kort dikt om en hval"*
+is stored as fact. A language is only ever offered together with its gate
+patterns, their tests, and a measurement of the model speaking it — German and
+the other languages the model does support are not offered, because the gates
+do not understand them.
 
 ## The Mustardseed charter
 
@@ -423,8 +429,8 @@ python3 -m unittest test_provenance     # 26  modes, retrieval filter, the recor
 python3 -m unittest test_trust_scoring  # 14  provenance scoring
 python3 -m unittest test_console        # 12  what the console serves, refuses, keeps and lets run
 python3 -m unittest test_reply          # 13  what the reader receives: streamed, tagged; first run
-python3 -m unittest test_companion      # 14  the name and language that reach the charter
-                                        # --  142 total
+python3 -m unittest test_companion      # 16  the name and language that reach the charter
+                                        # --  144 total
 python3 tools/stream_guard_check.py     # ON THE COMPANION: live requests
 python3 tools/probe_suite.py            # ON THE COMPANION: the behavioural baseline
 ```

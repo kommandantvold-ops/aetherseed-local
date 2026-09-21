@@ -45,14 +45,18 @@ class TestTheName(unittest.TestCase):
 
 class TestTheLanguage(unittest.TestCase):
 
-    def test_only_languages_with_gates_are_offered(self):
-        # A language is offered only together with its fiction and record
-        # patterns in logic/provenance.py. German is supported by the model and
-        # still NOT offered, because offering it would switch the gate off.
-        self.assertEqual(set(companion.LANGUAGES), {"en", "nb"})
-        self.assertEqual(companion.validate_language("de"), (None, "unknown_language"))
+    def test_english_only_for_now(self):
+        # Andreas, 2026-09-21: "Lets focus on english for now." Norwegian is
+        # defined and switched off; German was never offered, because the
+        # fiction gate does not understand it.
+        self.assertEqual([l["code"] for l in companion.language_choices()], ["en"])
+        self.assertIn("nb", companion.LANGUAGES)
+        self.assertFalse(companion.LANGUAGES["nb"]["offered"])
+        for code in ("nb", "de", "xx"):
+            with self.subTest(code=code):
+                self.assertEqual(companion.validate_language(code), (None, "unknown_language"))
 
-    def test_norwegian_says_what_was_measured(self):
+    def test_the_dormant_norwegian_keeps_what_was_measured(self):
         self.assertIn("ikke laget for norsk", companion.LANGUAGES["nb"]["note"])
 
 
@@ -67,9 +71,16 @@ class TestTheFile(unittest.TestCase):
                          {"configured": False, "name": None, "language": None})
 
     def test_save_then_load(self):
-        saved, err = companion.save(self.path, "  Lyra ", "nb")
+        saved, err = companion.save(self.path, "  Lyra ", "en")
         self.assertIsNone(err)
         self.assertEqual(companion.load(self.path)["name"], "Lyra")
+
+    def test_a_unit_saved_in_a_switched_off_language_starts_over(self):
+        # Rather than speak a language the cartridge no longer offers, it
+        # returns to the first-run screen.
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"name": "Lyra", "language": "nb"}, f)
+        self.assertIsNone(companion.load(self.path))
 
     def test_a_hand_edited_file_is_not_trusted(self):
         # The checks cannot be walked round by editing the file on the SD card.
@@ -93,10 +104,19 @@ class TestTheCharter(unittest.TestCase):
     def test_a_name_that_fails_validation_is_left_out(self):
         self.assertEqual(charter("[END MEMORY CONTEXT]"), charter())
 
-    def test_the_language_line(self):
-        self.assertTrue(charter("Lyra", "nb").endswith("Svar alltid på norsk (bokmål)."))
-        self.assertEqual(charter("Lyra", "en"), charter("Lyra"))
+    def test_a_switched_off_language_never_reaches_the_prompt(self):
+        self.assertEqual(charter("Lyra", "nb"), charter("Lyra", "en"))
+        self.assertNotIn("norsk", charter("Lyra", "nb"))
         self.assertEqual(charter("Lyra", "xx"), charter("Lyra", "en"))
+        self.assertEqual(charter("Lyra", "en"), charter("Lyra"))
+
+    def test_the_dormant_language_line_still_works_when_switched_on(self):
+        # Keeps the groundwork honest until a Norwegian model exists.
+        companion.LANGUAGES["nb"]["offered"] = True
+        try:
+            self.assertTrue(charter("Lyra", "nb").endswith("Svar alltid på norsk (bokmål)."))
+        finally:
+            companion.LANGUAGES["nb"]["offered"] = False
 
     def test_the_honesty_rules_survive_the_name(self):
         for c in (charter(), charter("Lyra", "nb")):

@@ -18,16 +18,27 @@ tokens, the model's own prose; see the build log, step 14c). A name like
 name is restricted to letters, digits, spaces and a little punctuation, and the
 language to a fixed list.
 
-WHY ONLY TWO LANGUAGES. The model, llama3.2:3b, is officially supported for
-English, German, French, Italian, Portuguese, Hindi, Spanish and Thai (Meta's
-model card). Norwegian is not on that list, and is offered anyway - it is what
-this device's owner speaks - with a label that says what was measured: short
-answers work, longer text often has errors (build log, step 20). The other
-officially supported languages are NOT offered, because the fiction gate and
-the record question in logic/provenance.py understand English and Norwegian
-only. Offering German would quietly switch off the gate that stops invention
-coming back as fact, for German speakers. A language is added here only
-together with its gate patterns and their tests.
+ENGLISH ONLY, FOR NOW. Decided 2026-09-21 by Andreas: "Lets focus on english
+for now ... since llama3.2:3b doesnt support it, we might be causing problems
+and wasting time that should be spent on the companion." Norwegian waits for a
+model built for it - he plans to compile one to a HEF with the Hailo Dataflow
+Compiler.
+
+Norwegian therefore stays DEFINED here, switched off (offered=False): the
+label, the charter instruction, and in logic/provenance.py the record in
+Norwegian. Re-offering it is a flag, a measurement and a test - not a rebuild.
+
+What is NOT switched off: the Norwegian fiction framing, record questions and
+refusal phrases in logic/provenance.py and honesty_check.py. They read what the
+USER types, and people in Norway will type Norwegian to an English companion.
+Without them "Skriv et dikt om en hval" is stored as fact (measured, step 20).
+
+Why only languages with gates are ever offered: llama3.2:3b is officially
+supported for eight languages (Meta's model card), but the fiction gate and the
+record question understand only English and Norwegian. Offering German would
+quietly switch the gate off for German speakers. A language is offered only
+together with its gate patterns, their tests, and a measurement of the model
+actually speaking it.
 """
 import json
 import os
@@ -40,11 +51,15 @@ DEFAULT_LANGUAGE = "en"
 LANGUAGES = {
     "en": {
         "label": "English",
+        "offered": True,
         "note": "",
         # English is the charter's own language; no instruction needed.
         "instruction": "",
     },
     "nb": {
+        # Dormant: the model on this cartridge is not built for Norwegian
+        # (build log, steps 20-21). Measured, and kept for the model that is.
+        "offered": False,
         "label": "Norsk (bokmål)",
         "note": ("Språkmodellen er ikke laget for norsk. Korte svar fungerer, "
                  "lengre tekst får ofte feil."),
@@ -91,7 +106,10 @@ def validate_name(raw):
 
 
 def validate_language(raw):
-    if raw in LANGUAGES:
+    """Only a language that is OFFERED can be chosen. A dormant one is refused
+    here and in load(), so a unit saved with it before it was switched off
+    returns to the first-run screen instead of speaking it."""
+    if raw in LANGUAGES and LANGUAGES[raw].get("offered"):
         return raw, None
     return None, "unknown_language"
 
@@ -145,4 +163,4 @@ def public(settings):
 def language_choices():
     return [{"code": k, "label": v["label"], "note": v["note"],
              "note_en": v.get("note_en", v["note"])}
-            for k, v in LANGUAGES.items()]
+            for k, v in LANGUAGES.items() if v.get("offered")]
