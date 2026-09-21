@@ -190,16 +190,44 @@ def summarise_record(entries, limit: int = 5) -> str:
                  % (total, "" if total == 1 else "s", first_at, last_at))
     lines.append("")
 
-    if flagged:
-        lines.append("%d time%s I gave a source I could not have had:"
-                     % (len(flagged), "" if len(flagged) == 1 else "s"))
-        for e in list(reversed(flagged))[:limit]:
+    # Since 2026-09-21 an answer carrying an unbacked source is HELD BACK and
+    # never shown (proxy.py, withheld_message). Those turns are accounted for
+    # differently from the ones before, which were shown: the node did not
+    # "give" a source nobody saw, and the account of it must not show the
+    # source either - that would hand over, in the course of owning up, the
+    # very thing that was held back. The log file keeps the text for the
+    # operator; this is what is said on a screen.
+    shown = [e for e in flagged if not e.get("withheld")]
+    held = [e for e in flagged if e.get("withheld") == "unbacked_source"]
+    unchecked = [e for e in flagged if e.get("withheld") == "check_failed"]
+
+    def _times(n):
+        return "%d time%s" % (n, "" if n == 1 else "s")
+
+    if shown:
+        lines.append("%s I gave a source I could not have had:" % _times(len(shown)))
+        for e in list(reversed(shown))[:limit]:
             lines.append("  %s  you asked: %s" % (e.get("at", "?"),
                                                   (e.get("prompt") or "")[:90]))
             lines.append("      I said: %s" % ((e.get("answer") or "")[:110]))
-        if len(flagged) > limit:
-            lines.append("  ... and %d earlier." % (len(flagged) - limit))
-    else:
+        if len(shown) > limit:
+            lines.append("  ... and %d earlier." % (len(shown) - limit))
+    if held:
+        if shown:
+            lines.append("")
+        lines.append("%s I began an answer with a source I could not have had, "
+                     "and held it back before you saw it:" % _times(len(held)))
+        for e in list(reversed(held))[:limit]:
+            lines.append("  %s  you asked: %s" % (e.get("at", "?"),
+                                                  (e.get("prompt") or "")[:90]))
+        if len(held) > limit:
+            lines.append("  ... and %d earlier." % (len(held) - limit))
+    if unchecked:
+        if shown or held:
+            lines.append("")
+        lines.append("%s I could not check an answer for invented sources, and "
+                     "held it back." % _times(len(unchecked)))
+    if not flagged:
         lines.append("Nothing in it was flagged for an unbacked source.")
 
     if fiction:

@@ -10,12 +10,11 @@
 #
 # cartridge-id is a hash over every line below it. Quote that one value to
 # name a build; the lines exist to say what differs when it does not match.
-# Captured 2026-09-21 on the dev unit, after step 18 (the console and
-# the kiosk; the two units and three enabled-states added to the
-# identity, which until then could not see the screen at all).
+# Captured 2026-09-21 on the dev unit, after step 19 (answers citing a
+# source that cannot be verified are held back; only app.digest moved).
 #
-cartridge-id	721dd0ca73269e1d63b8ce0ce62203c8dbfe90ecf3b131e0bb40aa1b9ede304d
-app.digest	8b8226703cfbda16740c1c412ed9cc4a0aa94e50a7e387ed72b26c1835e971ff
+cartridge-id	0a96ff55af8aa99f5ffe57bf9c75aed50b48f5fe570eb3645899a016afcc650a
+app.digest	574a2ef3913ebeb4007042cc7e04cf95102d2e228461d550cc994e4c61994ddb
 app.files	15
 app.numpy	2.2.4
 app.tokenizers	0.23.2

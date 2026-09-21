@@ -152,14 +152,23 @@ function provenance(t, p) {
     const s = document.createElement('span'); s.className = 'tag ' + kind;
     s.textContent = text; row.append(s);
   };
-  if (p.unbacked_sources > 0) {
+  if (p.withheld) {
+    // The bubble already holds the node's own explanation, sent in place of
+    // the answer. The tag says the same thing in the badge row.
+    t.root.classList.add('flagged');
+    tag(p.withheld_reason === 'check_failed'
+        ? 'Held back — could not be checked'
+        : 'Held back — cited a source that could not be verified', 'flagged');
+  } else if (p.unbacked_sources > 0) {
     t.root.classList.add('flagged');
     tag('Unverified source — not kept as memory', 'flagged');
   } else if (p.mode === 'fiction') {
     t.root.classList.add('fiction');
     tag('Fiction, at your request', 'fiction');
   }
-  if (p.why && p.mode !== 'factual') {
+  // Why a turn was treated as fiction. Shown only for fiction: next to a
+  // held-back answer, the fiction detector's reasoning is just noise.
+  if (p.why && p.mode === 'fiction') {
     const w = document.createElement('span'); w.className = 'why'; w.textContent = p.why; row.append(w);
   }
   if (p.memory_used) tag('used memory', 'quiet');

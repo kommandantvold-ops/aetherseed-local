@@ -371,6 +371,85 @@ def _annotate_terminator(raw: bytes, provenance: dict) -> bytes:
 
 
 # ============================================================
+# HOLDING AN ANSWER BACK
+# ============================================================
+# Decided 2026-09-21 by Andreas, choosing between streaming the answer as it is
+# generated and keeping the buffer the proxy has always had: "hold it back".
+#
+# The proxy has never streamed to its client. call_hailo_chat collects the
+# whole generation and the handler sends it in one write, and that has been so
+# since the first commit. Until now the buffer bought nothing: an answer that
+# honesty_check had flagged for an invented source was sent anyway, in full,
+# with a badge on it. Now it is not sent at all.
+#
+# THE WHOLE ANSWER is withheld, not the offending span or its sentence. The
+# fabrications this device has actually produced arrive as a claim spread over
+# several sentences - an invented paper, then its journal, then its DOI - and
+# only the DOI is something a pattern can see:
+#
+#     "I don't know... However, there is a paper... published in Nature
+#      Machine Intelligence. The DOI is 10.1038/s13723-020-00065-7"  (step 8b)
+#
+# Removing the DOI, or the sentence holding it, leaves the invented paper
+# standing. What reaches the reader instead says what happened and nothing
+# the model made up.
+#
+# If the check itself cannot run, the answer is held back too. An answer
+# nobody could check for invented sources is not one this device vouches for;
+# and a guard that fails should fail where everyone can see it, which this
+# does - every answer would say so.
+
+_SOURCE_WORDS = {"doi": "a DOI", "url": "a web address", "citation": "a citation",
+                 "volpage": "a journal reference", "isbn": "an ISBN"}
+
+
+def withheld_message(reason: str, kinds=()) -> str:
+    """What the reader sees instead. Built only from the KINDS of source that
+    were found - never from the found text, which is the thing being held back.
+    Short, and written to be spoken aloud as well as read."""
+    if reason == "check_failed":
+        return ("I've held that answer back. I couldn't check it for invented "
+                "sources, and I won't show you an answer I couldn't check.")
+    words = [_SOURCE_WORDS.get(k, "a source") for k in dict.fromkeys(kinds)]
+    if not words:
+        what = "a source"
+    elif len(words) == 1:
+        what = words[0]
+    else:
+        what = ", ".join(words[:-1]) + " and " + words[-1]
+    return ("I've held that answer back. It included %s I can't verify, and I "
+            "won't show you a source I may have made up." % what)
+
+
+def _withhold(raw: bytes, model: str, message: str) -> bytes:
+    """Replace everything the model said with `message`, keeping one terminator.
+
+    Built from scratch rather than by editing the model's lines, and it NEVER
+    returns `raw`. A function whose job is to keep an invented source from a
+    reader cannot have an error path that hands the source over anyway.
+    _annotate_terminator fails open on purpose - a missing badge is visible.
+    This one fails closed on purpose - a leaked DOI would not be.
+    """
+    terminator = {"model": model, "message": {"role": "assistant", "content": ""},
+                  "done": True, "done_reason": "stop"}
+    try:
+        for line in reversed(raw.decode("utf-8", errors="replace").split("\n")):
+            if not line.strip():
+                continue
+            last = json.loads(line)
+            if isinstance(last, dict) and last.get("done"):
+                last["message"] = {"role": "assistant", "content": ""}
+                terminator = last
+            break
+    except Exception:
+        pass          # the synthetic terminator above stands
+    content = {"model": terminator.get("model", model),
+               "message": {"role": "assistant", "content": message},
+               "done": False}
+    return (json.dumps(content) + "\n" + json.dumps(terminator) + "\n").encode("utf-8")
+
+
+# ============================================================
 # PROXY HANDLER
 # ============================================================
 
@@ -567,16 +646,38 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # and a provenance badge that arrives late is a badge nobody trusts.
         tool_outputs = (workspace_data,) if workspace_data else ()
         report = None
+        check_failed = False
         if ai_content:
             try:
                 from honesty_check import check_response
                 report = check_response(user_msg, ai_content,
                                         tool_outputs=tool_outputs,
                                         memory_context=memory_context)
-            except Exception:
+            except Exception as e:
                 report = None
+                check_failed = True
+                print(f"[honesty] the check could not run: {e!r}", flush=True)
         stored_mode = resolve_mode(
             request_mode, honesty_high=len(report.high) if report is not None else 0)
+        if check_failed:
+            # Nobody checked it, so it may not come back later as context.
+            stored_mode = UNVERIFIED
+
+        # ---- HOLD IT BACK ----
+        # See withheld_message() above for why the whole answer, and why a
+        # failed check counts.
+        withheld_reason = None
+        if check_failed:
+            withheld_reason = "check_failed"
+        elif report is not None and report.high:
+            withheld_reason = "unbacked_source"
+        if withheld_reason:
+            kinds = [f.kind for f in report.high] if report is not None else []
+            raw_response = _withhold(raw_response, model,
+                                     withheld_message(withheld_reason, kinds))
+            print(f"[honesty] WITHHELD ({withheld_reason}"
+                  + (": " + ", ".join(dict.fromkeys(kinds)) if kinds else "")
+                  + ") - the answer was not shown", flush=True)
 
         # Carried on the final NDJSON line rather than a line of its own:
         # an ollama-shaped client ignores keys it does not know, and inventing
@@ -589,6 +690,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             "unsourced_figures": len(report.medium) if report is not None else 0,
             "used_tools": bool(workspace_data),
             "memory_used": bool(memory_context),
+            "withheld": bool(withheld_reason),
+            "withheld_reason": withheld_reason,
         })
 
         self.send_response(200)
@@ -676,6 +779,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "resonance": resonance,
                 "used_tools": bool(workspace_data),
                 "declined": bool(declined),
+                "withheld": withheld_reason,
                 "remembered": not failed_to_invent,
                 "prompt": user_msg[:160],
                 "answer": ai_content[:160],
@@ -738,9 +842,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 # Only the flagged ones. The whole log is not the UI's business
                 # and shipping it wholesale would put every past prompt on a
                 # screen someone else might be standing in front of.
+                # A held-back answer is not handed out here either. It is in
+                # the log file on the device, where the operator can read it;
+                # a screen is not where it goes.
                 "flagged": [
                     {"at": e.get("at"), "prompt": (e.get("prompt") or "")[:120],
-                     "answer": (e.get("answer") or "")[:200]}
+                     "answer": (None if e.get("withheld")
+                                else (e.get("answer") or "")[:200]),
+                     "withheld": e.get("withheld")}
                     for e in entries
                     if e.get("mode_stored") == UNVERIFIED or e.get("honesty_high")
                 ][-20:],
