@@ -112,6 +112,7 @@ untrusted — including the node's own words.
 | `honesty_check` provenance scoring | A fabrication wearing a refusal phrase. Resonance is scored by provenance, not by whether the text contains "I cannot" |
 | `strip_leading_artefacts()` + `opening_may_be_artefact()` | The node's own retrieval labels — `[Episode]`, `[Pattern]`, its own fiction label — arriving at the user as if they were the answer. The head of every stream is withheld until it is decidable, so nothing is forwarded that might turn out to be scaffolding |
 | `logic/provenance.py` | Yesterday's invention becoming today's fact. See below |
+| `_withhold()` | An invented source reaching the reader at all. The whole answer is replaced before it is sent — see *The console* |
 
 ## Provenance: fiction may be written, and can never come back as fact
 
@@ -184,7 +185,7 @@ labwc, in app mode, pointed at it.
   anything that looks like a path. A UI that went straight to the model would
   have none of the guards, since every one of them lives at the proxy's exit.
 - **Provenance is visible.** Every answer carries the badge the node recorded for
-  it: fiction marked as fiction, an unbacked source marked as alarming. The badge
+  it: fiction marked as fiction, a held-back answer marked as held back. The badge
   rides on the final NDJSON line of the same response, not a second request — a
   badge fetched afterwards races the next turn and can end up describing the
   wrong answer.
@@ -212,32 +213,40 @@ labwc, in app mode, pointed at it.
   `--force-device-scale-factor=3`. A monitor at arm's length wants less; this
   is a judgement to make in front of the screen.
 
-### The console does not stream — and the reason first given for it was wrong
+### An answer that cites an unverifiable source is held back
 
-Measured through the console, 2026-09-21: time to first byte **40.7 s**, total
-**40.7 s** — the whole answer arrives in the last 35 ms.
+The console does not stream. Measured 2026-09-21: time to first byte
+**40.7 s**, total **40.7 s**. The proxy has never streamed to its client — it
+collects the whole answer and sends it in one write — and an earlier version of
+this section wrongly blamed that on the provenance badge.
 
-The first explanation written here was that streaming and a trustworthy
-provenance badge are incompatible. **They are not**, and that explanation is
-withdrawn. The badge rides on the *final* line of the response; it can be
-computed once the answer is complete and sent last, with every earlier line
-already delivered as it was generated.
+Given the choice between streaming and keeping the buffer, the decision was to
+**keep it and use it**. When `honesty_check` finds a DOI, web address, citation,
+journal reference or ISBN that did not come from the question, memory or a tool,
+**the whole answer is withheld** and the reader gets this instead:
 
-The actual reason is older and plainer: **the proxy has never streamed to its
-client.** `call_hailo_chat` collects the whole generation and the handler sends
-it in a single write — in the code since the first commit. Everything upstream
-of that write streams; nothing downstream of it can.
+> *"I've held that answer back. It included a DOI I can't verify, and I won't
+> show you a source I may have made up."*
 
-So the choice that actually exists is:
+The whole answer, not the offending phrase. The fabrications this device has
+produced arrive as a claim spread over several sentences — an invented paper,
+then its journal, then its DOI — and only the DOI is visible to a pattern.
+Removing it would leave the invented paper standing.
 
-- **stream** — the answer appears as it is generated, the badge arrives with
-  the last line; or
-- **keep buffering and use it** — hold the answer until `honesty_check` has
-  run, and withhold or redact an invented source *before anyone reads it*.
+**The cost, measured on the first live try:** asked for the web address of the
+Norwegian Meteorological Institute, the node answered `https://met.no` — which
+is correct — and the answer was held back. The check cannot tell a real address
+from an invented one; it knows only that the address did not come from anywhere
+the node could have read it. A source the user supplies in the question is not
+held back.
 
-Today the device pays the latency of the second and gets none of its benefit:
-flagged answers are buffered and then shown in full, with a badge. That is an
-open decision, not a solved one.
+- If the check itself cannot run, the answer is held back too, and says so.
+- The held-back text is kept in the log file on the device for the operator,
+  stored as `unverified` so it never returns as context, and **never shown on a
+  screen** — the record button says that an answer was held back and what was
+  asked, not what was withheld.
+- `test_withhold.py`: 17 tests against the real handler and the real check;
+  5 fail when the hold is disabled.
 
 ## The Mustardseed charter
 
@@ -399,7 +408,8 @@ python3 -m unittest test_stream_guard   # 24  the streaming stops, scripted back
 python3 -m unittest test_provenance     # 20  modes, retrieval filter, the record
 python3 -m unittest test_trust_scoring  # 14  provenance scoring
 python3 -m unittest test_console        # 12  what the console serves, refuses, keeps and lets run
-                                        # --  103 total
+python3 -m unittest test_withhold       # 17  an invented source never reaches the reader
+                                        # --  120 total
 python3 tools/stream_guard_check.py     # ON THE COMPANION: live requests
 python3 tools/probe_suite.py            # ON THE COMPANION: the behavioural baseline
 ```
@@ -409,7 +419,7 @@ downloaded to run the tests. They pass individually and together; that is worth
 checking both ways, because one of them once stubbed `sys.modules` and left it
 stubbed, so another passed alone and failed in the suite.
 
-The first five need no NPU. The last two do, and are the only checks that can
+The first six need no NPU. The last two do, and are the only checks that can
 catch what only appears against real hardware.
 
 ## Hardware
@@ -462,6 +472,7 @@ aetherseed-local/
 ├── test_provenance.py
 ├── test_trust_scoring.py
 ├── test_console.py
+├── test_withhold.py
 ├── test_proxy_integration.py
 ├── docs/SETUP.md
 ├── .gitattributes              # LF everywhere; the vendored piper/ tree untouched
