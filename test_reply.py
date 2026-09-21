@@ -248,6 +248,16 @@ class TestTheCorrectTag(_Handler):
         self.assertEqual(badge["mode"], UNVERIFIED)
         self.assertNotIn("withheld", badge)
 
+    def test_an_invented_www_address_is_tagged_too(self):
+        # The step-16b fabrication, end to end: shown, tagged, never memory.
+        raw = self._ask("What is the phone number for Aetherseed AS?",
+                        ["Visit", " the", " website", " of", " Aethersmith", " at",
+                         " www.aethersmith.com", "."])
+        lines = _lines(raw)
+        self.assertIn("www.aethersmith.com", _text(lines))
+        self.assertEqual(lines[-1]["aetherseed"]["unbacked_sources"], 1)
+        self.assertEqual(self._record()[-1]["mode_stored"], UNVERIFIED)
+
     def test_it_is_never_used_as_memory(self):
         self._ask("Give me the DOI of the 2020 paper on resonance fields.", INVENTED)
         rec = self._record()[-1]

@@ -29,7 +29,14 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.expanduser("~"))
+# This module's own directory, which is the application directory - read-only
+# to the service. It used to be the user's HOME ("~"), a leftover from the v1
+# layout. For the service, HOME is /var/lib/aetherseed, its WRITABLE state
+# directory, and putting that first on the import path meant any .py file
+# there would shadow the application's own modules - honesty_check included.
+# Found 2026-09-21 when a stale ~/honesty_check.py on the dev unit was imported
+# by the tests instead of the real one (build log, step 22).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aetherroot import AetherRoot
 
 # ============================================================

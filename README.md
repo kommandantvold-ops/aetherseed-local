@@ -224,7 +224,7 @@ and nothing else does:
 
 | reply | tag | used as memory |
 |---|---|---|
-| cites a DOI, web address, citation or ISBN that came from nowhere the node could have read it | *Unverified source — not used as memory* | never |
+| cites a DOI, web address (`https://…` or `www.…`), citation or ISBN that came from nowhere the node could have read it | *Unverified source — not used as memory* | never |
 | the check could not run | *Not checked for invented sources — not used as memory* | never |
 | asked for invention | *Fiction, at your request* | for fiction only |
 | answered from the record | *from the record, not the model* | — |
@@ -426,11 +426,12 @@ sudo tools/cartridge.sh verify  tools/cartridge.manifest   # 0 match / 1 drift
 python3 -m unittest test_token_budget   # 33  prompt ceiling, sanitizers, bounds
 python3 -m unittest test_stream_guard   # 30  the streaming stops, the marker hold, scripted backend
 python3 -m unittest test_provenance     # 26  modes, retrieval filter, the record, in both languages
-python3 -m unittest test_trust_scoring  # 14  provenance scoring
+python3 -m unittest test_trust_scoring  # 19  provenance scoring, web addresses
 python3 -m unittest test_console        # 12  what the console serves, refuses, keeps and lets run
-python3 -m unittest test_reply          # 13  what the reader receives: streamed, tagged; first run
+python3 -m unittest test_reply          # 14  what the reader receives: streamed, tagged; first run
 python3 -m unittest test_companion      # 16  the name and language that reach the charter
-                                        # --  144 total
+python3 -m unittest test_imports        #  1  nothing the service can write can shadow its code
+                                        # --  151 total
 python3 tools/stream_guard_check.py     # ON THE COMPANION: live requests
 python3 tools/probe_suite.py            # ON THE COMPANION: the behavioural baseline
 ```
@@ -440,7 +441,7 @@ downloaded to run the tests. They pass individually and together; that is worth
 checking both ways, because one of them once stubbed `sys.modules` and left it
 stubbed, so another passed alone and failed in the suite.
 
-The first seven need no NPU. The last two do, and are the only checks that can
+The first eight need no NPU. The last two do, and are the only checks that can
 catch what only appears against real hardware.
 
 ## Hardware
@@ -496,6 +497,7 @@ aetherseed-local/
 ├── test_console.py
 ├── test_reply.py
 ├── test_companion.py
+├── test_imports.py
 ├── test_proxy_integration.py
 ├── docs/SETUP.md
 ├── .gitattributes              # LF everywhere; the vendored piper/ tree untouched

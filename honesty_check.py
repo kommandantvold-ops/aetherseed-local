@@ -52,6 +52,15 @@ HIGH, MEDIUM, LOW = "high", "medium", "low"
 _PATTERNS = [
     ("doi",        HIGH,   re.compile(r"\b10\.\d{4,9}/[-._;()/:a-zA-Z0-9]+"), False),
     ("url",        HIGH,   re.compile(r"https?://[^\s<>\"')]+"), False),
+    # A web address written WITHOUT a scheme, if it starts with "www.". Added
+    # 2026-09-21 (build log, step 22): the one invented address this project
+    # has on record was written that way - "Visit the official website of
+    # Aethersmith (the parent company of Aetherseed) at [www.a..." (step 16b) -
+    # and the pattern above never saw it. After the https pattern, so an
+    # address with a scheme is claimed once, not twice. Bare domains ("met.no")
+    # stay uncaught on purpose: a pattern cannot tell them from "e.g.", file
+    # names and decimals, and a tag that cries wolf stops being read.
+    ("url",        HIGH,   re.compile(r"\bwww\.[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s<>\"')\]]*)?", re.I), False),
     ("volpage",    HIGH,   re.compile(r"\b\d{1,4}\s*\(\s*\d{1,3}\s*\)\s*:\s*\d{1,5}(?:\s*[-–]\s*\d{1,5})?"), False),
     ("citation",   HIGH,   re.compile(
         r"\b[A-Z][A-Za-z'’-]+"
@@ -198,6 +207,16 @@ def _grounded(fragment: str, haystack: str, haystack_nums: Set[float],
     return bool(nums) and nums.issubset(haystack_nums)
 
 
+def _url_forms(frag: str):
+    """An address with and without its scheme, "www." and trailing slash."""
+    f = frag.rstrip("/.,;:")
+    bare = re.sub(r"^https?://", "", f, flags=re.I)
+    forms = [f, bare]
+    if bare.lower().startswith("www."):
+        forms.append(bare[4:])
+    return [x for x in forms if x]
+
+
 def check_response(user_msg: str,
                    ai_response: str,
                    tool_outputs: Sequence[str] = (),
@@ -223,6 +242,13 @@ def check_response(user_msg: str,
             if any(i in consumed for i in span):
                 continue
             frag = m.group(0).strip()
+            if kind == "url":
+                # The same address, however it is written: a user who typed
+                # "www.met.no" and got back "https://www.met.no" supplied it.
+                forms = _url_forms(frag)
+                if any(_grounded(f, haystack, haystack_nums, False) for f in forms):
+                    consumed.update(span)
+                    continue
             if _grounded(frag, haystack, haystack_nums, numeric_ok):
                 consumed.update(span)
                 continue

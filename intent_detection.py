@@ -406,8 +406,10 @@ def _system_health() -> str:
 
 def _trust_status() -> str:
     """Get current trust evolution status."""
-    import sys
-    sys.path.insert(0, os.path.expanduser("~/aetherseed-ai"))
+    # No path manipulation here: this used to insert "~/aetherseed-ai" (the
+    # v1 layout) on EVERY call - a directory the service can create and write,
+    # first on the import path. trust_evolution sits beside this module, which
+    # is already importable (build log, step 22).
     try:
         from trust_evolution import TrustEvolution
         trust = TrustEvolution()

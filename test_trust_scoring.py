@@ -146,5 +146,40 @@ class TestProvenance(unittest.TestCase):
         self.assertFalse(results.startswith(sandbox + os.sep))
 
 
+class TestWebAddresses(unittest.TestCase):
+    """Web addresses without a scheme (step 22). The one invented address on
+    record, step 16b, was written "www.aethersmith..." and the https pattern
+    never saw it. These fail without the www pattern."""
+
+    def _high(self, user, answer):
+        return [f.text for f in check_response(user, answer).high]
+
+    def test_the_address_invented_in_16b_is_caught(self):
+        self.assertEqual(
+            self._high("What is the phone number for Aetherseed AS?",
+                       "Visit the official website of Aethersmith (the parent company "
+                       "of Aetherseed) at [www.aethersmith.com]."),
+            ["www.aethersmith.com"])
+
+    def test_www_addresses_in_any_case_and_with_a_path(self):
+        self.assertEqual(self._high("q", "It is www.met.no."), ["www.met.no"])
+        self.assertEqual(self._high("q", "Try WWW.MET.NO/weather today."), ["WWW.MET.NO/weather"])
+
+    def test_an_address_with_a_scheme_is_counted_once(self):
+        self.assertEqual(len(self._high("q", "It is https://www.met.no today")), 1)
+
+    def test_an_address_the_user_supplied_is_not_flagged_however_it_is_written(self):
+        self.assertEqual(self._high("Is www.met.no right?", "Yes, https://www.met.no is it."), [])
+        self.assertEqual(self._high("Is met.no right?", "Yes, www.met.no is it."), [])
+        self.assertEqual(self._high("Open https://met.no/", "Opening www.met.no now."), [])
+
+    def test_bare_domains_and_ordinary_dots_are_left_alone(self):
+        # Decided: a pattern cannot tell "met.no" from "e.g." or "file.txt".
+        for text in ("The website is met.no.", "e.g. the file.txt holds 3.14",
+                     "awww.nice", "Version 1.2.3 of it", "www alone is not an address"):
+            with self.subTest(text=text):
+                self.assertEqual(self._high("q", text), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -10,11 +10,11 @@
 #
 # cartridge-id is a hash over every line below it. Quote that one value to
 # name a build; the lines exist to say what differs when it does not match.
-# Captured 2026-09-21 on the dev unit, after step 21 (English only;
-# Norwegian defined but switched off; only app.digest moved).
+# Captured 2026-09-21 on the dev unit, after step 22 (www. addresses are
+# unverified sources; the service's writable HOME is off the import path).
 #
-cartridge-id	078f9156ca5d5de87c23962aca94e1436d916489659735b1f0a13cae8b0b5a02
-app.digest	b2b4d350ac036337f372a50e89217385f6ca9a3fa8e9587407216172e02738aa
+cartridge-id	4ec8006acfd5193d94ac7493bdc0004d1d06c81ed8a63f06a1964d07415f0562
+app.digest	cf5815493b7a7a5f60f932231a1b504dd2a839d7e30bc54ebd385d91c6037776
 app.files	16
 app.numpy	2.2.4
 app.tokenizers	0.23.2
