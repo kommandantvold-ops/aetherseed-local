@@ -212,18 +212,32 @@ labwc, in app mode, pointed at it.
   `--force-device-scale-factor=3`. A monitor at arm's length wants less; this
   is a judgement to make in front of the screen.
 
-### The console does not stream, and this is not a bug
+### The console does not stream — and the reason first given for it was wrong
 
 Measured through the console, 2026-09-21: time to first byte **40.7 s**, total
 **40.7 s** — the whole answer arrives in the last 35 ms.
 
-That is forced by two decisions made deliberately elsewhere. The head of the
-stream is withheld until it can be shown not to be a retrieval artefact, and the
-provenance badge has to be computed before the answer is sent or it cannot be
-trusted to describe it. **You cannot both stream and guarantee the badge.** The
-page shows a blinking cursor while it waits, so the screen is not blank; on an
-appliance, forty seconds of blinking cursor is still a poor answer and is an open
-item, not a solved one.
+The first explanation written here was that streaming and a trustworthy
+provenance badge are incompatible. **They are not**, and that explanation is
+withdrawn. The badge rides on the *final* line of the response; it can be
+computed once the answer is complete and sent last, with every earlier line
+already delivered as it was generated.
+
+The actual reason is older and plainer: **the proxy has never streamed to its
+client.** `call_hailo_chat` collects the whole generation and the handler sends
+it in a single write — in the code since the first commit. Everything upstream
+of that write streams; nothing downstream of it can.
+
+So the choice that actually exists is:
+
+- **stream** — the answer appears as it is generated, the badge arrives with
+  the last line; or
+- **keep buffering and use it** — hold the answer until `honesty_check` has
+  run, and withhold or redact an invented source *before anyone reads it*.
+
+Today the device pays the latency of the second and gets none of its benefit:
+flagged answers are buffered and then shown in full, with a badge. That is an
+open decision, not a solved one.
 
 ## The Mustardseed charter
 
