@@ -10,12 +10,12 @@
 #
 # cartridge-id is a hash over every line below it. Quote that one value to
 # name a build; the lines exist to say what differs when it does not match.
-# Captured 2026-09-21 on the dev unit, after step 19 (answers citing a
-# source that cannot be verified are held back; only app.digest moved).
+# Captured 2026-09-21 on the dev unit, after step 20 (replies stream with
+# their tag; first-run naming and language; only app.digest moved).
 #
-cartridge-id	0a96ff55af8aa99f5ffe57bf9c75aed50b48f5fe570eb3645899a016afcc650a
-app.digest	574a2ef3913ebeb4007042cc7e04cf95102d2e228461d550cc994e4c61994ddb
-app.files	15
+cartridge-id	f5c567be153ec0de1cd39010749fdcba6464c92eff6591b991b774d7f2d1f6ae
+app.digest	e160ee3260e95322009e9936310d435c1dc6cd417cbc3c0974506359b3b89c65
+app.files	16
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo

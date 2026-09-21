@@ -112,7 +112,7 @@ untrusted — including the node's own words.
 | `honesty_check` provenance scoring | A fabrication wearing a refusal phrase. Resonance is scored by provenance, not by whether the text contains "I cannot" |
 | `strip_leading_artefacts()` + `opening_may_be_artefact()` | The node's own retrieval labels — `[Episode]`, `[Pattern]`, its own fiction label — arriving at the user as if they were the answer. The head of every stream is withheld until it is decidable, so nothing is forwarded that might turn out to be scaffolding |
 | `logic/provenance.py` | Yesterday's invention becoming today's fact. See below |
-| `_withhold()` | An invented source reaching the reader at all. The whole answer is replaced before it is sent — see *The console* |
+| `marker_prefix_len()` | A scaffold marker reaching the reader in pieces while the answer streams — see *The console* |
 
 ## Provenance: fiction may be written, and can never come back as fact
 
@@ -185,7 +185,7 @@ labwc, in app mode, pointed at it.
   anything that looks like a path. A UI that went straight to the model would
   have none of the guards, since every one of them lives at the proxy's exit.
 - **Provenance is visible.** Every answer carries the badge the node recorded for
-  it: fiction marked as fiction, a held-back answer marked as held back. The badge
+  it: fiction as fiction, an unverifiable source as unverified, the record as the record. The badge
   rides on the final NDJSON line of the same response, not a second request — a
   badge fetched afterwards races the next turn and can end up describing the
   wrong answer.
@@ -213,40 +213,54 @@ labwc, in app mode, pointed at it.
   `--force-device-scale-factor=3`. A monitor at arm's length wants less; this
   is a judgement to make in front of the screen.
 
-### An answer that cites an unverifiable source is held back
+### Replies stream, and carry the correct tag
 
-The console does not stream. Measured 2026-09-21: time to first byte
-**40.7 s**, total **40.7 s**. The proxy has never streamed to its client — it
-collects the whole answer and sends it in one write — and an earlier version of
-this section wrongly blamed that on the provenance badge.
+An answer appears as it is generated — measured on the device, the first words
+of a four-sentence answer at **3.1 s**, the last at 22.7 s. Before this, the
+whole answer arrived at once at the end.
 
-Given the choice between streaming and keeping the buffer, the decision was to
-**keep it and use it**. When `honesty_check` finds a DOI, web address, citation,
-journal reference or ISBN that did not come from the question, memory or a tool,
-**the whole answer is withheld** and the reader gets this instead:
+The tag goes out on the **last** line, because the check needs the whole answer
+and nothing else does:
 
-> *"I've held that answer back. It included a DOI I can't verify, and I won't
-> show you a source I may have made up."*
+| reply | tag | used as memory |
+|---|---|---|
+| cites a DOI, web address, citation or ISBN that came from nowhere the node could have read it | *Unverified source — not used as memory* | never |
+| the check could not run | *Not checked for invented sources — not used as memory* | never |
+| asked for invention | *Fiction, at your request* | for fiction only |
+| answered from the record | *from the record, not the model* | — |
 
-The whole answer, not the offending phrase. The fabrications this device has
-produced arrive as a claim spread over several sentences — an invented paper,
-then its journal, then its DOI — and only the DOI is visible to a pattern.
-Removing it would leave the invented paper standing.
+Nothing is held back. The check cannot tell a real address from an invented one
+— `https://met.no` is correct and is tagged — it knows only that the address
+did not come from the question, memory or a tool.
 
-**The cost, measured on the first live try:** asked for the web address of the
-Norwegian Meteorological Institute, the node answered `https://met.no` — which
-is correct — and the answer was held back. The check cannot tell a real address
-from an invented one; it knows only that the address did not come from anywhere
-the node could have read it. A source the user supplies in the question is not
-held back.
+Streaming needed one guard of its own. A scaffold marker such as `[END MEMORY
+CONTEXT]` is several tokens long, and was cut from the stored answer only once
+all of it had arrived — by which time its first pieces had already reached the
+client. `marker_prefix_len()` holds back any tail that could still become a
+marker until the next token decides it. An answer without a `[` is never held.
 
-- If the check itself cannot run, the answer is held back too, and says so.
-- The held-back text is kept in the log file on the device for the operator,
-  stored as `unverified` so it never returns as context, and **never shown on a
-  screen** — the record button says that an answer was held back and what was
-  asked, not what was withheld.
-- `test_withhold.py`: 17 tests against the real handler and the real check;
-  5 fail when the hold is disabled.
+### First run: the owner names it
+
+The console's first screen asks for a language, then a name. Until someone
+chooses, the companion has no name — not a borrowed one. The chat bar reads
+*"Talk to <name>…"*.
+
+The name goes into the charter, which makes it **untrusted input into the
+prompt**: `logic/companion.py` accepts letters in any script, digits, spaces,
+hyphens and apostrophes, at most 24 characters, and refuses brackets, angle
+brackets, pipes, colons and quotes. A hand-edited settings file is re-validated
+on every load and is not trusted.
+
+**Languages are offered only where the gates work.** `llama3.2:3b` is officially
+supported for eight languages (Meta's model card); Norwegian is not among them,
+and is offered anyway, with the label measured on this device: short answers
+are right, longer text often has errors. What decided the scope was the gates:
+they read the user's framing, and they read English only. Before the Norwegian
+patterns, *"Skriv et kort dikt om en hval"* was stored as fact. English and
+Norwegian (bokmål) have fiction framing, record questions, refusal phrases and
+the record itself in their own words. German and the other supported languages
+are **not** offered, because offering them would switch the fiction gate off
+for their speakers.
 
 ## The Mustardseed charter
 
@@ -404,12 +418,13 @@ sudo tools/cartridge.sh verify  tools/cartridge.manifest   # 0 match / 1 drift
 
 ```bash
 python3 -m unittest test_token_budget   # 33  prompt ceiling, sanitizers, bounds
-python3 -m unittest test_stream_guard   # 24  the streaming stops, scripted backend
-python3 -m unittest test_provenance     # 20  modes, retrieval filter, the record
+python3 -m unittest test_stream_guard   # 30  the streaming stops, the marker hold, scripted backend
+python3 -m unittest test_provenance     # 26  modes, retrieval filter, the record, in both languages
 python3 -m unittest test_trust_scoring  # 14  provenance scoring
 python3 -m unittest test_console        # 12  what the console serves, refuses, keeps and lets run
-python3 -m unittest test_withhold       # 17  an invented source never reaches the reader
-                                        # --  120 total
+python3 -m unittest test_reply          # 13  what the reader receives: streamed, tagged; first run
+python3 -m unittest test_companion      # 14  the name and language that reach the charter
+                                        # --  142 total
 python3 tools/stream_guard_check.py     # ON THE COMPANION: live requests
 python3 tools/probe_suite.py            # ON THE COMPANION: the behavioural baseline
 ```
@@ -419,7 +434,7 @@ downloaded to run the tests. They pass individually and together; that is worth
 checking both ways, because one of them once stubbed `sys.modules` and left it
 stubbed, so another passed alone and failed in the suite.
 
-The first six need no NPU. The last two do, and are the only checks that can
+The first seven need no NPU. The last two do, and are the only checks that can
 catch what only appears against real hardware.
 
 ## Hardware
@@ -448,6 +463,7 @@ aetherseed-local/
 │   ├── serve.py                # The console: static page + allow-list relay, :2077
 │   └── index.html              # One file, zero external references
 ├── logic/
+│   ├── companion.py            # The owner's choices: name and language, validated
 │   ├── prompt_builder.py       # The charter, and prompt assembly
 │   ├── provenance.py           # factual / fiction / unverified, and what may be recalled
 │   └── token_budget.py         # 864-token guard, sanitizers, paragraph bound
@@ -472,7 +488,8 @@ aetherseed-local/
 ├── test_provenance.py
 ├── test_trust_scoring.py
 ├── test_console.py
-├── test_withhold.py
+├── test_reply.py
+├── test_companion.py
 ├── test_proxy_integration.py
 ├── docs/SETUP.md
 ├── .gitattributes              # LF everywhere; the vendored piper/ tree untouched
