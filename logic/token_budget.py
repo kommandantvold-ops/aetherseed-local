@@ -524,6 +524,40 @@ def cut_at_scaffold_marker(text: str):
     return text[:first].rstrip(), True
 
 
+_MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
+_MAX_MARKER = max(len(m) for m in _MARKERS)
+
+
+def marker_prefix_len(text: str) -> int:
+    """How many characters at the END of text could still be the start of a
+    scaffold marker - 0 when none could.
+
+    The mid-stream counterpart of opening_may_be_artefact(). The marker cut
+    works on the accumulated text, so it fires only once the whole marker has
+    arrived, and a marker is several tokens. Measured 2026-09-21, with chunks
+    [" [END", " MEMORY", " CONTEXT", "]"] and no blank line before them: the
+    STORED answer was clean and the CLIENT received "[END MEMORY CONTEXT",
+    because every chunk but the last had gone out before the marker was
+    recognisable. The only test of it passed because its example had a blank
+    line first, so the paragraph stop fired and the marker path never ran.
+
+    A streaming caller withholds this many trailing characters until the next
+    chunk decides them, and drops them if the stream ends undecided. Only a
+    suffix beginning at "[" can count, so an answer with no brackets costs
+    nothing, and "[1]" is released as soon as the "1" arrives.
+    """
+    if not text:
+        return 0
+    lo = max(0, len(text) - _MAX_MARKER + 1)
+    i = text.find("[", lo)
+    while i >= 0:
+        tail = text[i:]
+        if any(m.startswith(tail) and len(tail) < len(m) for m in _MARKERS):
+            return len(tail)
+        i = text.find("[", i + 1)
+    return 0
+
+
 def _split_block(text: str, open_tag: str, close_tag: str):
     """Return (before, body, after) for a delimited block, or None.
 

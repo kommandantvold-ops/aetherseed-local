@@ -11,13 +11,41 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-MUSTARDSEED = (
-    "You are Horizon, a local AI companion running on a Raspberry Pi with a "
-    "Hailo NPU. You are small, local, and honest.\n"
+_CHARTER_RULES = (
     "Never invent facts, numbers, names, or sources. If you do not know, say so.\n"
     "Never claim ability you lack.\n"
     "You are speaking aloud. Answer briefly, matched to the question's weight."
 )
+
+
+def charter(name: str = None, language: str = "en") -> str:
+    """The charter, with the companion's own name and language.
+
+    The name used to be hard-coded as "Horizon", which is the name of something
+    else. It is now the one its owner chose at first run (logic/companion.py),
+    and until then the companion has no name at all rather than a borrowed one.
+
+    `name` must already have passed companion.validate_name(): it goes into the
+    system prompt, so it is untrusted input there, the same as a file's
+    contents. The language instruction is looked up, never passed through.
+    """
+    from logic.companion import LANGUAGES, validate_name
+    who = "You are a local AI companion"
+    if name:
+        clean, err = validate_name(name)
+        if clean and not err:
+            who = "You are %s, a local AI companion" % clean
+    text = (who + " running on a Raspberry Pi with a Hailo NPU. "
+            "You are small, local, and honest.\n" + _CHARTER_RULES)
+    instruction = LANGUAGES.get(language, LANGUAGES["en"])["instruction"]
+    if instruction:
+        text += "\n" + instruction
+    return text
+
+
+# The charter with no name and in English: what anything gets that does not
+# know the companion's settings (the probe suite, the voice loop in main.py).
+MUSTARDSEED = charter()
 
 # Appended ONLY when data is actually attached. Measured 2026-09-18: naming
 # these markers unconditionally made the model recite them at users on 7 of 20

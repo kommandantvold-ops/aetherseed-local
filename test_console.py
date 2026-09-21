@@ -135,7 +135,11 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         for path in serve.PROXIED_GET:
             with self.subTest(path=path):
                 self.assertEqual(self._req("GET", path)[0], 502)
-        self.assertEqual(self._req("POST", "/api/chat", b"{}")[0], 502)
+        for path in serve.PROXIED_POST:
+            with self.subTest(path=path):
+                self.assertEqual(self._req("POST", path, b"{}")[0], 502)
+        self.assertEqual(set(serve.PROXIED_POST), {"/api/chat", "/aetherseed/setup"},
+                         "a new POST route reaches the proxy only by being added here on purpose")
 
     def test_the_model_cannot_be_reached_around_the_guards(self):
         # /api/generate goes to the model with none of the proxy's guards.
@@ -149,7 +153,7 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self._req("GET", "/nope")
         self.assertEqual(serve._counts["page"], before["page"] + 1)
         self.assertEqual(serve._counts["refused"], before["refused"] + 1)
-        self.assertEqual(set(serve._counts), {"page", "status", "record", "chat", "refused"},
+        self.assertEqual(set(serve._counts), {"page", "status", "record", "chat", "setup", "refused"},
                          "the heartbeat keeps counts by route and nothing else")
 
 

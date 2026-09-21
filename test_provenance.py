@@ -216,6 +216,65 @@ class TestRecordQuestion(unittest.TestCase):
         self.assertIn("2 turns were things", two)
 
 
+class TestNorwegian(unittest.TestCase):
+    """The gates in the language the device offers besides English.
+
+    Measured 2026-09-21 before these patterns existed: "Skriv et kort dikt om
+    en hval som heter Bjørn" was read as FACTUAL, so the poem would have been
+    stored as fact, and "Hva har du tatt feil om?" went to the model instead
+    of the record. These fail without the Norwegian patterns.
+    """
+
+    def test_norwegian_fiction_framing_is_caught(self):
+        from logic.provenance import detect_mode
+        for msg in ("Skriv et kort dikt om en hval som heter Bjørn.",
+                    "Fortell meg en historie om en drage",
+                    "Kan du finne på et navn til katten?",
+                    "Lat som du er en sjørøver",
+                    "Hva om jorda var flat?",
+                    "Gi meg en vits",
+                    "Dikt opp en fortelling om Bergen"):
+            with self.subTest(msg=msg):
+                self.assertEqual(detect_mode(msg)[0], FICTION)
+
+    def test_ordinary_norwegian_stays_factual(self):
+        from logic.provenance import detect_mode
+        for msg in ("Hva er hovedstaden i Norge?", "Hvor mange sider har en sekskant?",
+                    "Forklar fotosyntese", "Skriv en e-post til sjefen min",
+                    "Hva er klokka?"):
+            with self.subTest(msg=msg):
+                self.assertEqual(detect_mode(msg)[0], FACTUAL)
+
+    def test_the_norwegian_record_question_is_recognised(self):
+        from logic.provenance import is_record_question
+        for msg in ("Hva har du tatt feil om?", "Har du noen gang funnet på noe?",
+                    "Vis meg loggen din", "Hvilke feil har du gjort?"):
+            with self.subTest(msg=msg):
+                self.assertTrue(is_record_question(msg))
+        for msg in ("Hva er feil med bilen min?", "Vis meg veien til Oslo"):
+            with self.subTest(msg=msg):
+                self.assertFalse(is_record_question(msg))
+
+    def test_the_norwegian_record_states_its_scope_even_when_empty(self):
+        from logic.provenance import summarise_record
+        self.assertIn("rett og slett tok feil", summarise_record([], language="nb"))
+        out = summarise_record([{"at": "t", "mode_stored": FACTUAL, "prompt": "q",
+                                 "answer": "a"}], language="nb")
+        self.assertIn("Ingenting i den er merket", out)
+        self.assertIn("Det loggen ikke kan fortelle deg", out)
+
+    def test_an_unknown_language_falls_back_to_english(self):
+        from logic.provenance import summarise_record
+        self.assertEqual(summarise_record([], language="xx"), summarise_record([]))
+
+    def test_an_unchecked_answer_is_not_called_an_invention(self):
+        from logic.provenance import summarise_record, UNVERIFIED
+        out = summarise_record([{"at": "t", "mode_stored": UNVERIFIED, "honesty_high": 0,
+                                 "checked": False, "prompt": "q", "answer": "a"}])
+        self.assertIn("could not check an answer", out)
+        self.assertNotIn("source I could not have had", out)
+
+
 class TestMigration(unittest.TestCase):
     def test_a_database_without_the_column_gains_it(self):
         # NOTE: root_dir IS the aetherroot directory - the db lands at

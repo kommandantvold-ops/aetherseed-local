@@ -309,6 +309,71 @@ class TestStreamGuard(unittest.TestCase):
         self.assertIn("num_predict", SCRIPT["last_request"]["options"])
         self.assertTrue(SCRIPT["last_request"]["stream"])
 
+    # ---- streaming: what is sent while the answer is still being written ----
+    #
+    # Since 2026-09-21 the handler forwards each line the moment the loop
+    # decides it (Andreas: "Dont hold back replies"). These use the emit hook
+    # directly, so they test the loop and not the HTTP plumbing.
+
+    def run_streamed(self, chunks):
+        SCRIPT["chunks"] = chunks
+        emitted = []
+        raw, ai = proxy.call_hailo_chat("llama3.2:3b", [{"role": "user", "content": "x"}],
+                                        emit=emitted.append)
+        lines = [json.loads(l) for l in raw.decode().split("\n") if l.strip()]
+        shown = "".join(json.loads(l).get("message", {}).get("content", "") for l in emitted)
+        return lines, emitted, shown, ai
+
+    def test_everything_but_the_terminator_is_emitted_in_order(self):
+        lines, emitted, shown, ai = self.run_streamed(["Oslo", " is", " the", " capital", "."])
+        self.assertEqual([json.loads(e) for e in emitted], lines[:-1])
+        self.assertTrue(lines[-1]["done"])
+        self.assertFalse(any(json.loads(e).get("done") for e in emitted))
+
+    def test_what_was_shown_is_what_was_stored(self):
+        for chunks in (["Oslo", "."],
+                       ["A", ".", " \n\n", "tail"],
+                       ["Six", ".", " (Verified)", " [END", " MEMORY", " CONTEXT", "]", " x"]):
+            with self.subTest(chunks=chunks):
+                lines, emitted, shown, ai = self.run_streamed(chunks)
+                shown_all = shown + lines[-1].get("message", {}).get("content", "")
+                self.assertEqual(shown_all.rstrip(), ai.rstrip())
+
+    def test_a_marker_split_across_chunks_never_reaches_the_client(self):
+        # THE regression test for the leak found 2026-09-21: with no blank
+        # line before it, "[END MEMORY CONTEXT]" in pieces reached the client
+        # as "[END MEMORY CONTEXT" while only the STORED answer was clean.
+        # Fails without the tail hold. The older test above passes either way
+        # because its example has a blank line first.
+        for chunks in (["Six", ".", " (Verified)", " [END", " MEMORY", " CONTEXT", "]", " tail"],
+                       ["Answer", ".", " [", "WORK", "SPACE", " DATA", "]", " x"]):
+            with self.subTest(chunks=chunks):
+                lines, emitted, shown, ai = self.run_streamed(chunks)
+                text = "".join(l.get("message", {}).get("content", "") for l in lines)
+                for piece in ("[END", "MEMORY", "[WORK", "SPACE", "DATA", "["):
+                    self.assertNotIn(piece, text)
+                    self.assertNotIn(piece, ai)
+                self.assertTrue(lines[-1]["done"])
+
+    def test_a_bracket_that_is_not_a_marker_is_released(self):
+        lines, emitted, shown, ai = self.run_streamed(["See", " [", "1", "]", " above", "."])
+        self.assertIn("[1]", shown)
+        self.assertEqual(ai, "See [1] above.")
+
+    def test_a_marker_prefix_left_at_the_end_is_dropped_everywhere(self):
+        lines, emitted, shown, ai = self.run_streamed(["Done", ".", " [END", " MEM"])
+        text = "".join(l.get("message", {}).get("content", "") for l in lines)
+        self.assertNotIn("[END", text)
+        self.assertNotIn("[END", ai)
+        self.assertEqual(ai.rstrip(), "Done.")
+
+    def test_an_ordinary_answer_is_not_delayed_by_the_hold(self):
+        # Each content chunk goes out in its own line, not coalesced.
+        lines, emitted, shown, ai = self.run_streamed(["Oslo", " is", " nice", "."])
+        contents = [json.loads(e)["message"]["content"] for e in emitted
+                    if json.loads(e).get("message", {}).get("content")]
+        self.assertEqual(contents, ["Oslo", " is", " nice", "."])
+
 
 if __name__ == "__main__":
     unittest.main()

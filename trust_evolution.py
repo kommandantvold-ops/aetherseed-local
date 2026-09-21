@@ -216,7 +216,7 @@ class TrustEvolution:
         pass_rate = (self.state["probes_passed"] / total_probes * 100) if total_probes > 0 else 0
 
         return (
-            f"{tier['emoji']} Horizon | {tier['name']} | "
+            f"{tier['emoji']} Companion | {tier['name']} | "
             f"Trust: {tier['role']} | Resonance: {tier['resonance']}\n"
             f"   Next: {tier['next_tier']} in {tier['resonance_to_next']} resonance\n"
             f"   Integrity: {pass_rate:.0f}% | "

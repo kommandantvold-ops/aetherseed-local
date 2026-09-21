@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Horizon</title>
+<title>Companion</title>
 <style>
 :root{
   --ground:#0C1110; --surface:#131A18; --surface-2:#1B2421; --line:#25322D;
@@ -34,7 +34,7 @@ header{
   padding:12px 16px; background:var(--surface); border-bottom:1px solid var(--line);
 }
 .mark{font-weight:600; letter-spacing:.01em; font-size:17px}
-.mark span{color:var(--ink-3); font-weight:400; margin-left:8px; font-size:13px}
+.mark #markSub{color:var(--ink-3); font-weight:400; margin-left:8px; font-size:13px}
 .chips{display:flex; gap:7px; flex-wrap:wrap; margin-left:auto; align-items:center}
 .chip{
   font-size:12px; color:var(--ink-2); background:var(--surface-2);
@@ -95,44 +95,159 @@ textarea:focus{outline:none; border-color:var(--accent)}
 .cursor::after{content:"▍"; color:var(--accent); animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
 @media (max-width:560px){ .chips{width:100%; margin-left:0} }
+
+/* First run: the owner names the companion and picks its language. */
+.setup{position:fixed; inset:0; background:var(--ground); display:flex;
+  align-items:center; justify-content:center; padding:24px; z-index:10}
+.setup[hidden]{display:none}
+.card{width:100%; max-width:520px; background:var(--surface); border:1px solid var(--line);
+  border-radius:14px; padding:28px 26px}
+.card h1{font-size:20px; font-weight:600; margin:0 0 6px}
+.card .help{color:var(--ink-3); font-size:13px; margin:0 0 16px}
+.langs{display:flex; flex-direction:column; gap:10px; margin-top:16px}
+.lang{display:block; text-align:left; width:100%; padding:14px 16px; font-size:16px;
+  color:var(--ink); background:var(--surface-2)}
+.lang small{display:block; color:var(--ink-3); font-size:12px; margin-top:4px}
+.card input{width:100%; font:inherit; font-size:18px; color:var(--ink); background:var(--ground);
+  border:1px solid var(--line); border-radius:var(--radius); padding:11px 12px}
+.card input:focus{outline:none; border-color:var(--accent)}
+.card .err{color:var(--alarm); font-size:13px; margin:8px 0 0}
+.card .row{display:flex; justify-content:space-between; margin-top:18px; gap:10px}
 </style>
 </head>
 <body>
 <header>
-  <div class="mark">Horizon<span>local companion</span></div>
+  <div class="mark"><span id="markName"></span><span id="markSub"></span></div>
   <div class="chips">
-    <span class="chip"><span class="dot" id="health"></span><span id="healthText">checking</span></span>
-    <span class="chip">trust <b id="trust">–</b></span>
-    <span class="chip">memory <b id="episodes">–</b></span>
+    <span class="chip"><span class="dot" id="health"></span><span id="healthText"></span></span>
+    <span class="chip"><span id="trustLabel"></span> <b id="trust">–</b></span>
+    <span class="chip"><span id="memoryLabel"></span> <b id="episodes">–</b></span>
     <span class="chip" id="modelChip">–</span>
-    <button id="recordBtn" title="Answered from the node's own record, not by the model">What have you gotten wrong?</button>
+    <button id="recordBtn"></button>
   </div>
 </header>
 
 <main id="main">
   <div class="wrap" id="transcript">
-    <div class="note" id="intro">
-      Everything here runs on this device. Nothing is sent anywhere.<br>
-      Answers are bounded and their provenance is shown — fiction is labelled and is never used to answer a question of fact.
-    </div>
+    <div class="note" id="intro"><span id="intro1"></span><br><span id="intro2"></span></div>
   </div>
 </main>
 
 <footer>
   <div class="composer">
-    <textarea id="input" rows="1" placeholder="Ask, or ask for something made up…" autofocus></textarea>
-    <button class="send" id="send">Send</button>
+    <textarea id="input" rows="1" autofocus></textarea>
+    <button class="send" id="send"></button>
   </div>
   <div class="hint">
-    <span>Enter to send · Shift+Enter for a new line</span>
+    <span id="hintText"></span>
     <span id="bounds"></span>
   </div>
 </footer>
+
+<div class="setup" id="setup" hidden>
+  <div class="card">
+    <div id="stepLang">
+      <h1>Choose a language · Velg språk</h1>
+      <div class="langs" id="langList"></div>
+    </div>
+    <form id="stepName" hidden>
+      <h1 id="nameTitle"></h1>
+      <p class="help" id="nameHelp"></p>
+      <input id="nameInput" maxlength="24" autocomplete="off" spellcheck="false">
+      <p class="err" id="nameError" hidden></p>
+      <div class="row">
+        <button type="button" id="backBtn"></button>
+        <button type="submit" class="send" id="nameGo"></button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const transcript = $('transcript'), main = $('main'), input = $('input'), send = $('send');
 let busy = false;
+
+// Everything the console says, in each language the device offers. Model
+// output is never put through here - only the console's own words.
+const T = {
+  en: {
+    sub: 'local companion', checking: 'checking', up: 'on device', down: 'unreachable',
+    trust: 'trust', memory: 'memory', record: 'What have you gotten wrong?',
+    intro1: 'Everything here runs on this device. Nothing is sent anywhere.',
+    intro2: 'Answers are bounded and their provenance is shown — fiction is labelled and is never used to answer a question of fact.',
+    placeholder: (n) => `Talk to ${n}…`, send: 'Send',
+    hint: 'Enter to send · Shift+Enter for a new line',
+    you: 'you', recordWho: 'the record — read from the log, not written by the model',
+    fiction: 'Fiction, at your request',
+    unverified: 'Unverified source — not used as memory',
+    unchecked: 'Not checked for invented sources — not used as memory',
+    usedMemory: 'used memory', usedTools: 'used tools',
+    fromRecord: 'from the record, not the model',
+    noAnswer: 'The companion did not answer.', cutOff: 'The answer was cut off.',
+    noRecord: 'Could not read the record.',
+    nameTitle: 'What would you like to call your companion?',
+    nameHelp: 'Letters, digits, spaces and hyphens — up to 24 characters.',
+    back: 'Back', go: 'Continue',
+    errors: { required: 'Please choose a name.', too_long: 'At most 24 characters.',
+              characters: 'Letters, digits, spaces, hyphens and apostrophes only.',
+              no_letter: 'A name needs at least one letter.', unknown_language: 'Unknown language.',
+              network: 'The companion is not answering. Try again in a moment.' },
+    bounds: (b) => `bounds: paragraph · ${b.soft_stop_tokens} tok · ${b.num_predict} cap · ${b.wall_clock_s}s · prompt ceiling ${b.prompt_ceiling}`,
+    tiers: {},
+  },
+  nb: {
+    sub: 'lokal følgesvenn', checking: 'sjekker', up: 'på enheten', down: 'får ikke kontakt',
+    trust: 'tillit', memory: 'minne', record: 'Hva har du tatt feil om?',
+    intro1: 'Alt her kjører på denne enheten. Ingenting sendes noe sted.',
+    intro2: 'Svarene er avgrenset, og det vises hvor de kommer fra — fiksjon merkes og brukes aldri til å svare på faktaspørsmål.',
+    placeholder: (n) => `Snakk med ${n}…`, send: 'Send',
+    hint: 'Enter for å sende · Shift+Enter for ny linje',
+    you: 'du', recordWho: 'loggen — lest fra fila, ikke skrevet av modellen',
+    fiction: 'Fiksjon, som du ba om',
+    unverified: 'Kilde som ikke kan bekreftes — brukes ikke som minne',
+    unchecked: 'Ikke sjekket for oppdiktede kilder — brukes ikke som minne',
+    usedMemory: 'brukte minne', usedTools: 'brukte verktøy',
+    fromRecord: 'fra loggen, ikke fra modellen',
+    noAnswer: 'Følgesvennen svarte ikke.', cutOff: 'Svaret ble avbrutt.',
+    noRecord: 'Kunne ikke lese loggen.',
+    nameTitle: 'Hva vil du kalle følgesvennen din?',
+    nameHelp: 'Bokstaver, tall, mellomrom og bindestrek — opptil 24 tegn.',
+    back: 'Tilbake', go: 'Fortsett',
+    errors: { required: 'Velg et navn.', too_long: 'Høyst 24 tegn.',
+              characters: 'Bare bokstaver, tall, mellomrom, bindestrek og apostrof.',
+              no_letter: 'Navnet må ha minst én bokstav.', unknown_language: 'Ukjent språk.',
+              network: 'Følgesvennen svarer ikke. Prøv igjen om litt.' },
+    bounds: (b) => `grenser: avsnitt · ${b.soft_stop_tokens} tok · tak ${b.num_predict} · ${b.wall_clock_s} s · maks ${b.prompt_ceiling} tok inn`,
+    tiers: { observer: 'observatør', reader: 'leser', writer: 'skribent', builder: 'bygger',
+             collaborator: 'samarbeidspartner', autonomous: 'selvstendig' },
+  },
+};
+
+let lang = 'en';                 // the console's language: the companion's once chosen
+let name = null;                 // the companion's name: null until its owner chooses one
+let setupLang = null;            // the language picked on the first setup screen
+let lastBounds = null;
+const t = () => T[lang] || T.en;
+
+function applyLanguage() {
+  const s = t();
+  document.documentElement.lang = lang;
+  $('markSub').textContent = s.sub;
+  $('trustLabel').textContent = s.trust;
+  $('memoryLabel').textContent = s.memory;
+  $('recordBtn').textContent = s.record;
+  $('intro1').textContent = s.intro1;
+  $('intro2').textContent = s.intro2;
+  send.textContent = s.send;
+  $('hintText').textContent = s.hint;
+  if (name) {
+    $('markName').textContent = name;
+    input.placeholder = s.placeholder(name);
+    document.title = name;
+  }
+  if (lastBounds) $('bounds').textContent = s.bounds(lastBounds);
+}
 
 const scroll = () => { main.scrollTop = main.scrollHeight; };
 
@@ -145,46 +260,47 @@ function turn(who, cls) {
   return { root: t, body: b };
 }
 
-function provenance(t, p) {
+// The tag the node recorded for this answer. Arrives on the last line of the
+// stream, after the answer itself, because the check needs the whole answer.
+function provenance(turnEl, p) {
   if (!p) return;
+  const s = t();
   const row = document.createElement('div'); row.className = 'prov';
   const tag = (text, kind) => {
-    const s = document.createElement('span'); s.className = 'tag ' + kind;
-    s.textContent = text; row.append(s);
+    const e = document.createElement('span'); e.className = 'tag ' + kind;
+    e.textContent = text; row.append(e);
   };
-  if (p.withheld) {
-    // The bubble already holds the node's own explanation, sent in place of
-    // the answer. The tag says the same thing in the badge row.
-    t.root.classList.add('flagged');
-    tag(p.withheld_reason === 'check_failed'
-        ? 'Held back — could not be checked'
-        : 'Held back — cited a source that could not be verified', 'flagged');
+  if (p.checked === false) {
+    turnEl.root.classList.add('flagged');
+    tag(s.unchecked, 'flagged');
   } else if (p.unbacked_sources > 0) {
-    t.root.classList.add('flagged');
-    tag('Unverified source — not kept as memory', 'flagged');
+    turnEl.root.classList.add('flagged');
+    tag(s.unverified, 'flagged');
   } else if (p.mode === 'fiction') {
-    t.root.classList.add('fiction');
-    tag('Fiction, at your request', 'fiction');
+    turnEl.root.classList.add('fiction');
+    tag(s.fiction, 'fiction');
+  } else if (p.mode === 'record') {
+    tag(s.fromRecord, 'quiet');
   }
-  // Why a turn was treated as fiction. Shown only for fiction: next to a
-  // held-back answer, the fiction detector's reasoning is just noise.
+  // Why a turn was treated as fiction. Shown only there: beside anything
+  // else, the fiction detector's reasoning is noise.
   if (p.why && p.mode === 'fiction') {
     const w = document.createElement('span'); w.className = 'why'; w.textContent = p.why; row.append(w);
   }
-  if (p.memory_used) tag('used memory', 'quiet');
-  if (p.used_tools) tag('used tools', 'quiet');
-  if (row.children.length) t.root.append(row);
+  if (p.memory_used) tag(s.usedMemory, 'quiet');
+  if (p.used_tools) tag(s.usedTools, 'quiet');
+  if (row.children.length) turnEl.root.append(row);
   scroll();
 }
 
 async function ask(text) {
-  if (busy || !text.trim()) return;
+  if (busy || !name || !text.trim()) return;
   busy = true; send.disabled = true; $('intro')?.remove();
-  turn('you', 'you').body.textContent = text;
-  const t = turn('horizon', 'node');
-  t.body.classList.add('cursor');
+  turn(t().you, 'you').body.textContent = text;
+  const tn = turn(name, 'node');
+  tn.body.classList.add('cursor');
 
-  let prov = null;
+  let prov = null, cut = false;
   try {
     const res = await fetch('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -204,17 +320,23 @@ async function ask(text) {
         if (!line) continue;
         let d; try { d = JSON.parse(line); } catch { continue; }
         const c = d.message?.content;
-        if (c) { t.body.textContent += c; scroll(); }
+        if (c) { tn.body.textContent += c; scroll(); }
         if (d.aetherseed) prov = d.aetherseed;
+        if (d.done && d.done_reason === 'error') cut = true;
       }
     }
   } catch (e) {
-    t.body.textContent = t.body.textContent ||
-      'The node did not answer. ' + (e.message || '');
-    t.root.classList.add('flagged');
+    if (!tn.body.textContent) tn.body.textContent = t().noAnswer;
+    cut = true;
   } finally {
-    t.body.classList.remove('cursor');
-    provenance(t, prov);
+    tn.body.classList.remove('cursor');
+    if (cut) {
+      tn.root.classList.add('flagged');
+      const row = document.createElement('div'); row.className = 'prov';
+      const e = document.createElement('span'); e.className = 'tag flagged';
+      e.textContent = t().cutOff; row.append(e); tn.root.append(row);
+    }
+    provenance(tn, prov);
     busy = false; send.disabled = false; input.focus();
   }
 }
@@ -228,34 +350,107 @@ input.addEventListener('input', () => {
 });
 
 $('recordBtn').onclick = async () => {
+  if (!name) return;
   $('intro')?.remove();
-  const t = turn('the record — read from the log, not written by the model', 'node');
+  const tr = turn(t().recordWho, 'node');
   try {
     const r = await fetch('/aetherseed/record');
     const d = await r.json();
-    t.body.className = 'record';
-    t.body.textContent = d.summary || 'no record';
+    tr.body.className = 'record';
+    tr.body.textContent = d.summary || '';
   } catch {
-    t.body.textContent = 'Could not read the record.';
-    t.root.classList.add('flagged');
+    tr.body.textContent = t().noRecord;
+    tr.root.classList.add('flagged');
   }
   scroll();
 };
 
+// ---- first run --------------------------------------------------------------
+function showSetup(languages) {
+  const setup = $('setup');
+  if (!setup.hidden) return;
+  const list = $('langList'); list.replaceChildren();
+  for (const l of languages || [{ code: 'en', label: 'English', note: '' }]) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'lang'; b.textContent = l.label;
+    if (l.note) { const sm = document.createElement('small'); sm.textContent = l.note; b.append(sm); }
+    b.onclick = () => chooseLanguage(l.code);
+    list.append(b);
+  }
+  $('stepLang').hidden = false; $('stepName').hidden = true;
+  setup.hidden = false;
+  send.disabled = true; input.disabled = true;
+  list.querySelector('button')?.focus();
+}
+
+function chooseLanguage(code) {
+  setupLang = code;
+  const s = T[code] || T.en;
+  $('nameTitle').textContent = s.nameTitle;
+  $('nameHelp').textContent = s.nameHelp;
+  $('backBtn').textContent = s.back;
+  $('nameGo').textContent = s.go;
+  $('nameError').hidden = true;
+  $('stepLang').hidden = true; $('stepName').hidden = false;
+  $('nameInput').focus();
+}
+
+$('backBtn').onclick = () => { $('stepName').hidden = true; $('stepLang').hidden = false; };
+
+$('stepName').onsubmit = async (e) => {
+  e.preventDefault();
+  const s = T[setupLang] || T.en;
+  const err = $('nameError');
+  const value = $('nameInput').value.trim();
+  if (!value) { err.textContent = s.errors.required; err.hidden = false; return; }
+  $('nameGo').disabled = true;
+  try {
+    const r = await fetch('/aetherseed/setup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: value, language: setupLang })
+    });
+    const d = await r.json();
+    if (!r.ok) { err.textContent = s.errors[d.code] || d.error || s.errors.network; err.hidden = false; return; }
+    applyCompanion(d.companion);
+    $('setup').hidden = true;
+    send.disabled = false; input.disabled = false; input.focus();
+  } catch {
+    err.textContent = s.errors.network; err.hidden = false;
+  } finally {
+    $('nameGo').disabled = false;
+  }
+};
+
+function applyCompanion(c) {
+  name = c && c.configured ? c.name : null;
+  lang = (c && c.language) || 'en';
+  applyLanguage();
+}
+
+// ---- status -----------------------------------------------------------------
 async function status() {
   try {
     const d = await (await fetch('/aetherseed/status')).json();
-    $('health').className = 'dot up'; $('healthText').textContent = 'on device';
-    $('trust').textContent = d.trust_level ?? '–';
+    const c = d.companion || { configured: false };
+    if (c.configured) {
+      if (c.name !== name || c.language !== lang) applyCompanion(c);
+    } else {
+      name = null;
+      showSetup(d.languages);
+    }
+    const s = t();
+    $('health').className = 'dot up'; $('healthText').textContent = s.up;
+    $('trust').textContent = s.tiers[d.trust_level] || d.trust_level || '–';
     $('episodes').textContent = d.episodes ?? '–';
     $('modelChip').textContent = d.model ?? '–';
-    const b = d.bounds || {};
-    $('bounds').textContent =
-      `bounds: paragraph · ${b.soft_stop_tokens} tok · ${b.num_predict} cap · ${b.wall_clock_s}s · prompt ceiling ${b.prompt_ceiling}`;
+    lastBounds = d.bounds || null;
+    if (lastBounds) $('bounds').textContent = s.bounds(lastBounds);
   } catch {
-    $('health').className = 'dot down'; $('healthText').textContent = 'node unreachable';
+    $('health').className = 'dot down'; $('healthText').textContent = t().down;
   }
 }
+applyLanguage();
+$('healthText').textContent = t().checking;
 status(); setInterval(status, 15000);
 </script>
 </body>

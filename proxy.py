@@ -46,13 +46,15 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 # The charter lives in exactly one place now. proxy.py previously kept its
 # own copy, which had already drifted from prompt_builder's (223 vs 210
 # tokens, different final paragraph).
-from logic.prompt_builder import MUSTARDSEED as MUSTARDSEED_SEED
+from logic.prompt_builder import charter
+from logic import companion
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 sanitize_model_output, first_paragraph,
                                 ends_sentence, cut_at_scaffold_marker,
                                 strip_leading_artefacts, opening_may_be_artefact,
+                                marker_prefix_len,
                                 PromptTooLarge, TokenizerUnavailable)
 from logic.provenance import (detect_mode, resolve_mode, is_record_question,
                              summarise_record, FICTION, UNVERIFIED)
@@ -91,6 +93,26 @@ spark = AetherSpark({
 # can rewrite it, and the node can be asked to recite it - see
 # _answer_from_the_record(). Decided with Andreas 2026-09-19.
 PROVENANCE_LOG = os.path.expanduser("~/.aetherseed/provenance.log")
+# The owner's choices from first run: what the companion is called, and what
+# it speaks. See logic/companion.py.
+COMPANION_FILE = os.path.expanduser("~/.aetherseed/companion.json")
+
+
+def _settings():
+    """(name, language) - no name, English, until the owner has chosen."""
+    c = companion.load(COMPANION_FILE)
+    return (c["name"], c["language"]) if c else (None, companion.DEFAULT_LANGUAGE)
+
+
+_TOO_LARGE = {
+    "en": ("That request is too large for this device to process. "
+           "The local model accepts about 864 tokens of context and "
+           "this exceeds it even after trimming. Try a shorter question "
+           "or a smaller file."),
+    "nb": ("Det er for mye for denne enheten å behandle. Den lokale "
+           "modellen tar imot omtrent 864 tokens, og dette er mer selv "
+           "etter trimming. Prøv et kortere spørsmål eller en mindre fil."),
+}
 
 
 def record(entry: dict):
@@ -160,8 +182,16 @@ GENERATION_OPTIONS = {"num_predict": 80}
 MAX_GENERATION_SECONDS = 90
 
 
-def call_hailo_chat(model: str, messages: list) -> tuple:
+def call_hailo_chat(model: str, messages: list, emit=None) -> tuple:
     """Send chat request to hailo-ollama. Returns (raw_bytes, ai_content).
+
+    emit, if given, is called with each NDJSON line (a str, no newline) the
+    moment it is decided - everything except the terminator, which the caller
+    sends itself once it has attached the provenance badge to it. raw_bytes is
+    always the complete response, terminator included, whether or not emit is
+    used, so the two can be compared: what was streamed is raw minus its last
+    line. Streaming was chosen by Andreas on 2026-09-21 ("Dont hold back
+    replies, they should come with the correct tag").
 
     Every request leaves through here, so the guards live here rather than in a
     prompt builder. Three things are enforced, none of which the server does:
@@ -230,6 +260,15 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     head_raw = ""
     head_artefacts = 0
     HEAD_HOLD_CHARS = 96            # the longest artefact is 44
+
+    # How much of ai_content has already gone out. What a line carries is
+    # always ai_content[sent:...], so what the client has seen is always a
+    # prefix of what is stored - never text the stops later removed. Before
+    # this, each line carried its own trimmed chunk, and a stop that removed
+    # text spanning earlier chunks (a scaffold marker arriving in pieces)
+    # could not take back the pieces already sent.
+    sent = 0
+    held_dropped = 0
     deadline = time.monotonic() + MAX_GENERATION_SECONDS
 
     resp = urllib.request.urlopen(req, timeout=300)
@@ -242,6 +281,8 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
                 d = json.loads(line.decode("utf-8", errors="replace"))
             except json.JSONDecodeError:
                 out_lines.append(line.decode("utf-8", errors="replace"))
+                if emit is not None:
+                    emit(out_lines[-1])
                 continue
 
             msg = d.get("message", {})
@@ -285,27 +326,34 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
                 if not stopped_because:
                     kept, cut = cut_at_scaffold_marker(ai_content)
                     if cut:
-                        excess = len(ai_content) - len(kept)
-                        clean = clean[:max(0, len(clean) - excess)]
-                        msg["content"] = clean
-                        d["message"] = msg
                         ai_content = kept
                         stopped_because = "scaffold-marker"
                 if STOP_AT_PARAGRAPH and not stopped_because:
                     kept, cut = first_paragraph(ai_content)
                     if cut:
-                        # Forward only what precedes the boundary. Everything
-                        # already sent is part of the kept text (plus trailing
-                        # whitespace); trim this chunk so nothing after the
-                        # blank line reaches the caller or the memory store.
-                        excess = len(ai_content) - len(kept)
-                        clean = clean[:max(0, len(clean) - excess)]
+                        # Nothing after the blank line reaches the caller or
+                        # the memory store.
                         ai_content = kept
                         stopped_because = "paragraph"
-                msg["content"] = clean
+
+                # What may go out now: everything decided so far, less a tail
+                # that could still turn into a scaffold marker. If the stream
+                # is ending, that tail is dropped from the answer as well, so
+                # the stored answer is exactly what was shown.
+                hold = marker_prefix_len(ai_content)
+                if hold and (stopped_because or d.get("done")):
+                    ai_content = ai_content[:len(ai_content) - hold]
+                    held_dropped += hold
+                    hold = 0
+                safe_end = len(ai_content) - hold
+                msg["content"] = ai_content[sent:safe_end] if safe_end > sent else ""
+                sent = max(sent, safe_end)
                 d["message"] = msg
 
-            out_lines.append(json.dumps(d))
+            line_out = json.dumps(d)
+            out_lines.append(line_out)
+            if emit is not None and not d.get("done"):
+                emit(line_out)
 
             if d.get("done"):
                 if d.get("done_reason") == "length":
@@ -320,6 +368,17 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
                 break
     finally:
         resp.close()          # abandon the rest; the server frees promptly
+
+    # The wall-clock stop breaks out after a line has gone, so a held tail can
+    # still be sitting in ai_content. It was never shown; it is not stored.
+    hold = marker_prefix_len(ai_content)
+    if hold:
+        ai_content = ai_content[:len(ai_content) - hold]
+        held_dropped += hold
+    if held_dropped:
+        print(f"[generation] held back {held_dropped} character(s) that could "
+              f"have been the start of a scaffold marker - not shown, not "
+              f"stored", flush=True)
 
     # Backstop. The head buffer above should leave nothing for this to do; it
     # covers the case where the opening ran past HEAD_HOLD_CHARS before it
@@ -346,107 +405,59 @@ def call_hailo_chat(model: str, messages: list) -> tuple:
     return raw, ai_content
 
 
-def _annotate_terminator(raw: bytes, provenance: dict) -> bytes:
-    """Attach provenance to the last NDJSON line of a response.
+class _Stream:
+    """Writes NDJSON lines to the client as they are decided.
 
-    The stream's shape is not changed and no new line type is invented: extra
-    keys on the terminator are ignored by an ollama-shaped client and read by
-    one that knows to look. That matters because the GUI is not the only thing
-    that may ever consume this.
+    Headers go out with the first line, not before: until then the handler can
+    still answer some other way (the prompt-too-large message, a 502), because
+    nothing has been promised to the client yet. After it, the status line is
+    spent, and an error can only be reported inside the stream.
     """
-    try:
-        text = raw.decode("utf-8")
-        lines = [l for l in text.split("\n") if l.strip()]
-        if not lines:
-            return raw
-        last = json.loads(lines[-1])
-        last["aetherseed"] = provenance
-        lines[-1] = json.dumps(last)
-        return ("\n".join(lines) + "\n").encode("utf-8")
-    except Exception as e:
-        # A response the caller can read beats a provenance badge. Losing the
-        # badge is visible in the UI; corrupting the stream would not be.
-        print(f"[provenance] could not annotate the terminator: {e!r}", flush=True)
-        return raw
+
+    def __init__(self, handler):
+        self.h = handler
+        self.started = False
+        self.lines = 0
+
+    def __call__(self, line: str):
+        if not self.started:
+            self.h.send_response(200)
+            self.h.send_header("Content-Type", "application/x-ndjson")
+            self.h.end_headers()
+            self.started = True
+        self.h.wfile.write((line + "\n").encode("utf-8"))
+        self.h.wfile.flush()
+        self.lines += 1
 
 
-# ============================================================
-# HOLDING AN ANSWER BACK
-# ============================================================
-# Decided 2026-09-21 by Andreas, choosing between streaming the answer as it is
-# generated and keeping the buffer the proxy has always had: "hold it back".
-#
-# The proxy has never streamed to its client. call_hailo_chat collects the
-# whole generation and the handler sends it in one write, and that has been so
-# since the first commit. Until now the buffer bought nothing: an answer that
-# honesty_check had flagged for an invented source was sent anyway, in full,
-# with a badge on it. Now it is not sent at all.
-#
-# THE WHOLE ANSWER is withheld, not the offending span or its sentence. The
-# fabrications this device has actually produced arrive as a claim spread over
-# several sentences - an invented paper, then its journal, then its DOI - and
-# only the DOI is something a pattern can see:
-#
-#     "I don't know... However, there is a paper... published in Nature
-#      Machine Intelligence. The DOI is 10.1038/s13723-020-00065-7"  (step 8b)
-#
-# Removing the DOI, or the sentence holding it, leaves the invented paper
-# standing. What reaches the reader instead says what happened and nothing
-# the model made up.
-#
-# If the check itself cannot run, the answer is held back too. An answer
-# nobody could check for invented sources is not one this device vouches for;
-# and a guard that fails should fail where everyone can see it, which this
-# does - every answer would say so.
+def _terminator(raw: bytes, model: str, provenance: dict) -> str:
+    """The final NDJSON line, with the provenance badge attached.
 
-_SOURCE_WORDS = {"doi": "a DOI", "url": "a web address", "citation": "a citation",
-                 "volpage": "a journal reference", "isbn": "an ISBN"}
+    Carried on the terminator rather than a line of its own: an ollama-shaped
+    client ignores keys it does not know, and inventing a new line type would
+    break every existing consumer. It is the LAST thing sent because it is the
+    only thing that needs the whole answer - the check runs on the complete
+    text - and everything before it has already been streamed.
 
-
-def withheld_message(reason: str, kinds=()) -> str:
-    """What the reader sees instead. Built only from the KINDS of source that
-    were found - never from the found text, which is the thing being held back.
-    Short, and written to be spoken aloud as well as read."""
-    if reason == "check_failed":
-        return ("I've held that answer back. I couldn't check it for invented "
-                "sources, and I won't show you an answer I couldn't check.")
-    words = [_SOURCE_WORDS.get(k, "a source") for k in dict.fromkeys(kinds)]
-    if not words:
-        what = "a source"
-    elif len(words) == 1:
-        what = words[0]
-    else:
-        what = ", ".join(words[:-1]) + " and " + words[-1]
-    return ("I've held that answer back. It included %s I can't verify, and I "
-            "won't show you a source I may have made up." % what)
-
-
-def _withhold(raw: bytes, model: str, message: str) -> bytes:
-    """Replace everything the model said with `message`, keeping one terminator.
-
-    Built from scratch rather than by editing the model's lines, and it NEVER
-    returns `raw`. A function whose job is to keep an invented source from a
-    reader cannot have an error path that hands the source over anyway.
-    _annotate_terminator fails open on purpose - a missing badge is visible.
-    This one fails closed on purpose - a leaked DOI would not be.
+    Always returns a terminator. If raw does not end in one (the server closed
+    early, or its last line is unreadable), one is made, so the client is
+    never left waiting and the badge is never missing.
     """
-    terminator = {"model": model, "message": {"role": "assistant", "content": ""},
-                  "done": True, "done_reason": "stop"}
+    last = None
     try:
         for line in reversed(raw.decode("utf-8", errors="replace").split("\n")):
-            if not line.strip():
-                continue
-            last = json.loads(line)
-            if isinstance(last, dict) and last.get("done"):
-                last["message"] = {"role": "assistant", "content": ""}
-                terminator = last
-            break
+            if line.strip():
+                cand = json.loads(line)
+                if isinstance(cand, dict) and cand.get("done"):
+                    last = cand
+                break
     except Exception:
-        pass          # the synthetic terminator above stands
-    content = {"model": terminator.get("model", model),
-               "message": {"role": "assistant", "content": message},
-               "done": False}
-    return (json.dumps(content) + "\n" + json.dumps(terminator) + "\n").encode("utf-8")
+        last = None
+    if last is None:
+        last = {"model": model, "message": {"role": "assistant", "content": ""},
+                "done": True, "done_reason": "stop"}
+    last["aetherseed"] = provenance
+    return json.dumps(last)
 
 
 # ============================================================
@@ -505,7 +516,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except FileNotFoundError:
             pass
 
-        text = summarise_record(entries)
+        text = summarise_record(entries, language=_settings()[1])
         print(f"[provenance] answered from the record ({len(entries)} turns, "
               f"model not called)", flush=True)
 
@@ -515,7 +526,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                json.dumps({"model": model,
                            "message": {"role": "assistant", "content": ""},
                            "done": True, "done_reason": "stop",
-                           "source": "provenance-record"})]
+                           "source": "provenance-record",
+                           # Tagged like every other reply, so the reader can
+                           # tell this came from the log and not the model.
+                           "aetherseed": {"mode": "record", "checked": True,
+                                          "unbacked_sources": 0, "unsourced_figures": 0,
+                                          "used_tools": False, "memory_used": False}})]
         raw = ("\n".join(out) + "\n").encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
@@ -575,7 +591,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 workspace_data = result
 
         # ---- BUILD SYSTEM PROMPT ----
-        system_prompt = MUSTARDSEED_SEED
+        c_name, c_lang = _settings()
+        system_prompt = charter(c_name, c_lang)
 
         # AetherRoot: inject memory context
         if request_mode == FICTION:
@@ -611,14 +628,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # Forward to hailo-ollama
         try:
-            raw_response, ai_content = call_hailo_chat(model, messages)
+            stream = _Stream(self)
+            raw_response, ai_content = call_hailo_chat(model, messages, emit=stream)
         except PromptTooLarge as e:
+            # Raised before anything is generated, so nothing has been sent.
             # Say so. The alternative is an empty reply the user cannot explain.
             print(f"[token-budget] REFUSED: {e}", flush=True)
-            msg = ("That request is too large for this device to process. "
-                   "The local model accepts about 864 tokens of context and "
-                   "this exceeds it even after trimming. Try a shorter question "
-                   "or a smaller file.")
+            msg = _TOO_LARGE.get(_settings()[1], _TOO_LARGE["en"])
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
             self.end_headers()
@@ -635,15 +651,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": str(e)}).encode())
             return
         except Exception as e:
+            if stream.started:
+                # Part of an answer is already on the client's screen. The
+                # status line is spent; end the stream so it does not hang,
+                # and say what happened. Not stored: an answer cut off by a
+                # failure is not something to build on.
+                print(f"[generation] failed mid-stream after {stream.lines} "
+                      f"line(s): {e!r}", flush=True)
+                try:
+                    stream(json.dumps({"model": model,
+                                       "message": {"role": "assistant", "content": ""},
+                                       "done": True, "done_reason": "error",
+                                       "error": str(e)[:200]}))
+                except Exception:
+                    pass
+                return
             self.send_response(502)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode())
             return
 
-        # Provenance is computed BEFORE the response goes out, so it can go
-        # out with it. A UI that has to ask afterwards races the next turn,
-        # and a provenance badge that arrives late is a badge nobody trusts.
+        # The answer has been streamed as it was generated. The check needs
+        # the whole of it, so it runs now, and its verdict goes out on the
+        # last line - the correct tag, arriving with the end of the answer.
         tool_outputs = (workspace_data,) if workspace_data else ()
         report = None
         check_failed = False
@@ -660,44 +691,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         stored_mode = resolve_mode(
             request_mode, honesty_high=len(report.high) if report is not None else 0)
         if check_failed:
-            # Nobody checked it, so it may not come back later as context.
+            # Nobody checked it for invented sources, so it may not come back
+            # later as context - and the tag says it was not checked, rather
+            # than showing nothing and looking clean.
             stored_mode = UNVERIFIED
 
-        # ---- HOLD IT BACK ----
-        # See withheld_message() above for why the whole answer, and why a
-        # failed check counts.
-        withheld_reason = None
-        if check_failed:
-            withheld_reason = "check_failed"
-        elif report is not None and report.high:
-            withheld_reason = "unbacked_source"
-        if withheld_reason:
-            kinds = [f.kind for f in report.high] if report is not None else []
-            raw_response = _withhold(raw_response, model,
-                                     withheld_message(withheld_reason, kinds))
-            print(f"[honesty] WITHHELD ({withheld_reason}"
-                  + (": " + ", ".join(dict.fromkeys(kinds)) if kinds else "")
-                  + ") - the answer was not shown", flush=True)
-
-        # Carried on the final NDJSON line rather than a line of its own:
-        # an ollama-shaped client ignores keys it does not know, and inventing
-        # a new line type would break every existing consumer.
-        raw_response = _annotate_terminator(raw_response, {
+        stream(_terminator(raw_response, model, {
             "mode": stored_mode,
             "mode_requested": request_mode,
             "why": mode_reason,
+            "checked": not check_failed,
             "unbacked_sources": len(report.high) if report is not None else 0,
             "unsourced_figures": len(report.medium) if report is not None else 0,
             "used_tools": bool(workspace_data),
             "memory_used": bool(memory_context),
-            "withheld": bool(withheld_reason),
-            "withheld_reason": withheld_reason,
-        })
-
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson")
-        self.end_headers()
-        self.wfile.write(raw_response)
+        }))
 
         # Store in AetherRoot
         if ai_content:
@@ -779,7 +787,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "resonance": resonance,
                 "used_tools": bool(workspace_data),
                 "declined": bool(declined),
-                "withheld": withheld_reason,
+                "checked": not check_failed,
                 "remembered": not failed_to_invent,
                 "prompt": user_msg[:160],
                 "answer": ai_content[:160],
@@ -813,6 +821,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "episodes": rs.get("episodes"),
                 "willingness": rs.get("willingness_mean"),
                 "model": "llama3.2:3b",
+                "companion": companion.public(companion.load(COMPANION_FILE)),
+                "languages": companion.language_choices(),
                 "bounds": {
                     "paragraph_stop": STOP_AT_PARAGRAPH,
                     "soft_stop_tokens": SOFT_STOP_TOKENS,
@@ -838,18 +848,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 pass
             self._send_json({
                 "turns": len(entries),
-                "summary": summarise_record(entries),
+                "summary": summarise_record(entries, language=_settings()[1]),
                 # Only the flagged ones. The whole log is not the UI's business
                 # and shipping it wholesale would put every past prompt on a
                 # screen someone else might be standing in front of.
-                # A held-back answer is not handed out here either. It is in
-                # the log file on the device, where the operator can read it;
-                # a screen is not where it goes.
                 "flagged": [
                     {"at": e.get("at"), "prompt": (e.get("prompt") or "")[:120],
-                     "answer": (None if e.get("withheld")
-                                else (e.get("answer") or "")[:200]),
-                     "withheld": e.get("withheld")}
+                     "answer": (e.get("answer") or "")[:200],
+                     "checked": e.get("checked", True)}
                     for e in entries
                     if e.get("mode_stored") == UNVERIFIED or e.get("honesty_high")
                 ][-20:],
@@ -860,6 +866,24 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        if self.path == "/aetherseed/setup":
+            # First run: the owner names the companion and picks its language.
+            # Both go into the charter, so companion.save() validates them;
+            # nothing reaches the prompt that did not pass.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            saved, err = companion.save(COMPANION_FILE, req.get("name"),
+                                        req.get("language"))
+            if err:
+                self._send_json(err, status=400)
+                return
+            print(f"[companion] set up: name={saved['name']!r} "
+                  f"language={saved['language']}", flush=True)
+            self._send_json({"companion": companion.public(saved)})
+            return
 
         if self.path in ("/api/chat", "/v1/chat/completions"):
             self._proxy_chat_augmented(body)

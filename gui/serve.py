@@ -34,7 +34,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Only these reach the backend. An allow-list rather than a prefix match, so a
 # future route on the proxy is not exposed to the browser by accident.
-PROXIED_POST = ("/api/chat",)
+PROXIED_POST = ("/api/chat", "/aetherseed/setup")
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/api/tags")
 
 # The page's own script is pinned by the hash of its bytes.
@@ -93,7 +93,7 @@ CSP = None      # set in __main__, once index.html is known to exist
 # the journal is not covered by any promise this node makes.
 HEARTBEAT_SECONDS = int(os.environ.get("AETHERSEED_GUI_HEARTBEAT", "300"))
 
-_counts = {"page": 0, "status": 0, "record": 0, "chat": 0, "refused": 0}
+_counts = {"page": 0, "status": 0, "record": 0, "chat": 0, "setup": 0, "refused": 0}
 _counts_lock = threading.Lock()
 
 
@@ -115,9 +115,9 @@ def _heartbeat():
             for k in _counts:
                 _counts[k] = 0
         if sum(seen.values()):
-            print("[gui] %ds  page=%d status=%d record=%d chat=%d refused=%d"
-                  % (HEARTBEAT_SECONDS, seen["page"], seen["status"],
-                     seen["record"], seen["chat"], seen["refused"]), flush=True)
+            print("[gui] %ds  page=%d status=%d record=%d chat=%d setup=%d refused=%d"
+                  % (HEARTBEAT_SECONDS, seen["page"], seen["status"], seen["record"],
+                     seen["chat"], seen["setup"], seen["refused"]), flush=True)
         else:
             print("[gui] %ds  idle" % HEARTBEAT_SECONDS, flush=True)
 
@@ -200,7 +200,7 @@ class Console(http.server.SimpleHTTPRequestHandler):
             _tally("refused")
             self.send_error(404)
             return
-        _tally("chat")
+        _tally("setup" if self.path == "/aetherseed/setup" else "chat")
         n = int(self.headers.get("Content-Length", 0))
         self._relay("POST", self.rfile.read(n) if n else b"")
 

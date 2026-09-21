@@ -96,6 +96,14 @@ _REFUSAL = (
     "i do not know", "i don't know", "i cannot", "i can't", "i am not able",
     "i'm not able", "this is not possible", "nothing in memory", "no record",
     "i have no", "not stored", "i did not find", "i didn't find",
+    # Norwegian (bokmål), added with the language option 2026-09-21. The
+    # first two are the model's own words, measured on this device:
+    # "Jeg er ikke sikker på å kunne hente opp DOI-nummeret..." and "Jeg er
+    # usikker på å finne DOI-en...". Without them a Norwegian refusal to
+    # invent is not recognised as one - and a refused fiction request would
+    # be stored and copied back, the self-taught refusal loop of step 15e.
+    "jeg er ikke sikker", "jeg er usikker", "jeg vet ikke", "jeg kan ikke",
+    "jeg har ikke", "jeg har ingen", "jeg fant ikke", "ikke i stand til",
 )
 
 

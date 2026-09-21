@@ -90,6 +90,30 @@ _FICTION_PATTERNS = [
     (r"\b(?:act|speak|answer|respond)\s+as\s+(?:a|an|the|if)\b", "asks the node to act as something"),
     (r"\bfor (?:my|a|an|the)\s+(?:story|novel|screenplay|game|campaign|comic|play)\b",
      "names a creative work as the destination"),
+
+    # ---- Norwegian (bokmål). Added with the language option, 2026-09-21.
+    # Measured before adding them: "Skriv et kort dikt om en hval som heter
+    # Bjørn" was read as FACTUAL, so the poem would have been stored as fact -
+    # the harm this module exists to prevent, switched off for anyone speaking
+    # the language the device offers. Reasons are in Norwegian because the
+    # console shows them.
+    (r"\b(?:skriv|lag|dikt|fortell|komponer|gi)\s+(?:meg\s+)?(?:en|et|ei|noen|flere)?\s*"
+     r"(?:[\w-]+\s+){0,2}"
+     r"(?:historie|historier|historien|fortelling|fortellinger|eventyr|dikt|diktet|sang|sanger|"
+     r"vise|viser|vits|vitser|rim|regle|limerick|haiku|manus|sonett|gåte|gåter|novelle|fabel)\b",
+     "ber om noe oppdiktet"),
+    (r"\b(?:finn|finne|fant)\s+på\b", "ber deg finne på noe"),
+    (r"\bdikt(?:e|er)?\s+opp\b", "ber deg dikte opp noe"),
+    (r"\b(?:lat|late)\s+som\b", "ber deg late som"),
+    (r"\b(?:tenk|forestill|se\s+for)\s+deg\b", "ber deg forestille deg noe"),
+    (r"\brollespill\b", "ber om rollespill"),
+    (r"\bi\s+(?:stilen|stemmen|rollen)\s+til\b", "ber om en annen stemme"),
+    (r"\bsom\s+om\s+(?:du|han|hun|de|den|det|jeg|vi)\b", "ber om et som-om"),
+    (r"\b(?:oppdiktet|oppdiktede|fiktiv|fiktive|fiksjon|påfunnet|påfunnede|hypotetisk)\b",
+     "kaller det selv oppdiktet"),
+    (r"\bhva\s+om\b", "spør hva om"),
+    (r"\btil\s+(?:min|mitt|mi|en|et|ei)\s+(?:historie|roman|bok|spill|film|manus|tegneserie)\b",
+     "nevner et kreativt verk som mål"),
 ]
 _COMPILED = [(re.compile(p, re.I), why) for p, why in _FICTION_PATTERNS]
 
@@ -150,6 +174,15 @@ _RECORD_QUESTION = re.compile(
     r"|show (?:me )?(?:your |the )?(?:record|mistakes|errors|failures)"
     r"|what have you (?:made up|invented|fabricated)"
     r"|your (?:honesty )?record"
+    # Norwegian (bokmål), added with the language option. Without these the
+    # question went to the model - the least reliable narrator of its own
+    # failures - for anyone asking in the language the device speaks.
+    r"|hva har du (?:tatt|fått|gjort|sagt) feil"
+    r"|hvilke feil har du (?:gjort|begått)"
+    r"|har du (?:noen gang |noensinne )?(?:tatt feil|gjort (?:noen )?feil|funnet på noe|diktet opp noe|løyet)"
+    r"|hva har du (?:funnet på|diktet opp)"
+    r"|vis (?:meg )?(?:loggen|feilene|oversikten)(?: din| dine)?"
+    r"|(?:din|dine) (?:logg|feil)"
     r")\b", re.I)
 
 
@@ -158,9 +191,58 @@ def is_record_question(user_msg: str) -> bool:
     return bool(user_msg) and _RECORD_QUESTION.search(user_msg) is not None
 
 
-def summarise_record(entries, limit: int = 5) -> str:
-    """Render the provenance record as plain text. Pure - takes the parsed
-    lines, returns what the node says.
+_RECORD_TEXT = {
+    "en": {
+        "empty": ("I have no record yet - nothing has been asked of me since this "
+                  "log began. What I can tell you from it, once there is one, is "
+                  "when I used an unbacked source and when I was writing fiction. "
+                  "It cannot tell you when I was simply wrong."),
+        "span": "From my record, {n} {turns} between {first} and {last}.",
+        "turn": ("turn", "turns"),
+        "gave": "{times} I gave a source I could not have had:",
+        "times": ("{n} time", "{n} times"),
+        "asked": "  {at}  you asked: {prompt}",
+        "said": "      I said: {answer}",
+        "earlier": "  ... and {n} earlier.",
+        "unchecked": "{times} I could not check an answer for invented sources.",
+        "clean": "Nothing in it was flagged for an unbacked source.",
+        "fiction": ("{what} you asked me to make up. {they} kept separately and "
+                    "never used to answer a question of fact."),
+        "fiction_what": ("1 turn was something", "{n} turns were things"),
+        "fiction_they": ("It is", "They are"),
+        "scope": ("What this record cannot tell you: whether I was simply wrong. "
+                  "It catches invented sources, not ordinary mistakes. I can be "
+                  "confidently wrong about a plain fact and nothing here will "
+                  "show it."),
+    },
+    "nb": {
+        "empty": ("Jeg har ingen logg ennå - ingen har spurt meg om noe siden "
+                  "loggen begynte. Når det finnes en, kan den fortelle deg når jeg "
+                  "brukte en kilde uten grunnlag, og når jeg skrev fiksjon. Den kan "
+                  "ikke fortelle deg når jeg rett og slett tok feil."),
+        "span": "Ifølge loggen min: {n} {turns} mellom {first} og {last}.",
+        "turn": ("spørsmål og svar", "spørsmål og svar"),
+        "gave": "{times} ga jeg en kilde jeg ikke kunne ha hatt:",
+        "times": ("{n} gang", "{n} ganger"),
+        "asked": "  {at}  du spurte: {prompt}",
+        "said": "      jeg svarte: {answer}",
+        "earlier": "  ... og {n} tidligere.",
+        "unchecked": "{times} kunne jeg ikke sjekke et svar for oppdiktede kilder.",
+        "clean": "Ingenting i den er merket for en kilde uten grunnlag.",
+        "fiction": ("{what} du ba meg finne på. {they} holdt adskilt og brukes "
+                    "aldri til å svare på et faktaspørsmål."),
+        "fiction_what": ("1 av dem var noe", "{n} av dem var ting"),
+        "fiction_they": ("Det er", "De er"),
+        "scope": ("Det loggen ikke kan fortelle deg: om jeg rett og slett tok feil. "
+                  "Den fanger opp oppdiktede kilder, ikke vanlige feil. Jeg kan ta "
+                  "selvsikkert feil om et enkelt faktum uten at noe her viser det."),
+    },
+}
+
+
+def summarise_record(entries, limit: int = 5, language: str = "en") -> str:
+    """Render the provenance record as plain text, in the companion's language.
+    Pure - takes the parsed lines, returns what the node says.
 
     The hard part is not counting. It is not claiming more than the record
     holds. This log knows about unbacked citations, DOIs and URLs, because
@@ -170,78 +252,48 @@ def summarise_record(entries, limit: int = 5) -> str:
     said "I have made no mistakes" would therefore be a new falsehood told in
     the course of accounting for the old ones, which is the exact failure this
     whole record exists to prevent. So the scope is stated every time, even
-    when the count is zero - especially then.
+    when the count is zero - especially then - and in every language offered.
     """
+    t = _RECORD_TEXT.get(language, _RECORD_TEXT["en"])
+
+    def plural(pair, n):
+        return (pair[0] if n == 1 else pair[1]).format(n=n)
+
     total = len(entries)
     if not total:
-        return ("I have no record yet - nothing has been asked of me since this "
-                "log began. What I can tell you from it, once there is one, is "
-                "when I used an unbacked source and when I was writing fiction. "
-                "It cannot tell you when I was simply wrong.")
+        return t["empty"]
 
-    flagged = [e for e in entries if e.get("mode_stored") == UNVERIFIED
-               or e.get("honesty_high")]
+    # An answer the check could not run on is not an invented source; it is
+    # an unchecked one, and is accounted for as that.
+    unchecked = [e for e in entries if e.get("checked") is False]
+    flagged = [e for e in entries if e.get("checked") is not False
+               and (e.get("honesty_high") or e.get("mode_stored") == UNVERIFIED)]
     fiction = [e for e in entries if e.get("mode_stored") == FICTION]
-    first_at = entries[0].get("at", "?")
-    last_at = entries[-1].get("at", "?")
 
-    lines = []
-    lines.append("From my record, %d turn%s between %s and %s."
-                 % (total, "" if total == 1 else "s", first_at, last_at))
-    lines.append("")
-
-    # Since 2026-09-21 an answer carrying an unbacked source is HELD BACK and
-    # never shown (proxy.py, withheld_message). Those turns are accounted for
-    # differently from the ones before, which were shown: the node did not
-    # "give" a source nobody saw, and the account of it must not show the
-    # source either - that would hand over, in the course of owning up, the
-    # very thing that was held back. The log file keeps the text for the
-    # operator; this is what is said on a screen.
-    shown = [e for e in flagged if not e.get("withheld")]
-    held = [e for e in flagged if e.get("withheld") == "unbacked_source"]
-    unchecked = [e for e in flagged if e.get("withheld") == "check_failed"]
-
-    def _times(n):
-        return "%d time%s" % (n, "" if n == 1 else "s")
-
-    if shown:
-        lines.append("%s I gave a source I could not have had:" % _times(len(shown)))
-        for e in list(reversed(shown))[:limit]:
-            lines.append("  %s  you asked: %s" % (e.get("at", "?"),
-                                                  (e.get("prompt") or "")[:90]))
-            lines.append("      I said: %s" % ((e.get("answer") or "")[:110]))
-        if len(shown) > limit:
-            lines.append("  ... and %d earlier." % (len(shown) - limit))
-    if held:
-        if shown:
-            lines.append("")
-        lines.append("%s I began an answer with a source I could not have had, "
-                     "and held it back before you saw it:" % _times(len(held)))
-        for e in list(reversed(held))[:limit]:
-            lines.append("  %s  you asked: %s" % (e.get("at", "?"),
-                                                  (e.get("prompt") or "")[:90]))
-        if len(held) > limit:
-            lines.append("  ... and %d earlier." % (len(held) - limit))
+    lines = [t["span"].format(n=total, turns=plural(t["turn"], total),
+                              first=entries[0].get("at", "?"),
+                              last=entries[-1].get("at", "?")), ""]
+    if flagged:
+        lines.append(t["gave"].format(times=plural(t["times"], len(flagged))))
+        for e in list(reversed(flagged))[:limit]:
+            lines.append(t["asked"].format(at=e.get("at", "?"),
+                                           prompt=(e.get("prompt") or "")[:90]))
+            lines.append(t["said"].format(answer=(e.get("answer") or "")[:110]))
+        if len(flagged) > limit:
+            lines.append(t["earlier"].format(n=len(flagged) - limit))
     if unchecked:
-        if shown or held:
+        if flagged:
             lines.append("")
-        lines.append("%s I could not check an answer for invented sources, and "
-                     "held it back." % _times(len(unchecked)))
-    if not flagged:
-        lines.append("Nothing in it was flagged for an unbacked source.")
+        lines.append(t["unchecked"].format(times=plural(t["times"], len(unchecked))))
+    if not flagged and not unchecked:
+        lines.append(t["clean"])
 
     if fiction:
-        lines.append("")
         n = len(fiction)
-        lines.append("%s you asked me to make up. %s kept separately and never "
-                     "used to answer a question of fact."
-                     % ("1 turn was something" if n == 1
-                        else "%d turns were things" % n,
-                        "It is" if n == 1 else "They are"))
+        lines.append("")
+        lines.append(t["fiction"].format(what=plural(t["fiction_what"], n),
+                                         they=t["fiction_they"][0 if n == 1 else 1]))
 
     lines.append("")
-    lines.append("What this record cannot tell you: whether I was simply wrong. "
-                 "It catches invented sources, not ordinary mistakes. I can be "
-                 "confidently wrong about a plain fact and nothing here will "
-                 "show it.")
+    lines.append(t["scope"])
     return "\n".join(lines)
