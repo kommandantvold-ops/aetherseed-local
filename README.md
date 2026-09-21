@@ -33,7 +33,7 @@ from somewhere else, it says so.
 | Cold model load | ~46 s from SD at power-on; ~18 s once cached |
 | Typical answer | **~4 s** warm; worst of 26 consecutive requests **24.9 s** |
 | Host RAM | 340 Mi idle → 394 Mi under inference, of 16 GB |
-| Boot | **9.5 s**, multi-user at 7.3 s; kiosk up at 9.3 s; model warm at ~61 s; 0 failed units |
+| Boot | **9.5 s**, multi-user at 7.3 s, 0 failed units. Kiosk *unit* active at 9.3 s; the page polling within about a minute (17 polls in the first 300 s); model warm at ~61 s |
 | Temperature | 46–52 °C, never throttled |
 
 **The 864-token prompt ceiling is the single most important number in this
