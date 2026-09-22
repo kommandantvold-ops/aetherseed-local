@@ -1,19 +1,10 @@
 # AetherSeed Companion — cartridge manifest
+# Captured 2026-09-22T23:00:48Z on aetherseed
+# Verify with: ./cartridge.sh verify cart-new.manifest
 #
-# THIS IS THE DEVELOPMENT UNIT (aetherseed, 192.168.1.51), not a shipped
-# build. It is committed as the reference point the device is currently
-# known-good against. Recapture on a real build and commit that instead;
-# git history then records exactly what each cartridge contained.
-#
-#   tools/cartridge.sh capture tools/cartridge.manifest
-#   tools/cartridge.sh verify  tools/cartridge.manifest    -> 0 match, 1 drift
-#
-# cartridge-id is a hash over every line below it. Quote that one value to
-# name a build; the lines exist to say what differs when it does not match.
-# Captured 2026-09-21 on the dev unit, after step 22 (www. addresses are
-# unverified sources; the service's writable HOME is off the import path).
-#
-cartridge-id	4ec8006acfd5193d94ac7493bdc0004d1d06c81ed8a63f06a1964d07415f0562
+# cartridge-id is a hash over every line below it. Quote that one
+# value to name a build; the lines are there to say what differs.
+cartridge-id	8974c3527f3d078c6af2c27803c5c0b85ac11e387ea8ffea2fa169150c9860fd
 app.digest	cf5815493b7a7a5f60f932231a1b504dd2a839d7e30bc54ebd385d91c6037776
 app.files	16
 app.numpy	2.2.4
@@ -21,7 +12,7 @@ app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
 file./etc/nftables.conf	3eee0ef33e802a35fe3d25d2a95ad9d5ecdeb1c7a4b46381dbdefa46aef1d8b9
 file./etc/systemd/system/aetherseed-gui.service	24187850a779344457e2a0e2c0ba8927bd7fa221ec079816dd7d0b1b8845c5f2
-file./etc/systemd/system/aetherseed-kiosk.service	6dd9847f1f96f54d98c2a50373e484a207f691f18cbb606a0a176cdc493c3579
+file./etc/systemd/system/aetherseed-kiosk.service	44b41955ad8bf3c066ef8e263a5f046ef4a7dc336cdec346c0d67a640f5fd699
 file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
 file./etc/systemd/system/aetherseed-warmup.service	b43d3c487d742665f047f92bd3c094414ff4c31af5d3b3e8c15a6757ee65e45b
 file./etc/systemd/system/hailo-ollama.service	795efc1df785adb9592fa98fe5fc1d4d882a130df23f2ee1f67c1325854183fe
