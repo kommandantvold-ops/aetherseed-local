@@ -61,6 +61,17 @@ _PATTERNS = [
     # stay uncaught on purpose: a pattern cannot tell them from "e.g.", file
     # names and decimals, and a tag that cries wolf stops being read.
     ("url",        HIGH,   re.compile(r"\bwww\.[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s<>\"')\]]*)?", re.I), False),
+    # An email address. Added 2026-09-23 with the curriculum (build log, step
+    # 25), because the curriculum is what put an address in the model's mouth:
+    # asked "How do I contact AetherSeed?" with the correct line in context, the
+    # node answered "contact@aethersed.ai" - one letter short of ours, and a
+    # domain that belongs to somebody else. No pattern above matches an address
+    # with no scheme and no "www.", so nothing caught it. A wrong address given
+    # as fact is the same harm as an invented citation, so it is HIGH and it is
+    # grounded only by literal presence: you do not approximately have an
+    # address. An address the user typed grounds itself, as with a URL.
+    ("email",      HIGH,   re.compile(
+        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"), False),
     ("volpage",    HIGH,   re.compile(r"\b\d{1,4}\s*\(\s*\d{1,3}\s*\)\s*:\s*\d{1,5}(?:\s*[-–]\s*\d{1,5})?"), False),
     ("citation",   HIGH,   re.compile(
         r"\b[A-Z][A-Za-z'’-]+"

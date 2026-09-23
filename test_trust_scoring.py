@@ -181,5 +181,60 @@ class TestWebAddresses(unittest.TestCase):
                 self.assertEqual(self._high("q", text), [])
 
 
+class TestEmailAddresses(unittest.TestCase):
+    """Email addresses (step 25). The curriculum gave the node one address to
+    say, and asked "How do I contact AetherSeed?" with the correct line in
+    context it answered "contact@aethersed.ai" - one letter short of ours, and
+    a domain belonging to somebody else. No earlier pattern matches an address
+    with no scheme and no "www.", so nothing caught it. These fail without the
+    email pattern."""
+
+    def _high(self, user, answer, memory=""):
+        return [f.text for f in
+                check_response(user, answer, memory_context=memory).high]
+
+    CURRICULUM = ("[MEMORY CONTEXT]\n- [Known] AetherSeed can be reached by email "
+                  "at contact@aetherseed.ai, which goes to the team.\n"
+                  "[END MEMORY CONTEXT]")
+
+    def test_the_mangled_address_measured_on_the_device_is_caught(self):
+        self.assertEqual(
+            self._high("How do I contact AetherSeed?",
+                       "You can reach AetherSeed by email at contact@aethersed.ai.",
+                       self.CURRICULUM),
+            ["contact@aethersed.ai"])
+
+    def test_the_address_the_curriculum_supplied_is_not_flagged(self):
+        self.assertEqual(
+            self._high("How do I contact AetherSeed?",
+                       "You can reach them at contact@aetherseed.ai.",
+                       self.CURRICULUM), [])
+
+    def test_case_does_not_make_it_a_different_address(self):
+        self.assertEqual(
+            self._high("How do I contact AetherSeed?",
+                       "Write to Contact@AetherSeed.ai for that.",
+                       self.CURRICULUM), [])
+
+    def test_an_address_the_user_supplied_is_their_own(self):
+        self.assertEqual(
+            self._high("my address is andreas@example.com, use it",
+                       "I will write to andreas@example.com then."), [])
+
+    def test_an_invented_academic_address_is_caught(self):
+        self.assertEqual(
+            self._high("who wrote this",
+                       "Contact the author at j.smith@nowhere-university.edu."),
+            ["j.smith@nowhere-university.edu"])
+
+    def test_ordinary_prose_is_left_alone(self):
+        for text in ("It is half past four, see you at the cafe.",
+                     "The rate is 5@ a kilo, roughly.",
+                     "Read chapter 3.2 of the manual.",
+                     "Use the @ sign in the formula."):
+            with self.subTest(text=text):
+                self.assertEqual(self._high("q", text), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

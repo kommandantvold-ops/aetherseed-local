@@ -497,6 +497,20 @@ class AetherRoot:
             path=self.root_dir / "willingness.npy"
         )
 
+        # The curriculum is read-only and lives in the application tree, not in
+        # root_dir: a state reset wipes what the unit was told, never what it
+        # was taught. None is a legitimate state - a unit with no curriculum
+        # file still remembers and still answers.
+        try:
+            # Imported here, not at module scope: aetherroot.py is imported by
+            # tools that do not have the logic package on the path, and memory
+            # must not stop working because the curriculum could not be found.
+            from logic.knowledge import load_knowledge
+            self.knowledge = load_knowledge()
+        except Exception as exc:
+            print(f"[knowledge] curriculum not loaded: {exc!r}", flush=True)
+            self.knowledge = None
+
         self.session_id = str(uuid.uuid4())[:8]
 
     def retrieve_context(self, user_msg: str, request_mode: str = "factual") -> str:
@@ -519,6 +533,33 @@ class AetherRoot:
 
         query_emb = self.embedder.embed(user_msg)
         allowed = visible_modes(request_mode)
+        max_chars = self.config["max_context_chars"]
+
+        # The curriculum: what this unit knew before anybody spoke to it.
+        # Read-only, and scored by words rather than by the embedder -
+        # logic/knowledge.py carries the measurement that ruled the embedder out.
+        # It goes FIRST inside the block, for two reasons:
+        #
+        #   token_budget trims this block from the END, so under prompt pressure
+        #   the line that is certainly true survives and the episode, which is
+        #   only probably relevant and will be back next turn, is what goes.
+        #
+        #   honesty_check builds its haystack from the user's message, the tool
+        #   output and THIS STRING. A [Known] line naming contact@aetherseed.ai
+        #   is what stops the node tagging its own shipped knowledge as an
+        #   invented source - the tag crying wolf about the one address on the
+        #   device that is certain.
+        #
+        # Half the budget at most: the other half is what its owner said to it.
+        known = []
+        if self.knowledge is not None:
+            try:
+                known = self.knowledge.lines_for(user_msg, max_chars=max_chars // 2)
+            except Exception as exc:
+                # A curriculum that cannot be consulted must not take memory
+                # down with it. Loud in the journal, harmless in the answer.
+                print(f"[knowledge] not consulted this turn: {exc!r}", flush=True)
+                known = []
 
         # Get episodic + semantic memories
         episodes = self.store.get_all_episodes()
@@ -547,25 +588,24 @@ class AetherRoot:
                 "type": "semantic"
             })
 
-        if not all_memories:
-            return ""
-
         # Retrieve top-k
-        top = retrieve_memories(
-            query_emb, all_memories,
-            self.config["retrieval_weights"],
-            top_k=self.config["max_retrieved"]
-        )
+        top = []
+        if all_memories:
+            top = retrieve_memories(
+                query_emb, all_memories,
+                self.config["retrieval_weights"],
+                top_k=self.config["max_retrieved"]
+            )
 
-        if not top:
+        # A unit on its first day has no episodes and still knows what it is.
+        if not known and not top:
             return ""
 
         # Format context
         lines = ["[MEMORY CONTEXT]"]
         total_chars = 0
-        max_chars = self.config["max_context_chars"]
-        for mem in top:
-            line = f"- {mem['text']}"
+        for text in known + [mem["text"] for mem in top]:
+            line = f"- {text}"
             if total_chars + len(line) > max_chars:
                 break
             lines.append(line)
