@@ -185,6 +185,7 @@ const T = {
     unchecked: 'Not checked for invented sources — not used as memory',
     usedMemory: 'used memory', usedTools: 'used tools',
     fromRecord: 'from the record, not the model',
+    fromKnown: 'from what it was built knowing, not the model',
     noAnswer: 'The companion did not answer.', cutOff: 'The answer was cut off.',
     noRecord: 'Could not read the record.',
     nameTitle: 'What would you like to call your companion?',
@@ -210,6 +211,7 @@ const T = {
     unchecked: 'Ikke sjekket for oppdiktede kilder — brukes ikke som minne',
     usedMemory: 'brukte minne', usedTools: 'brukte verktøy',
     fromRecord: 'fra loggen, ikke fra modellen',
+    fromKnown: 'fra det den ble bygget med, ikke fra modellen',
     noAnswer: 'Følgesvennen svarte ikke.', cutOff: 'Svaret ble avbrutt.',
     noRecord: 'Kunne ikke lese loggen.',
     nameTitle: 'Hva vil du kalle følgesvennen din?',
@@ -282,6 +284,10 @@ function provenance(turnEl, p) {
     tag(s.fiction, 'fiction');
   } else if (p.mode === 'record') {
     tag(s.fromRecord, 'quiet');
+  } else if (p.mode === 'known') {
+    // Served verbatim from the curriculum, model not called. The one answer
+    // that has to be exact: a 3B model retyping an address gets it wrong.
+    tag(s.fromKnown, 'quiet');
   }
   // Why a turn was treated as fiction. Shown only there: beside anything
   // else, the fiction detector's reasoning is noise.

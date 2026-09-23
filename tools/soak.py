@@ -112,6 +112,12 @@ PROMPTS = [
     ("premise", "Earlier you told me the harbour depth in Bergen is 45 metres. Remind me what you said?"),
     ("memory_tell", "My dog is called Pixel."),
     ("memory_ask", "What is my dog called?"),
+    # Answered from the build, model not called (step 28). The near-miss is the
+    # one that matters: it must NOT be intercepted, or a real request has been
+    # swallowed by a route that thought it knew better.
+    ("contact", "How do I contact AetherSeed?"),
+    ("contact", "What is your email address?"),
+    ("contact_miss", "Can you help me contact my landlord about the broken radiator?"),
     ("record", "What have you gotten wrong?"),
     ("nb_fiction", "Skriv et kort dikt om en hval som heter Bjørn."),
     ("nb_record", "Hva har du tatt feil om?"),
@@ -119,8 +125,9 @@ PROMPTS = [
     ("medium", "Summarise this log in one sentence: " + MEDIUM),
     ("too_large", "Summarise this log: " + LONG),
 ]
-SMOKE_KINDS = ("fact", "fiction", "source", "record", "too_large", "medium")
-NO_MODEL = ("record", "nb_record", "too_large")   # answered without calling the model
+SMOKE_KINDS = ("fact", "fiction", "source", "record", "too_large", "medium",
+               "contact", "contact_miss")
+NO_MODEL = ("record", "nb_record", "too_large", "contact")  # answered without the model
 
 _lock = threading.Lock()
 HS = []                                  # every health sample, for the summary
@@ -399,6 +406,12 @@ def expectation(kind, r):
         return mode == "fiction"
     if kind in ("record", "nb_record"):
         return mode == "record" and r["source"] == "provenance-record"
+    if kind == "contact":
+        return (mode == "known" and r["source"] == "knowledge"
+                and "contact@aetherseed.ai" in r["text"])
+    if kind == "contact_miss":
+        # The route must stand down: this one is for the model.
+        return r["source"] != "knowledge"
     if kind == "too_large":
         return r["text"].startswith(TOO_LARGE)
     if kind == "memory_ask":

@@ -85,8 +85,9 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-__all__ = ["Knowledge", "load_knowledge", "KNOWN_PREFIX",
-           "SCORE_THRESHOLD", "WEIGHT_FLOOR", "MAX_LINES", "MAX_TEXT_CHARS"]
+__all__ = ["Knowledge", "load_knowledge", "KNOWN_PREFIX", "CONTACT_ENTRY",
+           "is_contact_question", "SCORE_THRESHOLD", "WEIGHT_FLOOR",
+           "MAX_LINES", "MAX_TEXT_CHARS"]
 
 # The third kind of line in the block, beside [Episode] and [Pattern]. Not a
 # scaffold marker: it never starts a line on its own and never closes a block,
@@ -185,6 +186,14 @@ class Knowledge:
         out.sort(key=lambda r: (-r["score"], -r["weight"], r["order"]))
         return out
 
+    def by_id(self, entry_id: str):
+        """One entry's text, verbatim, or None. The single source of truth for
+        an answer that is served from the build rather than generated."""
+        for e in self.entries:
+            if e["id"] == entry_id:
+                return e["text"]
+        return None
+
     def lines_for(self, query: str, max_lines: int = MAX_LINES,
                   max_chars: Optional[int] = None) -> List[str]:
         """The `[Known] ...` lines this question earns — usually none."""
@@ -202,6 +211,61 @@ class Knowledge:
             lines.append(line)
             used += len(line)
         return lines
+
+
+# ---------------------------------------------------------------------------
+# The one answer that must be exact
+# ---------------------------------------------------------------------------
+# Measured on the device 23 Sep, twice, with the correct line at the top of the
+# model's context: asked how to contact AetherSeed it answered
+# "contact@aethersed.ai", and then "contact@aethersseed.ai". A 3B model cannot
+# reliably copy an eleven-character domain, and a wrong address is not a vague
+# answer - it is a live domain belonging to somebody else.
+#
+# So this question is answered the way a record question is: from the file,
+# with the model never called. The precedent is deliberate. `is_record_question`
+# exists because a model summarising its own mistakes is the least reliable
+# possible narrator of them; this exists because a model retyping an address is
+# the least reliable possible copier of it.
+#
+# The predicate is phrase-based and deliberately narrow, because intercepting
+# the wrong question is worse than not intercepting: "can you help me contact
+# my landlord" must reach the model, and it does - it contains "contact my
+# landlord", and none of the phrases below. A phrase names its target; a bag of
+# words ("contact", "email", "you") does not.
+CONTACT_ENTRY = "as.contact"
+
+# Anything naming AetherSeed is safe by construction - a landlord is not
+# AetherSeed - so there the rule can be a word pair. Anything naming only "you"
+# or "the team" has to be a phrase, because those words point at whoever the
+# sentence is about.
+_CONTACT_WORDS = ("contact", "email", "mail", "reach", "touch", "write", "get")
+_CONTACT_PHRASES = (
+    "contact you", "contact the team", "reach you", "reach the team",
+    "get in touch with you", "in touch with the team",
+    "your email", "your e mail", "email you", "write to you",
+)
+
+# A second gate, so a statement is not mistaken for a question: "I'll reach you
+# tomorrow" contains a phrase and asks nothing.
+_ASKING = ("how ", "what ", "where ", "which ", "who ", "can ", "could ",
+           "is ", "are ", "do ", "does ", "may ", "please ")
+
+
+def is_contact_question(user_msg: str) -> bool:
+    """Is this someone asking how to reach AetherSeed?
+
+    Narrow on purpose. A false yes hands out one true sentence to somebody who
+    did not ask for it; a false no costs nothing, because the model still gets
+    the question with the right line in its context.
+    """
+    text = " " + " ".join(_tokens(user_msg)) + " "
+    named_us = " aetherseed " in text and any(
+        (" " + w + " ") in text for w in _CONTACT_WORDS)
+    if not named_us and not any((" " + p + " ") in text for p in _CONTACT_PHRASES):
+        return False
+    raw = (user_msg or "").strip().lower()
+    return "?" in raw or raw.startswith(_ASKING) or " how do i " in text or " how can i " in text
 
 
 def _default_path() -> Path:

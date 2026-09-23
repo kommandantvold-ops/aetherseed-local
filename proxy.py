@@ -541,6 +541,51 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # record is not a new fact about the world, and storing it would let
         # the summary re-enter later prompts as if it were one.
 
+    def _answer_from_the_build(self, model: str, user_msg: str) -> bool:
+        """Serve a curriculum line verbatim. True if this turn was handled.
+
+        Falls through to the model on anything unexpected - no curriculum, no
+        such entry, a question this is not certain about. A route that answers
+        when it should not is worse than one that answers rarely, because the
+        model still gets the question with the right line in its context.
+        """
+        try:
+            from logic.knowledge import (is_contact_question, load_knowledge,
+                                         CONTACT_ENTRY)
+            if not is_contact_question(user_msg):
+                return False
+            k = load_knowledge()
+            text = k.by_id(CONTACT_ENTRY) if k else None
+        except Exception as e:
+            print(f"[knowledge] contact route stood down: {e!r}", flush=True)
+            return False
+        if not text:
+            return False
+
+        print("[knowledge] answered from the build (model not called)", flush=True)
+        out = [json.dumps({"model": model,
+                           "message": {"role": "assistant", "content": text},
+                           "done": False}),
+               json.dumps({"model": model,
+                           "message": {"role": "assistant", "content": ""},
+                           "done": True, "done_reason": "stop",
+                           "source": "knowledge",
+                           # Tagged like every other reply, so the reader can
+                           # tell this came from the build and not the model.
+                           "aetherseed": {"mode": "known", "checked": True,
+                                          "unbacked_sources": 0, "unsourced_figures": 0,
+                                          "used_tools": False, "memory_used": False}})]
+        raw = ("\n".join(out) + "\n").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        self.wfile.write(raw)
+        return True
+        # Deliberately NOT stored as an episode, and not written to the
+        # provenance record - the same treatment the record route gets. The
+        # node repeating a line it shipped with is not a new fact about the
+        # world, and storing it would let it re-enter later prompts as one.
+
     def _proxy_chat_augmented(self, body: bytes):
         try:
             data = json.loads(body)
@@ -573,6 +618,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # that has to be trustworthy.
         if is_record_question(user_msg):
             self._answer_from_the_record(model, user_msg)
+            return
+
+        # ---- THE CONTACT ADDRESS ----
+        # Answered from the build, model not called, for the same reason the
+        # record is: this is the answer that has to be exact. Measured twice on
+        # 23 Sep with the correct line at the top of its context, the model
+        # returned "contact@aethersed.ai" and then "contact@aethersseed.ai" -
+        # live domains belonging to somebody else. The honesty check caught
+        # both, which bounds the damage; it does not make the answer right.
+        if self._answer_from_the_build(model, user_msg):
             return
 
         # ---- PROVENANCE: what did the user ask for? ----

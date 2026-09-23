@@ -292,6 +292,75 @@ class InsideTheMemoryBlock(unittest.TestCase):
         self.assertIn("[Episode]", ctx)
 
 
+class TheOneAnswerThatMustBeExact(unittest.TestCase):
+    """The contact route. Measured twice on the device with the right line in
+    context, the model returned contact@aethersed.ai and contact@aethersseed.ai
+    - live domains belonging to somebody else. So this one is served verbatim.
+
+    The predicate must be narrow: a false yes hands one true sentence to
+    somebody who did not ask; but a false yes on "help me contact my landlord"
+    would be a confident non-answer to a real request.
+    """
+
+    ASKING = [
+        "How do I contact AetherSeed?",
+        "how do i contact aetherseed",
+        "What is your email address?",
+        "How can I get in touch with you?",
+        "What email address should I use to reach the team?",
+        "Is there an email for AetherSeed?",
+        "who do I contact at aetherseed?",
+        "What is AetherSeed's email address?",
+        "Can I write to AetherSeed?",
+    ]
+
+    NOT_ASKING = [
+        "can you help me contact my landlord",
+        "what is the address of the dentist",
+        "send this to my wife",
+        "can you email my boss for me",
+        "I will reach you tomorrow",
+        "write to the council about the noise",
+        "email me the recipe",
+        "tell aetherseed I said hello",
+        "what is aetherseed",
+        "who made you",
+        "what does aetherseed stand for",
+        "who founded aetherseed",
+        "is aetherseed a real company",
+        "what is aetherseed's mission",
+        "what is the capital of France",
+        "",
+    ]
+
+    def test_a_contact_question_is_recognised(self):
+        from logic.knowledge import is_contact_question
+        missed = [q for q in self.ASKING if not is_contact_question(q)]
+        self.assertEqual([], missed)
+
+    def test_anything_else_reaches_the_model(self):
+        from logic.knowledge import is_contact_question
+        caught = [q for q in self.NOT_ASKING if is_contact_question(q)]
+        self.assertEqual([], caught)
+
+    def test_a_statement_is_not_a_question(self):
+        from logic.knowledge import is_contact_question
+        self.assertFalse(is_contact_question("I will reach you tomorrow"))
+        self.assertTrue(is_contact_question("Can I reach you?"))
+
+    def test_the_entry_it_serves_is_the_shipped_one(self):
+        from logic.knowledge import load_knowledge, CONTACT_ENTRY
+        k = load_knowledge(SHIPPED)
+        text = k.by_id(CONTACT_ENTRY)
+        self.assertIn("contact@aetherseed.ai", text)
+        self.assertEqual(1, sum(1 for e in k.entries if e["id"] == CONTACT_ENTRY))
+
+    def test_an_unknown_entry_id_is_none_not_a_guess(self):
+        from logic.knowledge import load_knowledge
+        k = load_knowledge(SHIPPED)
+        self.assertIsNone(k.by_id("no.such.entry"))
+
+
 class GroundingTheHonestyCheck(unittest.TestCase):
     """The reason [Known] goes inside [MEMORY CONTEXT] rather than beside it."""
 
