@@ -16,7 +16,13 @@ upward over weeks is the thing this exists to catch.
 Environment: KEEPALIVE_DIR (required), KEEPALIVE_SECONDS (default 180),
 KEEPALIVE_URL (default http://127.0.0.1:8000/api/chat).
 """
-import json, os, subprocess, time, urllib.request
+import json, os, subprocess, sys, time, urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import power as _power          # deployed beside this file
+except Exception:                   # a missing power.py costs a column, not the loop
+    _power = None
 
 DIR = os.path.abspath(os.environ["KEEPALIVE_DIR"])
 EVERY = float(os.environ.get("KEEPALIVE_SECONDS", "180"))
@@ -40,6 +46,26 @@ def health():
             "throttled": sh("vcgencmd get_throttled").replace("throttled=", ""),
             "mem_avail_mb": sh("free -m | awk '/Mem:/{print $7}'"),
             "ho_restarts": sh("systemctl show -p NRestarts --value hailo-ollama")}
+
+
+def power():
+    """Board watts and temperature, on EVERY ping rather than every tenth.
+
+    Asked for by Andreas, 23 Sep: energy and temperature alongside latency.
+    A vcgencmd call costs about 10 ms against a 180 s period, so there is no
+    reason to sample it more sparsely than the thing it explains - 480 points a
+    day is what makes drift visible.
+
+    `board_w` is the sum of the twelve PMIC-sensed rails. It does NOT include
+    the Hailo NPU, which is not on a sensed rail (tools/power.py has the
+    measurement that establishes that). Read it as the board's own draw.
+    """
+    if _power is None:
+        return {}
+    try:
+        return _power.read()
+    except Exception:
+        return {}
 
 
 def ping():
@@ -68,6 +94,7 @@ def main():
             fails += 1
         rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "n": n,
                "seconds": secs, "status": status, "ok": ok}
+        rec.update(power())
         if err:
             rec["error"] = err
         if n % 10 == 1:                      # one health sample every ~30 min

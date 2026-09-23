@@ -36,6 +36,12 @@ import json, os, random, re, signal, subprocess, sys, threading, time
 import urllib.error, urllib.request
 from datetime import datetime
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import power as _power          # deployed beside this file
+except Exception:                   # a missing power.py costs two columns, not the run
+    _power = None
+
 APP = os.environ.get("AETHERSEED_APP", "/opt/aetherseed")
 PY = os.path.join(APP, "venv/bin/python3")
 DIR = os.path.abspath(os.environ["SOAK_DIR"])
@@ -60,6 +66,10 @@ RESUME_HOUR = int(os.environ.get("SOAK_RESUME_HOUR", "22"))
 SEED = int(os.environ.get("SOAK_SEED", "20260922"))
 # How long after the owner's last turn the unit still counts as in use.
 QUIET_AFTER = float(os.environ.get("SOAK_QUIET_AFTER", "1200"))
+# Stepping aside protects the owner's experience while the soak runs. Set
+# SOAK_STEP_ASIDE=0 when nobody will be talking to the unit: the run then never
+# pauses, and `hours` and `soak_hours` in the summary are the same number.
+STEP_ASIDE = os.environ.get("SOAK_STEP_ASIDE", "1") != "0"
 NAME = os.environ.get("SOAK_NAME", "Soak")
 TOKENIZER = os.environ.get("AETHERSEED_TOKENIZER", "/var/lib/aetherseed/tokenizer.json")
 BASE = "http://127.0.0.1:%d" % CONSOLE_PORT
@@ -251,7 +261,23 @@ def health():
         soak_proxy_starts=PROXY.starts, soak_console_starts=CONSOLE.starts,
         state_kb=sh("du -sk %s | cut -f1" % STATE),
         disk_avail=sh("df -h / | awk 'NR==2{print $4}'"),
+        **board_power(),
     )
+
+
+def board_power():
+    """Board watts and CPU clock, if tools/power.py is deployed beside us.
+
+    `board_w` is the sum of the twelve PMIC-sensed rails and does NOT include
+    the NPU, which is not on a sensed rail. See tools/power.py.
+    """
+    if _power is None:
+        return {}
+    try:
+        r = _power.read()
+        return {"board_w": r.get("board_w"), "arm_mhz": r.get("arm_mhz")}
+    except Exception:
+        return {}
 
 
 def unit_state_hashes():
@@ -444,7 +470,9 @@ def step_aside():
     on a unit whose whole job is to accumulate hours, so it now re-checks every
     30 s and comes back as soon as the unit goes quiet.
     """
-    if SMOKE or not (DAY_FROM <= datetime.now().hour < RESUME_HOUR):
+    if SMOKE or not STEP_ASIDE:
+        return
+    if not (DAY_FROM <= datetime.now().hour < RESUME_HOUR):
         return
     used, why = unit_in_use()
     if not used:
