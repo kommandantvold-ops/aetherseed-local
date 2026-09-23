@@ -24,9 +24,11 @@ on 8001 (read only). If the unit has been named or holds an episode, someone
 is using it, and between 07:00 and 22:00 the soak pauses until 22:00 rather
 than slow their answers.
 
-Run on the device, as the operator:
-  SOAK_DIR=/home/andreas/soak-2026-09-22 SOAK_UNTIL="2026-09-23 07:00" \\
-    setsid nohup python3 -u soak.py > /home/andreas/soak-2026-09-22/soak.log 2>&1 &
+Run on the device, as the operator. SOAK_HOURS counts hours of soaking with
+the daytime pauses subtracted; SOAK_UNTIL is a wall-clock stop. Set either or
+both - whichever comes first ends the run:
+  SOAK_DIR=/home/andreas/soak-2026-09-23 SOAK_HOURS=24 \\
+    setsid nohup python3 -u soak.py > /home/andreas/soak-2026-09-23/soak.log 2>&1 &
 SOAK_SMOKE=1 runs one chat per kind of path, with no waits, and stops.
 Nothing it makes is deleted; everything is in SOAK_DIR.
 """
@@ -39,7 +41,16 @@ PY = os.path.join(APP, "venv/bin/python3")
 DIR = os.path.abspath(os.environ["SOAK_DIR"])
 SMOKE = os.environ.get("SOAK_SMOKE") == "1"
 UNTIL = (datetime.strptime(os.environ["SOAK_UNTIL"], "%Y-%m-%d %H:%M")
-         if not SMOKE else None)
+         if not SMOKE and os.environ.get("SOAK_UNTIL") else None)
+# SOAK_HOURS counts hours of SOAKING, not hours on the clock. The soak steps
+# aside for the owner during the day (step_aside below), and on a unit that is
+# in use that is most of the daylight hours - so "run it for 24 hours" and
+# "stop at this time tomorrow" stopped meaning the same thing the moment Lyra
+# was named. Paused time is subtracted; the run ends when it has actually been
+# talking for SOAK_HOURS. SOAK_UNTIL still works, and the two can be combined -
+# whichever comes first wins.
+SOAK_HOURS = float(os.environ.get("SOAK_HOURS", "0") or 0)
+PAUSED = 0.0
 PROXY_PORT = int(os.environ.get("SOAK_PROXY_PORT", "8011"))
 CONSOLE_PORT = int(os.environ.get("SOAK_CONSOLE_PORT", "2078"))
 UNIT = os.environ.get("SOAK_UNIT", "http://127.0.0.1:8001")
@@ -47,6 +58,8 @@ UNIT_STATE = os.environ.get("SOAK_UNIT_STATE", "/var/lib/aetherseed/.aetherseed"
 DAY_FROM = int(os.environ.get("SOAK_DAY_FROM", "7"))
 RESUME_HOUR = int(os.environ.get("SOAK_RESUME_HOUR", "22"))
 SEED = int(os.environ.get("SOAK_SEED", "20260922"))
+# How long after the owner's last turn the unit still counts as in use.
+QUIET_AFTER = float(os.environ.get("SOAK_QUIET_AFTER", "1200"))
 NAME = os.environ.get("SOAK_NAME", "Soak")
 TOKENIZER = os.environ.get("AETHERSEED_TOKENIZER", "/var/lib/aetherseed/tokenizer.json")
 BASE = "http://127.0.0.1:%d" % CONSOLE_PORT
@@ -384,30 +397,84 @@ def side_check(path):
     return info
 
 
+# The last episode count seen on the unit, and when it last moved.
+_USE = {"episodes": None, "changed": None}
+
+
 def unit_in_use():
+    """Is somebody talking to the unit RIGHT NOW?
+
+    This used to answer yes if the unit was configured or held any episode at
+    all. That was the right signal while the unit was unnamed: "configured"
+    then meant "somebody has started using this thing". The moment Lyra was
+    named (23 Sep) it began meaning "always", and the soak would have paused
+    every daylight hour for the rest of the unit's life - turning "run it for
+    24 hours" into three nights.
+
+    What actually says somebody is here is the episode count MOVING: only a
+    real turn on :8001 writes one, and the soak's own chats go to its own proxy
+    and its own state, so they never do. The first reading is a baseline, not
+    activity. After that, a change means someone is in the room, and the unit
+    counts as in use until SOAK_QUIET_AFTER seconds of no further change.
+    """
     try:
         with urllib.request.urlopen(UNIT + "/aetherseed/status", timeout=10) as r:
             s = json.load(r)
     except Exception as e:
         return False, "unit status unreadable: %r" % e
-    c = s.get("companion") or {}
-    used = bool(c.get("configured")) or (s.get("episodes") or 0) > 0
-    return used, "configured=%s episodes=%s" % (c.get("configured"), s.get("episodes"))
+    eps = s.get("episodes") or 0
+    now = time.time()
+    if _USE["episodes"] is None:
+        _USE["episodes"] = eps
+        return False, "baseline episodes=%s" % eps
+    if eps != _USE["episodes"]:
+        _USE["episodes"] = eps
+        _USE["changed"] = now
+    if _USE["changed"] is None:
+        return False, "episodes=%s, unchanged since the soak began" % eps
+    quiet = now - _USE["changed"]
+    return quiet < QUIET_AFTER, "episodes=%s, last turn %ds ago" % (eps, int(quiet))
 
 
 def step_aside():
-    """Pause for the owner during the day, if the unit is in use."""
-    t = datetime.now()
-    if SMOKE or not (DAY_FROM <= t.hour < RESUME_HOUR):
+    """Pause while the owner is talking to the unit, and resume when they stop.
+
+    It used to hold off until RESUME_HOUR once it had paused at all. Waiting
+    until 22:00 because somebody said good morning to Lyra is the wrong trade
+    on a unit whose whole job is to accumulate hours, so it now re-checks every
+    30 s and comes back as soon as the unit goes quiet.
+    """
+    if SMOKE or not (DAY_FROM <= datetime.now().hour < RESUME_HOUR):
         return
     used, why = unit_in_use()
     if not used:
         return
-    resume = t.replace(hour=RESUME_HOUR, minute=0, second=0, microsecond=0)
-    event("step_aside", why=why, until=resume.strftime("%H:%M"))
-    while datetime.now() < min(resume, UNTIL) and not stop.is_set():
+    global PAUSED
+    event("step_aside", why=why)
+    t0 = time.time()
+    while not stop.is_set():
         time.sleep(30)
-    event("resume")
+        n = datetime.now()
+        if not (DAY_FROM <= n.hour < RESUME_HOUR):
+            why = "past %02d:00" % RESUME_HOUR
+            break
+        if UNTIL is not None and n >= UNTIL:
+            why = "the run is over"
+            break
+        used, why = unit_in_use()
+        if not used:
+            break
+    PAUSED += time.time() - t0
+    event("resume", why=why, paused_hours=round(PAUSED / 3600, 2))
+
+
+def finished(t_start):
+    """Is the run over? Either the clock says so, or it has soaked long enough."""
+    if UNTIL is not None and datetime.now() >= UNTIL:
+        return True
+    if SOAK_HOURS and (time.time() - t_start - PAUSED) >= SOAK_HOURS * 3600:
+        return True
+    return False
 
 
 def next_gap(rng):
@@ -463,6 +530,8 @@ def summarise(results, t_start, hs):
     tagged = [x for x in results if (x["badge"] or {}).get("unbacked_sources")]
     return dict(
         chats=len(results), hours=round((time.time() - t_start) / 3600, 2),
+        soak_hours=round((time.time() - t_start - PAUSED) / 3600, 2),
+        paused_hours=round(PAUSED / 3600, 2),
         failed_chats=sum(1 for x in results if x["fail"]), failures=fails,
         by_kind=by_kind,
         first_words_warm=lat(warm, "ttfw"), first_words_cold=lat(cold, "ttfw"),
@@ -486,8 +555,12 @@ def main():
     signal.signal(signal.SIGTERM, lambda *a: stop.set())
     rng = random.Random(SEED)
     t_start = time.time()
+    horizon = ("SMOKE" if SMOKE else
+               ", ".join(filter(None, [
+                   "until " + UNTIL.strftime("%Y-%m-%d %H:%M") if UNTIL else "",
+                   "%g h of soaking" % SOAK_HOURS if SOAK_HOURS else ""])))
     say("soak %s: console :%d -> proxy :%d, deployed code %s, state %s"
-        % ("SMOKE" if SMOKE else "until " + UNTIL.strftime("%Y-%m-%d %H:%M"),
+        % (horizon,
            CONSOLE_PORT, PROXY_PORT, APP, STATE))
     h = health(); HS.append(h)
     event("start", health=h, unit_state=unit_state_hashes())
@@ -513,10 +586,10 @@ def main():
                     break
                 kind, prompt = smoke.pop(0)
             else:
-                if datetime.now() >= UNTIL:
+                if finished(t_start):
                     break
                 step_aside()
-                if datetime.now() >= UNTIL or stop.is_set():
+                if finished(t_start) or stop.is_set():
                     break
                 if not order:
                     order = PROMPTS[:]
@@ -550,7 +623,7 @@ def main():
             if not SMOKE:
                 wait = next_gap(rng)
                 t_end = time.time() + wait
-                while time.time() < t_end and datetime.now() < UNTIL and not stop.is_set():
+                while time.time() < t_end and not finished(t_start) and not stop.is_set():
                     time.sleep(min(5, t_end - time.time()))
     finally:
         stop.set()
