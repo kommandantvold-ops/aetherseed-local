@@ -34,6 +34,7 @@ IDENTITY_FILES=(
   /etc/systemd/system/aetherseed-warmup.service
   /etc/systemd/system/aetherseed-gui.service
   /etc/systemd/system/aetherseed-kiosk.service
+  /etc/systemd/system/aetherseed-keepalive.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
   /etc/nftables.conf
 )
@@ -135,6 +136,11 @@ collect() {
   emit service.gui.enabled          "$(systemctl is-enabled aetherseed-gui 2>/dev/null || echo unknown)"
   emit service.kiosk.enabled        "$(systemctl is-enabled aetherseed-kiosk 2>/dev/null || echo unknown)"
   emit service.getty_tty2.enabled   "$(systemctl is-enabled getty@tty2 2>/dev/null || echo unknown)"
+  # The keepalive is an R&D instrument, not product: it holds the model
+  # resident and logs one identical request every three minutes. A unit
+  # that runs it is a different device from one that does not, so the id
+  # says which.
+  emit service.keepalive.enabled    "$(systemctl is-enabled aetherseed-keepalive 2>/dev/null || echo unknown)"
 }
 
 fingerprint() {  # one hash over the whole sorted body

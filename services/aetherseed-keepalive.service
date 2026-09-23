@@ -1,0 +1,40 @@
+[Unit]
+# R&D INSTRUMENT, not part of the product yet.
+#
+# Holds the model resident so the first words of an answer cost 4 s rather than
+# 22 s (the eviction cliff of step 16a), and records one identical request every
+# three minutes so latency drift is visible over weeks. Whether a shipped unit
+# should keep its NPU awake permanently is a product decision, not made here.
+Description=AetherSeed Companion - keepalive and degradation log (R&D)
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=hailo-ollama.service
+Wants=hailo-ollama.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=andreas
+Group=andreas
+Environment=KEEPALIVE_DIR=/home/andreas/keepalive
+Environment=KEEPALIVE_SECONDS=180
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/andreas/keepalive/keepalive.py
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aetherseed-keepalive
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/home/andreas/keepalive
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

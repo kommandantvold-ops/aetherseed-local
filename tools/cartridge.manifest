@@ -1,10 +1,10 @@
 # AetherSeed Companion — cartridge manifest
-# Captured 2026-09-22T23:00:48Z on aetherseed
-# Verify with: ./cartridge.sh verify cart-new.manifest
+# Captured 2026-09-23T14:38:45Z on aetherseed
+# Verify with: ./cartridge.sh verify cart25.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	8974c3527f3d078c6af2c27803c5c0b85ac11e387ea8ffea2fa169150c9860fd
+cartridge-id	c3fb59299e15ce56b3f5c7f629e17eeda51f055083426244b99f43afa5bfb202
 app.digest	cf5815493b7a7a5f60f932231a1b504dd2a839d7e30bc54ebd385d91c6037776
 app.files	16
 app.numpy	2.2.4
@@ -12,6 +12,7 @@ app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
 file./etc/nftables.conf	3eee0ef33e802a35fe3d25d2a95ad9d5ecdeb1c7a4b46381dbdefa46aef1d8b9
 file./etc/systemd/system/aetherseed-gui.service	24187850a779344457e2a0e2c0ba8927bd7fa221ec079816dd7d0b1b8845c5f2
+file./etc/systemd/system/aetherseed-keepalive.service	a68dbe3ce1623b088b96ec4ff07997f98da8b64c4955d962fae89f4865b278a7
 file./etc/systemd/system/aetherseed-kiosk.service	44b41955ad8bf3c066ef8e263a5f046ef4a7dc336cdec346c0d67a640f5fd699
 file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
 file./etc/systemd/system/aetherseed-warmup.service	b43d3c487d742665f047f92bd3c094414ff4c31af5d3b3e8c15a6757ee65e45b
@@ -36,6 +37,7 @@ pkg.python3-h10-hailort	5.1.1-1
 service.getty_tty2.enabled	enabled
 service.gui.enabled	enabled
 service.hailo_ollama.enabled	enabled
+service.keepalive.enabled	enabled
 service.kiosk.enabled	enabled
 service.nftables.enabled	enabled
 service.proxy.enabled	enabled
