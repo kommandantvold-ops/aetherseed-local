@@ -795,7 +795,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 # to reward honesty.
                 resonance = 0.2
             elif declined:
-                resonance = 0.9                      # declined, invented nothing
+                # WAS 0.9 - the highest value in this table - and step 15e
+                # fixed that only for fiction. Measured over the 24-hour soak
+                # of step 29: an "I don't know" to an UNRELATED question
+                # ("What is the latest news today?") outranked the statement
+                # that held the answer and took the last slot in the window,
+                # on the turn the node first denied knowing its owner's dog's
+                # name. A decline was still the most-promoted memory the node
+                # could hold, on the path where most of its turns happen.
+                #
+                # Neutral, not punished: an honest "I don't know" is often the
+                # right answer and the record keeps it either way. What it must
+                # not be is PREFERRED over the thing it failed to recall.
+                # Replayed over the recorded run, this alone puts the telling
+                # back in the window on 25 turns out of 25.
+                resonance = 0.5                      # declined, invented nothing
             elif workspace_data:
                 resonance = 0.7                      # used tools successfully
             elif report is not None and report.medium:

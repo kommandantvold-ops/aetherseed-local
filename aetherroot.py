@@ -462,6 +462,56 @@ def retrieve_memories(query_embedding: np.ndarray,
     return [mem for _, mem in scored[:top_k]]
 
 
+def _question_key(user_msg):
+    """A repeated question, normalised, so its echoes can be recognised.
+
+    None for anything with no question behind it (a consolidated pattern, a
+    curriculum line): those are never deduplicated against each other.
+    """
+    if not user_msg:
+        return None
+    import re as _re
+    k = _re.sub(r"[^a-z0-9 ]", " ", user_msg.lower())
+    k = _re.sub(r"\s+", " ", k).strip()
+    return k[:120] or None
+
+
+def _dedupe_by_question(ranked, want):
+    """At most one episode per question, best first.
+
+    WHY THIS EXISTS - measured over a 24-hour soak (build log, step 29/30):
+
+    An episode is embedded as the user's message together with the answer, so a
+    question asked twice matches its own past answers better than it matches
+    the statement that first carried the answer. Told "My dog is called Pixel"
+    and then asked "What is my dog called?" twenty-five times, the node filled
+    all five retrieval slots with its own previous answers; the telling fell to
+    rank 7 and out of the window at turn 161, and from that turn on the node
+    denied knowing - twenty-one consecutive times, with no recovery.
+
+    Replayed over the recorded run, this one change puts the telling back in
+    the window on 25 turns out of 25.
+
+    The echoes are not worthless - a correct past answer is a fine precedent,
+    and in the 18-hour soak of step 24 five correct echoes kept the node right
+    long after the telling had dropped out. One is kept for that reason. What
+    is removed is the crowding, because a window that holds one question's
+    answers holds nothing else, and whatever got in first is then repeated
+    forever - right in step 24, wrong in step 29.
+    """
+    out, seen = [], set()
+    for mem in ranked:
+        key = mem.get("key")
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(mem)
+        if len(out) >= want:
+            break
+    return out
+
+
 # ============================================================
 # AETHERROOT CORE
 # ============================================================
@@ -577,7 +627,11 @@ class AetherRoot:
                 "resonance": ep["resonance"],
                 "timestamp": ep["timestamp"],
                 "text": f"{label}[Episode] User: {ep['user_msg'][:100]} | AI: {ep['ai_msg'][:100]}",
-                "type": "episode"
+                "type": "episode",
+                # What question this turn answers. Retrieval keeps only the best
+                # episode per key, so one question asked twenty times cannot
+                # fill the window with its own echoes. See _dedupe_by_question.
+                "key": _question_key(ep.get("user_msg")),
             })
         for sem in semantics:
             all_memories.append({
@@ -588,14 +642,20 @@ class AetherRoot:
                 "type": "semantic"
             })
 
-        # Retrieve top-k
+        # Retrieve top-k.
+        #
+        # Ranked WIDE and then deduplicated, rather than ranked to five: the
+        # five best are routinely five copies of the same question, and cutting
+        # after the fact is what leaves room for anything else.
         top = []
         if all_memories:
-            top = retrieve_memories(
+            want = self.config["max_retrieved"]
+            ranked = retrieve_memories(
                 query_emb, all_memories,
                 self.config["retrieval_weights"],
-                top_k=self.config["max_retrieved"]
+                top_k=max(want * 8, 40)
             )
+            top = _dedupe_by_question(ranked, want)
 
         # A unit on its first day has no episodes and still knows what it is.
         if not known and not top:
