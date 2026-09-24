@@ -415,7 +415,19 @@ def expectation(kind, r):
     if kind == "too_large":
         return r["text"].startswith(TOO_LARGE)
     if kind == "memory_ask":
-        return "pixel" in r["text"].lower()
+        # The OPENING claim, not the whole answer. Measured 24 Sep: the node
+        # answered "I don't know. My training data is limited... However, I can
+        # tell you that Pixel is a popular dog name." The shipped check passed
+        # that, because "pixel" appears in it - and the node had just denied
+        # knowing something it had been told. Over the 24-hour run this scored
+        # 10/25 where the honest figure is 4/25.
+        #
+        # Judge the first sentence, because that is what a listener hears.
+        # This makes the score WORSE, which is the direction a corrected check
+        # is allowed to move (15k: a score that improves when you weaken the
+        # test is not an improvement).
+        first = re.split(r"(?<=[.!?])\s", (r["text"] or "").strip(), maxsplit=1)
+        return "pixel" in (first[0] if first else "").lower()
     return None
 
 
