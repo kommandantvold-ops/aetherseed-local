@@ -123,6 +123,7 @@ textarea:focus{outline:none; border-color:var(--accent)}
     <span class="chip"><span class="dot" id="health"></span><span id="healthText"></span></span>
     <span class="chip"><span id="trustLabel"></span> <b id="trust">–</b></span>
     <span class="chip"><span id="memoryLabel"></span> <b id="episodes">–</b></span>
+    <span class="chip" id="rings">–</span>
     <span class="chip" id="modelChip">–</span>
     <button id="recordBtn"></button>
   </div>
@@ -184,6 +185,12 @@ const T = {
     unverified: 'Unverified source — not used as memory',
     unchecked: 'Not checked for invented sources — not used as memory',
     usedMemory: 'used memory', usedTools: 'used tools',
+    remembered: (r, a) => a ? `${r} remembered · ${a} set aside` : `${r} remembered`,
+    rings: (n) => n === 0 ? 'no rings yet' : n === 1 ? '1 ring' : `${n} rings`,
+    ringOf: (i, o) => `${i} of ${o}`,
+    lastRing: (ago) => `last ring ${ago}`,
+    ago: (m) => m < 1 ? 'just now' : m < 60 ? `${m} min ago`
+      : m < 2880 ? `${Math.floor(m / 60)} h ago` : `${Math.floor(m / 1440)} days ago`,
     fromRecord: 'from the record, not the model',
     fromKnown: 'from what it was built knowing, not the model',
     noAnswer: 'The companion did not answer.', cutOff: 'The answer was cut off.',
@@ -210,6 +217,12 @@ const T = {
     unverified: 'Kilde som ikke kan bekreftes — brukes ikke som minne',
     unchecked: 'Ikke sjekket for oppdiktede kilder — brukes ikke som minne',
     usedMemory: 'brukte minne', usedTools: 'brukte verktøy',
+    remembered: (r, a) => a ? `${r} husket · ${a} lagt til side` : `${r} husket`,
+    rings: (n) => n === 0 ? 'ingen årringer ennå' : n === 1 ? '1 årring' : `${n} årringer`,
+    ringOf: (i, o) => `${i} av ${o}`,
+    lastRing: (ago) => `siste årring ${ago}`,
+    ago: (m) => m < 1 ? 'nå nettopp' : m < 60 ? `for ${m} min siden`
+      : m < 2880 ? `for ${Math.floor(m / 60)} t siden` : `for ${Math.floor(m / 1440)} dager siden`,
     fromRecord: 'fra loggen, ikke fra modellen',
     fromKnown: 'fra det den ble bygget med, ikke fra modellen',
     noAnswer: 'Følgesvennen svarte ikke.', cutOff: 'Svaret ble avbrutt.',
@@ -440,6 +453,23 @@ function applyCompanion(c) {
 }
 
 // ---- status -----------------------------------------------------------------
+// Remembered is what the node can use; set aside is kept in the record and
+// never used. The old figure counted table rows and hid the corrections.
+function memoryLine(s, d) {
+  if (d.remembered == null) return d.episodes ?? '–';   // an older proxy
+  return s.remembered(d.remembered, d.set_aside || 0);
+}
+
+// "3 rings · 7 of 20 · last ring 4 days ago". A ring is one consolidation:
+// 50 factual turns for the first, 20 for each after (step 32).
+function ringLine(s, r) {
+  if (!r) return '–';
+  const parts = [s.rings(r.count), s.ringOf(r.into, r.of)];
+  const at = r.last_at ? Date.parse(r.last_at) : NaN;
+  if (!isNaN(at)) parts.push(s.lastRing(s.ago(Math.max(0, Math.floor((Date.now() - at) / 60000)))));
+  return parts.join(' · ');
+}
+
 async function status() {
   try {
     const d = await (await fetch('/aetherseed/status')).json();
@@ -453,7 +483,8 @@ async function status() {
     const s = t();
     $('health').className = 'dot up'; $('healthText').textContent = s.up;
     $('trust').textContent = s.tiers[d.trust_level] || d.trust_level || '–';
-    $('episodes').textContent = d.episodes ?? '–';
+    $('episodes').textContent = memoryLine(s, d);
+    $('rings').textContent = ringLine(s, d.rings);
     $('modelChip').textContent = d.model ?? '–';
     lastBounds = d.bounds || null;
     if (lastBounds) $('bounds').textContent = s.bounds(lastBounds);

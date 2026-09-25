@@ -25,7 +25,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Sequence, Tuple
 
 # ============================================================
 # CONFIGURATION
@@ -39,13 +39,20 @@ DEFAULT_CONFIG = {
     },
     "max_retrieved": 5,
     "max_context_chars": 800,   # 1500 did not fit the 864-token prefill ceiling
-    "consolidation_threshold": 50,  # episodes before auto-consolidation
+    "consolidation_threshold": 50,  # factual episodes waiting before a ring closes
+    "consolidation_batch": 20,      # episodes one ring takes - see RINGS below
     "embedding_dim": 64,            # TF-IDF dimensions (kept small for 1.7B context)
     "willingness_dim": 64,
     "willingness_drift": 0.02,      # slow drift per interaction
     "db_path": "memory.db",
     "embedding_method": "tfidf"     # "tfidf" | "ollama" | "sentence_transformers"
 }
+
+# Provenance modes by what memory does with them (logic/provenance.py).
+# Literal strings, not imports: aetherroot must load without logic/ on the path.
+CONSOLIDATES = ("factual",)              # may feed a ring
+REMEMBERED = ("factual", "fiction")      # counted as remembered on the console
+SET_ASIDE = ("unverified",)              # kept in the record, never used
 
 
 # ============================================================
@@ -130,6 +137,20 @@ class TFIDFEmbedder:
 # ============================================================
 # STORAGE LAYER
 # ============================================================
+
+def _episode_filter(unconsolidated_only: bool,
+                    modes: Optional[Sequence[str]]) -> Tuple[str, list]:
+    """WHERE clause shared by the episode reads, so a count and a fetch can
+    never disagree about which rows they mean."""
+    clauses, args = [], []
+    if unconsolidated_only:
+        clauses.append("consolidated = 0")
+    if modes is not None:
+        modes = list(modes)
+        clauses.append("mode IN (" + ",".join("?" * len(modes)) + ")" if modes else "0")
+        args.extend(modes)
+    return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
+
 
 class MemoryStore:
     """SQLite-backed memory storage."""
@@ -235,19 +256,20 @@ class MemoryStore:
         self.conn.commit()
         return cur.lastrowid
 
-    def get_all_episodes(self, unconsolidated_only: bool = False) -> List[Dict]:
-        """Retrieve episodes, optionally only unconsolidated ones."""
+    def get_all_episodes(self, unconsolidated_only: bool = False,
+                         modes: Optional[Sequence[str]] = None) -> List[Dict]:
+        """Retrieve episodes, optionally only unconsolidated ones and only
+        those whose provenance mode is in `modes` (None = every mode)."""
         # Columns are named rather than SELECT *: the old form zipped a
         # hardcoded list against whatever the table happened to return, so
         # adding a column silently shifted every field by one.
         columns = ["id", "timestamp", "session_id", "user_msg", "ai_msg",
                    "embedding", "resonance", "topic_tags", "consolidated", "mode"]
-        query = "SELECT " + ", ".join(columns) + " FROM episodes"
-        if unconsolidated_only:
-            query += " WHERE consolidated = 0"
+        where, args = _episode_filter(unconsolidated_only, modes)
+        query = "SELECT " + ", ".join(columns) + " FROM episodes" + where
         query += " ORDER BY timestamp DESC"
 
-        rows = self.conn.execute(query).fetchall()
+        rows = self.conn.execute(query, args).fetchall()
         results = []
         for row in rows:
             d = dict(zip(columns, row))
@@ -344,12 +366,22 @@ class MemoryStore:
         )
         self.conn.commit()
 
-    def get_episode_count(self, unconsolidated_only: bool = True) -> int:
-        """Count episodes."""
-        query = "SELECT COUNT(*) FROM episodes"
-        if unconsolidated_only:
-            query += " WHERE consolidated = 0"
-        return self.conn.execute(query).fetchone()[0]
+    def get_episode_count(self, unconsolidated_only: bool = True,
+                          modes: Optional[Sequence[str]] = None) -> int:
+        """Count episodes. With `modes` unset this counts ROWS - including
+        turns set aside as 'unverified' - which is not the same thing as what
+        the node can remember. get_status() says which is which."""
+        where, args = _episode_filter(unconsolidated_only, modes)
+        return self.conn.execute("SELECT COUNT(*) FROM episodes" + where,
+                                 args).fetchone()[0]
+
+    def get_rings(self) -> Dict:
+        """How many rings have closed, and when the latest one did.
+        A ring is one consolidation; the growth table is its only record."""
+        n, last = self.conn.execute(
+            "SELECT COUNT(*), MAX(timestamp) FROM growth "
+            "WHERE event_type = 'consolidation'").fetchone()
+        return {"count": n, "last_at": last}
 
     def close(self):
         self.conn.close()
@@ -576,8 +608,11 @@ class AetherRoot:
         That rule is the whole point of the module. Without it a story written
         on Tuesday re-enters Friday's prompt indistinguishable from something
         true, and the node deceives its user with its own past invention.
-        Semantic patterns are consolidated from episodes and are not filtered
-        here - consolidation runs over episodes that were already filtered.
+        Semantic patterns are not filtered here because consolidation only
+        ever reads FACTUAL episodes (_trigger_consolidation). Until 25 Sep 2026
+        this docstring claimed that and the code did not do it: 'unverified'
+        and 'fiction' turns were summarised into [Pattern] lines that a factual
+        request then retrieved. test_rings.py holds the regression.
         """
         from logic.provenance import visible_modes, FICTION, FICTION_LABEL
 
@@ -719,8 +754,10 @@ class AetherRoot:
         # Save embedder state
         self.embedder.save_state(self.root_dir / "embedder_state.json")
 
-        # Check consolidation trigger
-        ep_count = self.store.get_episode_count(unconsolidated_only=True)
+        # Check consolidation trigger. Factual episodes only: a turn that may
+        # never feed a ring must not be what makes one close.
+        ep_count = self.store.get_episode_count(unconsolidated_only=True,
+                                                modes=CONSOLIDATES)
         if ep_count >= self.config["consolidation_threshold"]:
             self._trigger_consolidation()
 
@@ -738,7 +775,13 @@ class AetherRoot:
     def get_status(self) -> Dict:
         """Get current AetherRoot status."""
         episodes = self.store.get_episode_count(unconsolidated_only=False)
-        unconsolidated = self.store.get_episode_count(unconsolidated_only=True)
+        unconsolidated = self.store.get_episode_count(unconsolidated_only=True,
+                                                      modes=CONSOLIDATES)
+        # 'episodes' stays the row count - tools/soak.py watches it for writes.
+        # What the console shows is these two: fiction is kept and labelled, so
+        # it is remembered; 'unverified' is kept in the record and never used.
+        remembered = self.store.get_episode_count(False, modes=REMEMBERED)
+        set_aside = self.store.get_episode_count(False, modes=SET_ASIDE)
         semantics = len(self.store.get_all_semantic())
         identity = self.store.get_identity()
         probes = self.store.get_probe_history()
@@ -746,6 +789,9 @@ class AetherRoot:
         return {
             "episodes": episodes,
             "unconsolidated": unconsolidated,
+            "remembered": remembered,
+            "set_aside": set_aside,
+            "rings": self._ring_status(unconsolidated),
             "semantic_memories": semantics,
             "identity_traits": identity,
             "willingness_mean": self.willingness.mean(),
@@ -755,17 +801,42 @@ class AetherRoot:
             "root_dir": str(self.root_dir)
         }
 
+    def _ring_status(self, unconsolidated: int) -> Dict:
+        """Where the node is in its current ring.
+
+        RINGS. One ring = one consolidation. The trigger fires at
+        `consolidation_threshold` waiting factual episodes and a ring takes
+        `consolidation_batch` of them, so the first ring closes at 50 and every
+        later one 20 turns after the last (decision 25 Sep 2026: a ring is 20;
+        the analogy moved, not the mechanism). Progress is therefore n of 50
+        before the first ring and n of 20 after it.
+
+        A ring today is ACCRETION, NOT DISTILLATION: it stores a bag of words,
+        prunes nothing, and its episodes keep retrieving.
+        """
+        rings = self.store.get_rings()
+        threshold = self.config["consolidation_threshold"]
+        batch = self.config.get("consolidation_batch", DEFAULT_CONFIG["consolidation_batch"])
+        if rings["count"] == 0:
+            into, of = unconsolidated, threshold
+        else:
+            into, of = unconsolidated - (threshold - batch), batch
+        return {"count": rings["count"], "last_at": rings["last_at"],
+                "into": max(0, min(into, of)), "of": of}
+
     def _trigger_consolidation(self):
         """Sleep-phase consolidation: compress episodes into semantic patterns.
         For now, simple clustering by similarity. 
         Full LLM-driven consolidation comes with AetherSpark integration."""
-        episodes = self.store.get_all_episodes(unconsolidated_only=True)
+        episodes = self.store.get_all_episodes(unconsolidated_only=True,
+                                               modes=CONSOLIDATES)
         if len(episodes) < 10:
             return
 
         # Simple consolidation: group by similarity, create summaries
         # For v1, we just compress the oldest episodes into a summary
-        batch = episodes[-20:]  # oldest 20 unconsolidated
+        size = self.config.get("consolidation_batch", DEFAULT_CONFIG["consolidation_batch"])
+        batch = episodes[-size:]  # oldest `size` unconsolidated factual
         if len(batch) < 5:
             return
 

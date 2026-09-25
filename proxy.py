@@ -888,6 +888,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({
                 "trust_level": trust.get_trust_level_name(),
                 "episodes": rs.get("episodes"),
+                "remembered": rs.get("remembered"),
+                "set_aside": rs.get("set_aside"),
+                "rings": rs.get("rings"),
                 "willingness": rs.get("willingness_mean"),
                 "model": "llama3.2:3b",
                 "companion": companion.public(companion.load(COMPANION_FILE)),
@@ -1007,7 +1010,8 @@ def main():
     print(f"  Workspace:    {os.path.expanduser('~/aetherseed-workspace')}")
 
     rs = root.get_status()
-    print(f"  Episodes:     {rs['episodes']}")
+    print(f"  Episodes:     {rs['episodes']} ({rs.get('remembered')} remembered, "
+          f"{rs.get('set_aside')} set aside)")
     print(f"  Willingness:  {rs['willingness_mean']:.3f}")
     print()
     print(f"  {trust.get_status_line()}")
