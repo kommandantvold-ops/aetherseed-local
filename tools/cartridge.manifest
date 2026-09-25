@@ -1,11 +1,11 @@
 # AetherSeed Companion — cartridge manifest
-# Captured 2026-09-25T11:30:35Z on aetherseed
-# Verify with: ./cartridge.sh verify cart29.manifest
+# Captured 2026-09-25T19:36:17Z on aetherseed
+# Verify with: ./cartridge.sh verify cart30.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	60bdef8f787664b4a6dc39861b35c323e0a7d4474959a1d2a1e630d52c4fdbee
-app.digest	11d90b1f5b2a2f751500136a19e855ff0502ea91ba6f64dbf851438aad460427
+cartridge-id	ac61288d4ffb2de2fed7dfd337ccca95c832181f32a5a9a2f40e99974b648956
+app.digest	feb2844c8aae133b2e5e14a7ce2b7f6c85cf0e284ca2d6f2e518366684399b52
 app.files	24
 app.numpy	2.2.4
 app.tokenizers	0.23.2
