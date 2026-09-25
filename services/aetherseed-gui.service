@@ -26,6 +26,10 @@ Environment=AETHERSEED_GUI_BIND=127.0.0.1
 Environment=AETHERSEED_GUI_PORT=2077
 Environment=AETHERSEED_BACKEND=http://127.0.0.1:8001
 Restart=always
+# The one place this server may write: a shutdown request that
+# aetherseed-shutdown.path turns into an orderly poweroff (gui/serve.py).
+RuntimeDirectory=aetherseed-gui
+RuntimeDirectoryMode=0755
 RestartSec=5
 
 # It serves fixed files and relays HTTP to loopback. It needs no device, no

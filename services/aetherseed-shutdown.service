@@ -1,0 +1,14 @@
+# AetherSeed Companion - orderly shutdown, started only by aetherseed-shutdown.path.
+#
+# Removes the request first, so if poweroff were ever refused the path unit
+# would not fire again in a loop. --no-block: systemd stops every service in
+# order (the proxy closes its store, the model unloads) and then powers off.
+
+[Unit]
+Description=AetherSeed Companion - orderly shutdown requested from the console
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rm -f /run/aetherseed-gui/shutdown-request
+ExecStart=/usr/bin/systemctl --no-block poweroff

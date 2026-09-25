@@ -1,0 +1,8 @@
+# Carried from /etc/xdg/labwc/environment, which the kiosk no longer reads.
+# Only what the console needs: the keyboard as it was, and a fallback output
+# so labwc starts even if the television is off at boot. Nothing for XWayland,
+# the desktop session, or the panel.
+XKB_DEFAULT_MODEL=pc105
+XKB_DEFAULT_LAYOUT=gb
+LABWC_FALLBACK_OUTPUT=NOOP-1
+XCURSOR_SIZE=24

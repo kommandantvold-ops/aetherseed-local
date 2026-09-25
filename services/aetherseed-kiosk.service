@@ -86,7 +86,9 @@ Environment=HOME=/home/andreas
 # as a 317 mm ribbon down the middle of a 1600 mm screen. The right number
 # depends on where the viewer actually stands and is a judgement to be made in
 # front of it, not from here.
-ExecStart=/usr/bin/labwc -s "/usr/bin/chromium \
+# -C: the kiosk's own config (kiosk/labwc/rc.xml says why). Without it labwc
+# read /etc/xdg/labwc and started the Pi desktop behind the console.
+ExecStart=/usr/bin/labwc -C /opt/aetherseed/kiosk/labwc -s "/usr/bin/chromium \
     --ozone-platform=wayland \
     --kiosk \
     --app=http://127.0.0.1:2077/ \

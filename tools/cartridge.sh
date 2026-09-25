@@ -35,6 +35,8 @@ IDENTITY_FILES=(
   /etc/systemd/system/aetherseed-gui.service
   /etc/systemd/system/aetherseed-kiosk.service
   /etc/systemd/system/aetherseed-keepalive.service
+  /etc/systemd/system/aetherseed-shutdown.path
+  /etc/systemd/system/aetherseed-shutdown.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
   /etc/nftables.conf
 )

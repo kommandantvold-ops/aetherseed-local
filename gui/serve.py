@@ -12,7 +12,10 @@ budget, the sanitizers, all four generation bounds, provenance - lives at the
 proxy's exit point, and a UI that went straight to the model would have none
 of them.
 
-Static files only, read-only, no directory listing, no uploads, no writes.
+Static files only, read-only, no directory listing, no uploads. One write:
+the shutdown request (see SHUTDOWN_REQUEST), an empty file that a root-owned
+systemd path unit turns into an orderly poweroff. This server never gains the
+privilege to shut anything down itself.
 """
 import base64
 import hashlib
@@ -35,6 +38,19 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # Only these reach the backend. An allow-list rather than a prefix match, so a
 # future route on the proxy is not exposed to the browser by accident.
 PROXIED_POST = ("/api/chat", "/aetherseed/setup")
+
+# SHUTDOWN. So the device can be moved without pulling the plug on a running
+# SQLite store. The console cannot power anything off - it runs unprivileged
+# with NoNewPrivileges, and should stay that way. It only leaves a request in
+# its own runtime directory; services/aetherseed-shutdown.path watches for it
+# and starts a root oneshot that removes it and calls poweroff. /run is tmpfs,
+# so a request can never survive into the next boot and shut it down again.
+# Only this server can write there: the proxy (the model's side) runs with
+# ProtectSystem=strict and no writable path under /run.
+SHUTDOWN_PATH = "/aetherseed/shutdown"
+SHUTDOWN_REQUEST = os.environ.get("AETHERSEED_SHUTDOWN_REQUEST",
+                                  "/run/aetherseed-gui/shutdown-request")
+SHUTDOWN_CONFIRM = "shut down"
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/api/tags")
 
 # The page's own script is pinned by the hash of its bytes.
@@ -195,7 +211,48 @@ class Console(http.server.SimpleHTTPRequestHandler):
         _tally("page")
         super().do_GET()
 
+    def _json(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _shutdown(self):
+        # From the device itself only. The server binds to 127.0.0.1 already;
+        # this holds even if someone rebinds it.
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            _tally("refused")
+            self._json(403, {"error": "shutdown is only possible on the device"})
+            return
+        # JSON with an explicit confirmation: a stray form post or a link cannot
+        # send a JSON content type cross-origin without a preflight.
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            self._json(415, {"error": "expected application/json"})
+            return
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            data = json.loads(self.rfile.read(n) if n else b"{}")
+        except Exception:
+            data = {}
+        if not isinstance(data, dict) or data.get("confirm") != SHUTDOWN_CONFIRM:
+            self._json(400, {"error": "not confirmed"})
+            return
+        try:
+            with open(SHUTDOWN_REQUEST, "w") as f:
+                f.write(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n")
+        except OSError as e:
+            print(f"[gui] shutdown requested but could not be filed: {e!r}", flush=True)
+            self._json(503, {"error": "shutdown is not available on this unit"})
+            return
+        print("[gui] shutdown requested from the console", flush=True)
+        self._json(202, {"shutting_down": True})
+
     def do_POST(self):
+        if self.path == SHUTDOWN_PATH:
+            self._shutdown()
+            return
         if self.path not in PROXIED_POST:
             _tally("refused")
             self.send_error(404)
