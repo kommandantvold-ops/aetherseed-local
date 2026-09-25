@@ -116,6 +116,24 @@ textarea:focus{outline:none; border-color:var(--accent)}
 .card .row .send{margin-left:auto}
 .send.danger{background:var(--alarm); color:#fff}
 .send.danger:hover{color:#fff}
+
+/* The ring tree (step 37): every ring, what it chose, the model's own sentence
+   about it - labelled - and the turns it took. Read-only. */
+button.chip{cursor:pointer}
+button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
+.card.wide{max-width:760px; max-height:calc(100vh - 48px); overflow-y:auto}
+.card .top{display:flex; align-items:center; gap:10px; margin:0 0 6px}
+.card .top h1{margin:0}
+.card .top button{margin-left:auto}
+.tree{border-left:2px solid var(--line); margin:14px 0 0 6px; padding-left:14px;
+  display:flex; flex-direction:column; gap:10px}
+.ring summary{cursor:pointer; font-size:14px; color:var(--ink); list-style-position:outside}
+.ring .chosen{font-size:14px; color:var(--ink-2); margin:6px 0 0}
+.ring .own{font-size:14px; color:var(--brass); margin:4px 0 0}
+.ring .own.quiet{color:var(--ink-3)}
+.ring ol{margin:8px 0 0; padding-left:4px; list-style:none; font-size:13px; color:var(--ink-3)}
+.ring li{margin:2px 0; overflow-wrap:anywhere}
+.tree .growing{font-size:13px; color:var(--ink-3)}
 </style>
 </head>
 <body>
@@ -125,7 +143,7 @@ textarea:focus{outline:none; border-color:var(--accent)}
     <span class="chip"><span class="dot" id="health"></span><span id="healthText"></span></span>
     <span class="chip"><span id="trustLabel"></span> <b id="trust">–</b></span>
     <span class="chip"><span id="memoryLabel"></span> <b id="episodes">–</b></span>
-    <span class="chip" id="rings">–</span>
+    <button type="button" class="chip" id="rings">–</button>
     <span class="chip" id="modelChip">–</span>
     <button id="recordBtn"></button>
     <button id="offBtn"></button>
@@ -160,6 +178,14 @@ textarea:focus{outline:none; border-color:var(--accent)}
       <button type="button" id="offCancel"></button>
       <button type="button" class="send danger" id="offGo"></button>
     </div>
+  </div>
+</div>
+
+<div class="setup" id="tree" hidden>
+  <div class="card wide">
+    <div class="top"><h1 id="treeTitle"></h1><button type="button" id="treeClose"></button></div>
+    <p class="help" id="treeHelp"></p>
+    <div class="tree" id="treeBody"></div>
   </div>
 </div>
 
@@ -203,7 +229,19 @@ const T = {
     unchecked: 'Not checked for invented sources — not used as memory',
     usedMemory: 'used memory', usedTools: 'used tools',
     remembered: (r, a) => a ? `${r} remembered · ${a} set aside` : `${r} remembered`,
+    told: (n) => `${n} from its owner`,
+    usedFacts: 'used what its owner told it', usedRing: 'used a ring',
     rings: (n) => n === 0 ? 'no rings yet' : n === 1 ? '1 ring' : `${n} rings`,
+    treeTitle: 'Rings', close: 'Close',
+    treeHelp: 'A ring is 20 turns of factual conversation, closed together. The first part of each was chosen from the words said to it — nothing there is invented. The sentence after it was written by the model, and says so.',
+    chosen: 'Chosen from what was said:',
+    ownWords: (n) => n ? `In ${n}’s own words, unchecked:` : 'In its own words, unchecked:',
+    ownPending: 'No sentence of its own yet.',
+    ownWithheld: (why) => `No sentence of its own (${why}).`,
+    ringHead: (no, n, when) => `Ring ${no} · ${n} turns · closed ${when}`,
+    growing: (i, o) => `Growing: ${i} of ${o} toward the next ring`,
+    noRings: 'No rings yet.', noTree: 'Could not read the rings.',
+    owner: 'owner', unknown: 'unknown',
     ringOf: (i, o) => `${i} of ${o}`,
     lastRing: (ago) => `last ring ${ago}`,
     ago: (m) => m < 1 ? 'just now' : m < 60 ? `${m} min ago`
@@ -240,7 +278,19 @@ const T = {
     unchecked: 'Ikke sjekket for oppdiktede kilder — brukes ikke som minne',
     usedMemory: 'brukte minne', usedTools: 'brukte verktøy',
     remembered: (r, a) => a ? `${r} husket · ${a} lagt til side` : `${r} husket`,
+    told: (n) => `${n} fra eieren`,
+    usedFacts: 'brukte det eieren har fortalt', usedRing: 'brukte en årring',
     rings: (n) => n === 0 ? 'ingen årringer ennå' : n === 1 ? '1 årring' : `${n} årringer`,
+    treeTitle: 'Årringer', close: 'Lukk',
+    treeHelp: 'En årring er 20 replikkvekslinger om fakta, lukket sammen. Den første delen av hver er valgt ut fra ordene som ble sagt — ingenting der er oppdiktet. Setningen etter er skrevet av modellen, og det står.',
+    chosen: 'Valgt fra det som ble sagt:',
+    ownWords: (n) => n ? `Med ${n}s egne ord, ukontrollert:` : 'Med egne ord, ukontrollert:',
+    ownPending: 'Ingen setning med egne ord ennå.',
+    ownWithheld: (why) => `Ingen setning med egne ord (${why}).`,
+    ringHead: (no, n, when) => `Årring ${no} · ${n} replikkvekslinger · lukket ${when}`,
+    growing: (i, o) => `Vokser: ${i} av ${o} mot neste årring`,
+    noRings: 'Ingen årringer ennå.', noTree: 'Kunne ikke lese årringene.',
+    owner: 'eier', unknown: 'ukjent',
     ringOf: (i, o) => `${i} av ${o}`,
     lastRing: (ago) => `siste årring ${ago}`,
     ago: (m) => m < 1 ? 'nå nettopp' : m < 60 ? `for ${m} min siden`
@@ -336,6 +386,8 @@ function provenance(turnEl, p) {
     const w = document.createElement('span'); w.className = 'why'; w.textContent = p.why; row.append(w);
   }
   if (p.memory_used) tag(s.usedMemory, 'quiet');
+  if (p.facts_used > 0) tag(s.usedFacts, 'quiet');
+  if (p.rings_used > 0) tag(s.usedRing, 'quiet');
   if (p.used_tools) tag(s.usedTools, 'quiet');
   if (row.children.length) turnEl.root.append(row);
   scroll();
@@ -448,6 +500,72 @@ $('offGo').onclick = async () => {
   }
 };
 
+// ---- the ring tree ----------------------------------------------------------
+// Everything shown here is set as text, never as markup: the turns and the
+// model's sentence are things people and the model said.
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+const minutesSince = (iso) => {
+  const at = iso ? Date.parse(iso) : NaN;
+  return isNaN(at) ? null : Math.max(0, Math.floor((Date.now() - at) / 60000));
+};
+function who(s, speaker) {
+  if (speaker === 'owner') return s.owner;
+  return speaker || s.unknown;
+}
+
+async function openTree() {
+  const s = t();
+  $('treeTitle').textContent = s.treeTitle;
+  $('treeHelp').textContent = s.treeHelp;
+  $('treeClose').textContent = s.close;
+  const body = $('treeBody');
+  body.replaceChildren();
+  $('tree').hidden = false;
+  $('treeClose').focus();
+  let d;
+  try {
+    const r = await fetch('/aetherseed/rings');
+    if (!r.ok) throw new Error(String(r.status));
+    d = await r.json();
+  } catch {
+    body.append(el('p', 'growing', s.noTree));
+    return;
+  }
+  const rings = d.rings || [];
+  if (!rings.length) body.append(el('p', 'growing', s.noRings));
+  for (const ring of rings) {
+    const node = el('details', 'ring');
+    const m = minutesSince(ring.closed_at);
+    node.append(el('summary', null, s.ringHead(ring.ring, (ring.turns || []).length,
+                                               m == null ? '–' : s.ago(m))));
+    node.append(el('p', 'chosen', `${s.chosen} ${ring.content || ''}`));
+    if (ring.own_words) {
+      node.append(el('p', 'own', `${s.ownWords(name)} “${ring.own_words}”`));
+    } else {
+      node.append(el('p', 'own quiet',
+                     ring.own_words_note ? s.ownWithheld(ring.own_words_note) : s.ownPending));
+    }
+    const list = el('ol');
+    for (const tu of ring.turns || []) {
+      list.append(el('li', null, `#${tu.id} · ${who(s, tu.speaker)} · ${tu.user || ''}`));
+    }
+    node.append(list);
+    body.append(node);
+  }
+  const g = d.growing;
+  if (g && g.of) body.append(el('p', 'growing', s.growing(g.into, g.of)));
+}
+$('rings').onclick = openTree;
+$('treeClose').onclick = () => { $('tree').hidden = true; };
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('tree').hidden) $('tree').hidden = true;
+});
+
 // ---- first run --------------------------------------------------------------
 function showSetup(languages) {
   const setup = $('setup');
@@ -520,7 +638,8 @@ function applyCompanion(c) {
 // never used. The old figure counted table rows and hid the corrections.
 function memoryLine(s, d) {
   if (d.remembered == null) return d.episodes ?? '–';   // an older proxy
-  return s.remembered(d.remembered, d.set_aside || 0);
+  const line = s.remembered(d.remembered, d.set_aside || 0);
+  return d.facts > 0 ? `${line} · ${s.told(d.facts)}` : line;
 }
 
 // "3 rings · 7 of 20 · last ring 4 days ago". A ring is one consolidation:

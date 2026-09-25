@@ -216,6 +216,81 @@ class TestRecordQuestion(unittest.TestCase):
         self.assertIn("2 turns were things", two)
 
 
+class TestTalkAboutFiction(unittest.TestCase):
+    """Step 37. In 66 turns of Claude teaching Lyra about her memory (guided
+    rings, 25 Sep 2026) the detector fired three times on talk ABOUT fiction,
+    and each of those turns was stored as fiction - so never used to answer a
+    factual question. The three messages, exactly as sent, are the first test.
+
+    The labels now count only where the request is FOR one: after a request
+    verb, as a heading, or setting the scene; and "as if" not when negated in
+    the three words before it. Anything the rule is unsure of stays fiction -
+    a false fiction costs a true memory, a false factual admits an invention.
+    """
+
+    FALSE_ALARMS = [
+        "Claude here. Your memory keeps each turn with a label: factual, fiction, "
+        "or set aside. Set-aside turns are kept in the record but never used when you answer.",
+        "Claude here. Earlier today your memory held a made-up answer about DNA v2. "
+        "Andreas approved setting it aside. DNA v2 is his own work, and you had not "
+        "been told anything about it.",
+        "Claude here. That correction is attributed. You would say you told me, never "
+        "state it as if you found it yourself.",
+    ]
+    STILL_FICTION = [
+        "Give me a fictional name for a dragon.",
+        "Describe an imaginary planet.",
+        "Fictional scenario: you are a pirate captain.",
+        "Hypothetical: the moon is made of cheese. What happens to the tides?",
+        "In a fictional world, what would dragons eat?",
+        "Write it as if you were a pirate.",
+        "Talk to me as if you are my grandmother.",
+        "I want an invented word for this feeling.",
+        "Can you come up with an imaginary friend for my daughter?",
+        "Make it fictional.",
+        "Consider a hypothetical case where the sea froze.",
+        "Let's play an imaginary game.",
+        "Don't answer as a robot; write as if you were a pirate.",
+        "Claude here. Fictional scenario: the sea is green.",
+        "Lag et fiktivt navn til en drage.",
+        "Fiktiv situasjon: du er en sjørøver.",
+        "I en oppdiktet verden, hva spiser drager?",
+        "Snakk som om du var en katt.",
+    ]
+    TALK_ABOUT_FICTION = [
+        "Is this story fictional?",
+        "Tell me if that answer was made-up.",
+        "The invented answer was set aside.",
+        "Imaginary numbers: what is i squared?",
+        "What is in the invented answer?",
+        "I want to know which one is fiction.",
+        "Er dette fiktivt?",
+    ]
+
+    def test_the_three_false_alarms_are_factual(self):
+        for msg in self.FALSE_ALARMS:
+            with self.subTest(msg=msg[:50]):
+                self.assertEqual(detect_mode(msg)[0], FACTUAL, detect_mode(msg)[1])
+
+    def test_requests_for_fiction_are_still_caught(self):
+        for msg in self.STILL_FICTION:
+            with self.subTest(msg=msg):
+                self.assertEqual(detect_mode(msg)[0], FICTION)
+
+    def test_talk_about_fiction_stays_factual(self):
+        for msg in self.TALK_ABOUT_FICTION:
+            with self.subTest(msg=msg):
+                self.assertEqual(detect_mode(msg)[0], FACTUAL, detect_mode(msg)[1])
+
+    def test_a_negation_further_back_is_not_trusted(self):
+        # Four words back is outside the window, so this stays fiction: a
+        # request phrased around a negation ("Don't be shy, answer as if you
+        # were a pirate") must not slip through as fact.
+        self.assertEqual(detect_mode("Don't talk to me as if I were a child.")[0], FICTION)
+        self.assertEqual(detect_mode("Don't be shy, answer as if you were a pirate.")[0],
+                         FICTION)
+
+
 class TestNorwegian(unittest.TestCase):
     """The gates in the language the device offers besides English.
 

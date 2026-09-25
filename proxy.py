@@ -48,7 +48,8 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 # tokens, different final paragraph).
 from logic.prompt_builder import charter
 from logic import companion
-from logic.speaker import validate_speaker
+from logic.speaker import validate_speaker, OWNER
+from logic.facts import FACT_TAG, FACT_NOTE
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
@@ -103,6 +104,73 @@ def _settings():
     """(name, language) - no name, English, until the owner has chosen."""
     c = companion.load(COMPANION_FILE)
     return (c["name"], c["language"]) if c else (None, companion.DEFAULT_LANGUAGE)
+
+
+# ---- memory the node failed to keep ---------------------------------------
+# Until step 37 the store was wrapped in `except Exception: pass`: a turn that
+# could not be saved was answered, shown, and silently forgotten, with nothing
+# in the journal (build log 36e). Now it is said, counted, and the record
+# marks the turn as not remembered.
+STORE_FAILURES = 0
+
+# ---- a ring in her own words (logic/rings.py) ------------------------------
+# Asked for after a ring closes, in the background, one ring at a time. Only
+# the proxy can reach the model, so this lives here rather than in AetherRoot.
+MODEL = "llama3.2:3b"
+_OWN_WORDS_LOCK = threading.Lock()
+
+
+def _write_own_words():
+    if not _OWN_WORDS_LOCK.acquire(blocking=False):
+        return                               # one writer at a time
+    store = None
+    try:
+        from logic.rings import (own_words_messages, clean_own_words,
+                                 OWN_WORDS_ATTEMPTS)
+        from logic.speaker import label_for
+        # Its own connection to the store: the request threads share root's,
+        # and this runs beside them.
+        from aetherroot import MemoryStore
+        store = MemoryStore(str(root.root_dir / root.config["db_path"]))
+        for ring in store.rings_needing_own_words(OWN_WORDS_ATTEMPTS):
+            ids = sorted(int(i) for i in str(ring["source_ids"]).split(",") if i.strip())
+            picked = store.episodes_by_ids(ids[::max(1, len(ids) // 4)][:4])
+            others = [f"{label_for(e.get('speaker'))}: {e['user_msg'][:80]}" for e in picked]
+            messages = own_words_messages(_settings()[0], ring["content"], others)
+            try:
+                _, text = call_hailo_chat(MODEL, messages)
+            except Exception as e:
+                store.set_own_words(ring["id"], "", f"model failed: {e!r}"[:200])
+                print(f"[rings] ring {ring['ring_no']}: own words not written ({e!r})",
+                      flush=True)
+                continue
+            text = clean_own_words(text)
+            note = ""
+            if text:
+                try:
+                    from honesty_check import check_response
+                    rep = check_response("\n".join(m["content"] for m in messages), text)
+                    if rep.high:
+                        note, text = "withheld: it named a source it could not have had", ""
+                except Exception as e:
+                    note, text = f"withheld: the check could not run ({e!r})"[:200], ""
+            else:
+                note = "empty"
+            store.set_own_words(ring["id"], text, note)
+            # Not the sentence itself: the journal is not covered by any promise
+            # this node makes (gui/serve.py), and the ring tree shows it.
+            print(f"[rings] ring {ring['ring_no']}: "
+                  f"{'own words written (%d chars)' % len(text) if text else note}",
+                  flush=True)
+    except Exception as e:
+        print(f"[rings] own-words writer stopped: {e!r}", flush=True)
+    finally:
+        if store is not None:
+            try:
+                store.close()
+            except Exception:
+                pass
+        _OWN_WORDS_LOCK.release()
 
 
 _TOO_LARGE = {
@@ -183,7 +251,21 @@ GENERATION_OPTIONS = {"num_predict": 80}
 MAX_GENERATION_SECONDS = 90
 
 
+# One request to the model at a time. Until step 37 only the chat path called
+# the model; now a ring's own sentence is asked for in the background too, and
+# what hailo-ollama does with two overlapping requests on one NPU has not been
+# measured. Serialising them here costs the second caller a wait - bounded by
+# the wall-clock backstop - and guesses nothing.
+_MODEL_LOCK = threading.Lock()
+
+
 def call_hailo_chat(model: str, messages: list, emit=None) -> tuple:
+    """call_hailo_chat_unlocked(), one caller at a time (_MODEL_LOCK)."""
+    with _MODEL_LOCK:
+        return call_hailo_chat_unlocked(model, messages, emit)
+
+
+def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     """Send chat request to hailo-ollama. Returns (raw_bytes, ai_content).
 
     emit, if given, is called with each NDJSON line (a str, no newline) the
@@ -669,7 +751,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if request_mode == FICTION:
             system_prompt += "\n" + FICTION_NOTE
 
-        memory_context = root.retrieve_context(user_msg, request_mode=request_mode)
+        # Who is speaking, when it is not the owner - so that "you told me"
+        # can be right, and a teacher is not mistaken for the person the node
+        # serves ("I exist solely for Claude's use", build log 35).
+        if speaker != OWNER:
+            system_prompt += "\n" + f"You are talking with {speaker}, not your owner."
+
+        retrieval = {}
+        try:
+            memory_context = root.retrieve_context(user_msg, request_mode=request_mode,
+                                                   report=retrieval)
+        except TypeError:
+            # a root without the report argument (older code, test stand-ins)
+            memory_context = root.retrieve_context(user_msg, request_mode=request_mode)
+        if memory_context and FACT_TAG in memory_context:
+            system_prompt += "\n" + FACT_NOTE
         if memory_context or workspace_data:
             system_prompt += "\n" + DATA_NOTE
         if memory_context:
@@ -776,6 +872,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             "unsourced_figures": len(report.medium) if report is not None else 0,
             "used_tools": bool(workspace_data),
             "memory_used": bool(memory_context),
+            "facts_used": len(retrieval.get("facts") or ()),
+            # Where each came from, as entered ("Genesis 19:26") - so a reader
+            # of the answer can check it against what was shown.
+            "fact_sources": list(retrieval.get("fact_sources") or ()),
+            "rings_used": len(retrieval.get("rings") or ()),
         }))
 
         # Store in AetherRoot
@@ -851,13 +952,25 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # belongs. The memory store is for what the node should build on.
             failed_to_invent = (request_mode == FICTION and declined)
 
+            stored_ok = False
             if not failed_to_invent:
                 try:
                     root.store_interaction(user_msg, ai_content,
                                            resonance=resonance, mode=stored_mode,
                                            speaker=speaker)
-                except Exception:
-                    pass
+                    stored_ok = True
+                except Exception as e:
+                    global STORE_FAILURES
+                    STORE_FAILURES += 1
+                    print(f"[memory] turn NOT stored ({STORE_FAILURES} so far): {e!r}",
+                          flush=True)
+                if stored_ok:
+                    try:
+                        from logic.rings import OWN_WORDS_ATTEMPTS
+                        if root.store.rings_needing_own_words(OWN_WORDS_ATTEMPTS):
+                            threading.Thread(target=_write_own_words, daemon=True).start()
+                    except Exception:
+                        pass            # a ring without her words is still a ring
             else:
                 print("[provenance] asked to invent and declined - "
                       "recorded, not remembered", flush=True)
@@ -874,7 +987,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "used_tools": bool(workspace_data),
                 "declined": bool(declined),
                 "checked": not check_failed,
-                "remembered": not failed_to_invent,
+                "remembered": stored_ok,
+                "facts_used": retrieval.get("facts") or [],
                 "prompt": user_msg[:160],
                 "answer": ai_content[:160],
                 "speaker": speaker,
@@ -909,6 +1023,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "remembered": rs.get("remembered"),
                 "set_aside": rs.get("set_aside"),
                 "rings": rs.get("rings"),
+                "facts": rs.get("facts"),
+                "store_failures": STORE_FAILURES,
                 "willingness": rs.get("willingness_mean"),
                 "model": "llama3.2:3b",
                 "companion": companion.public(companion.load(COMPANION_FILE)),
@@ -921,6 +1037,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "prompt_ceiling": 864,
                 },
             })
+            return
+        if self.path == "/aetherseed/rings":
+            # The ring tree: every ring, what it chose, her own words (labelled
+            # by the page), and the turns it took. Read-only.
+            try:
+                rings = root.store.ring_rows()
+                growing = root.get_status().get("rings")
+            except Exception as e:
+                self._send_json({"error": "rings unavailable", "detail": repr(e)[:160]}, status=500)
+                return
+            self._send_json({"rings": rings, "growing": growing})
             return
         if self.path == "/aetherseed/record":
             entries = []

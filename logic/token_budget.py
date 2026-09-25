@@ -420,6 +420,11 @@ _LEADING_ARTEFACTS = (
     "[Fiction, written at your request - not fact]",
     "[Episode]",
     "[Pattern]",
+    # A ring's line took the place of [Pattern] in step 37 (logic/rings.py).
+    # "[Owner told you]" is deliberately NOT here: copied to the front of an
+    # answer it is still an attribution, and stripping it would leave the
+    # owner's words standing as the node's own.
+    "[Ring]",
 )
 
 

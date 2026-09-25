@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     "max_context_chars": 800,   # 1500 did not fit the 864-token prefill ceiling
     "consolidation_threshold": 50,  # factual episodes waiting before a ring closes
     "consolidation_batch": 20,      # episodes one ring takes - see RINGS below
+    "facts_max": 250,               # owner facts a unit may hold (logic/facts.py)
     "embedding_dim": 64,            # TF-IDF dimensions (kept small for 1.7B context)
     "willingness_dim": 64,
     "willingness_drift": 0.02,      # slow drift per interaction
@@ -184,6 +185,17 @@ class MemoryStore:
             self.conn.execute(
                 "ALTER TABLE episodes ADD COLUMN speaker TEXT NOT NULL DEFAULT ''")
             self.conn.commit()
+        # Rings (logic/rings.py). Patterns from before them have no number and
+        # render as they always did.
+        sem = {r[1] for r in self.conn.execute("PRAGMA table_info(semantic)")}
+        for col, decl in (("ring_no", "INTEGER"),
+                          ("own_words", "TEXT NOT NULL DEFAULT ''"),
+                          ("own_words_at", "TEXT NOT NULL DEFAULT ''"),
+                          ("own_words_note", "TEXT NOT NULL DEFAULT ''"),
+                          ("own_words_tries", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in sem:
+                self.conn.execute(f"ALTER TABLE semantic ADD COLUMN {col} {decl}")
+        self.conn.commit()
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -216,7 +228,26 @@ class MemoryStore:
                 confidence    REAL NOT NULL DEFAULT 0.5,
                 resonance_avg REAL NOT NULL DEFAULT 0.5,
                 created_at    TEXT NOT NULL,
-                updated_at    TEXT NOT NULL
+                updated_at    TEXT NOT NULL,
+                -- A ring (logic/rings.py): its number, and the one sentence the
+                -- model wrote about it after it closed - kept apart from the
+                -- chosen part in `content`, and always shown labelled.
+                ring_no       INTEGER,
+                own_words     TEXT NOT NULL DEFAULT '',
+                own_words_at  TEXT NOT NULL DEFAULT '',
+                own_words_note TEXT NOT NULL DEFAULT '',
+                own_words_tries INTEGER NOT NULL DEFAULT 0
+            );
+
+            -- What the owner told the node, word for word (logic/facts.py).
+            -- Revoked facts are kept and never retrieved.
+            CREATE TABLE IF NOT EXISTS facts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT NOT NULL,
+                text        TEXT NOT NULL,
+                source      TEXT NOT NULL DEFAULT '',
+                entered_by  TEXT NOT NULL DEFAULT 'owner',
+                revoked_at  TEXT
             );
 
             CREATE TABLE IF NOT EXISTS identity (
@@ -293,27 +324,33 @@ class MemoryStore:
 
     def store_semantic(self, content: str, embedding: np.ndarray,
                        source_ids: List[int], confidence: float,
-                       resonance_avg: float) -> int:
-        """Store a consolidated semantic memory."""
+                       resonance_avg: float, ring_no: Optional[int] = None) -> int:
+        """Store a consolidated semantic memory - a ring when ring_no is given."""
         now = datetime.now(timezone.utc).isoformat()
         cur = self.conn.execute(
             """INSERT INTO semantic
-               (content, embedding, source_ids, confidence, resonance_avg, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (content, embedding, source_ids, confidence, resonance_avg, created_at,
+                updated_at, ring_no)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (content, embedding.tobytes(),
              ",".join(str(i) for i in source_ids),
-             confidence, resonance_avg, now, now)
+             confidence, resonance_avg, now, now, ring_no)
         )
         self.conn.commit()
         return cur.lastrowid
 
+    _SEMANTIC_COLUMNS = ["id", "content", "embedding", "source_ids", "confidence",
+                         "resonance_avg", "created_at", "updated_at", "ring_no",
+                         "own_words", "own_words_at", "own_words_note", "own_words_tries"]
+
     def get_all_semantic(self) -> List[Dict]:
-        """Retrieve all semantic memories."""
+        """Retrieve all semantic memories. Columns named, never SELECT * -
+        the step-15 lesson: a zip against whatever the table returns shifts
+        every field by one when a column is added."""
+        columns = self._SEMANTIC_COLUMNS
         rows = self.conn.execute(
-            "SELECT * FROM semantic ORDER BY resonance_avg DESC"
+            "SELECT " + ", ".join(columns) + " FROM semantic ORDER BY resonance_avg DESC"
         ).fetchall()
-        columns = ["id", "content", "embedding", "source_ids", "confidence",
-                    "resonance_avg", "created_at", "updated_at"]
         results = []
         for row in rows:
             d = dict(zip(columns, row))
@@ -388,6 +425,83 @@ class MemoryStore:
         where, args = _episode_filter(unconsolidated_only, modes)
         return self.conn.execute("SELECT COUNT(*) FROM episodes" + where,
                                  args).fetchone()[0]
+
+    # ---- rings: her own words, written after a ring closes -----------------
+
+    def rings_needing_own_words(self, max_tries: int) -> List[Dict]:
+        return [s for s in self.get_all_semantic()
+                if s["ring_no"] is not None and not s["own_words"]
+                and s["own_words_tries"] < max_tries]
+
+    def set_own_words(self, semantic_id: int, text: str, note: str = ""):
+        """Store her sentence (or, with an empty text, one failed attempt)."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            "UPDATE semantic SET own_words = ?, own_words_at = ?, own_words_note = ?, "
+            "own_words_tries = own_words_tries + 1 WHERE id = ?",
+            (text or "", now if text else "", note or "", semantic_id))
+        self.conn.commit()
+
+    def ring_rows(self) -> List[Dict]:
+        """Every ring, oldest first, with the turns it took - for the ring tree."""
+        rings = sorted((s for s in self.get_all_semantic() if s["ring_no"] is not None),
+                       key=lambda s: s["ring_no"])
+        by_id = {e["id"]: e for e in self.get_all_episodes()}
+        out = []
+        for s in rings:
+            ids = [int(i) for i in str(s["source_ids"]).split(",") if i.strip()]
+            out.append({"ring": s["ring_no"], "closed_at": s["created_at"],
+                        "content": s["content"], "own_words": s["own_words"],
+                        "own_words_note": s["own_words_note"],
+                        "turns": [{"id": i,
+                                   "speaker": by_id[i]["speaker"] if i in by_id else "",
+                                   "mode": by_id[i]["mode"] if i in by_id else "",
+                                   "user": (by_id[i]["user_msg"] if i in by_id else "")[:160],
+                                   "ai": (by_id[i]["ai_msg"] if i in by_id else "")[:160]}
+                                  for i in sorted(ids)]})
+        return out
+
+    def episodes_by_ids(self, ids) -> List[Dict]:
+        """A few episodes by id, oldest first: id, speaker, mode, user_msg."""
+        ids = [int(i) for i in ids]
+        if not ids:
+            return []
+        rows = self.conn.execute(
+            "SELECT id, speaker, mode, user_msg FROM episodes WHERE id IN (%s) ORDER BY id"
+            % ",".join("?" * len(ids)), ids).fetchall()
+        return [dict(zip(("id", "speaker", "mode", "user_msg"), r)) for r in rows]
+
+    # ---- owner facts (logic/facts.py) ----------------------------------------
+
+    def add_fact(self, text: str, source: str = "", entered_by: str = "owner") -> int:
+        cur = self.conn.execute(
+            "INSERT INTO facts (created_at, text, source, entered_by) VALUES (?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), text, source or "", entered_by))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def facts(self, active_only: bool = True) -> List[Dict]:
+        q = "SELECT id, created_at, text, source, entered_by, revoked_at FROM facts"
+        if active_only:
+            q += " WHERE revoked_at IS NULL"
+        cols = ["id", "created_at", "text", "source", "entered_by", "revoked_at"]
+        return [dict(zip(cols, r)) for r in self.conn.execute(q + " ORDER BY id")]
+
+    def fact_count(self, active_only: bool = True) -> int:
+        q = "SELECT COUNT(*) FROM facts" + (" WHERE revoked_at IS NULL" if active_only else "")
+        return self.conn.execute(q).fetchone()[0]
+
+    def facts_version(self):
+        """Changes whenever the set of active facts does - the index cache key."""
+        return self.conn.execute(
+            "SELECT COUNT(*), COALESCE(MAX(id), 0), "
+            "SUM(CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END) FROM facts").fetchone()
+
+    def set_fact_revoked(self, fact_id: int, revoked: bool):
+        self.conn.execute("UPDATE facts SET revoked_at = ? WHERE id = ?",
+                          (datetime.now(timezone.utc).isoformat() if revoked else None,
+                           fact_id))
+        self.conn.commit()
 
     def get_rings(self) -> Dict:
         """How many rings have closed, and when the latest one did.
@@ -609,7 +723,8 @@ class AetherRoot:
 
         self.session_id = str(uuid.uuid4())[:8]
 
-    def retrieve_context(self, user_msg: str, request_mode: str = "factual") -> str:
+    def retrieve_context(self, user_msg: str, request_mode: str = "factual",
+                         report: Optional[Dict] = None) -> str:
         """Retrieve relevant memories and format as context string.
 
         `request_mode` is what the CURRENT request asked for, and it decides
@@ -630,6 +745,7 @@ class AetherRoot:
         """
         from logic.provenance import visible_modes, FICTION, FICTION_LABEL
         from logic.speaker import label_for
+        from logic.rings import ring_line
 
         query_emb = self.embedder.embed(user_msg)
         allowed = visible_modes(request_mode)
@@ -687,13 +803,26 @@ class AetherRoot:
                 "key": _question_key(ep.get("user_msg")),
             })
         for sem in semantics:
+            if sem.get("ring_no") is not None:
+                # A ring: the chosen part, then - labelled - her own sentence
+                # about it (logic/rings.py).
+                text = ring_line(sem["ring_no"], sem["content"][:200],
+                                 sem.get("own_words") or "")
+            else:
+                text = f"[Pattern] {sem['content'][:200]}"   # from before rings
             all_memories.append({
                 "embedding": sem["embedding"],
                 "resonance": sem["resonance_avg"],
                 "timestamp": sem["updated_at"],
-                "text": f"[Pattern] {sem['content'][:200]}",
-                "type": "semantic"
+                "text": text,
+                "type": "semantic",
+                "ring_no": sem.get("ring_no"),
             })
+
+        # What the owner told the node (logic/facts.py): after the build's own
+        # lines, before anything remembered. Word for word, always attributed,
+        # at most two, within their own share of the block.
+        facts = self._fact_lines(user_msg, report)
 
         # Retrieve top-k.
         #
@@ -711,21 +840,83 @@ class AetherRoot:
             top = _dedupe_by_question(ranked, want)
 
         # A unit on its first day has no episodes and still knows what it is.
-        if not known and not top:
+        if not known and not facts and not top:
+            if report is not None:
+                report.update(facts=[], fact_sources=[], rings=[], known=0)
             return ""
 
-        # Format context
+        # Format context. What the report says was used is what made it into
+        # the block, not what was ranked: a line past max_chars is not shown.
+        fact_ids = (report or {}).get("facts") or []
+        fact_srcs = (report or {}).get("fact_sources") or []
+        items = ([(t, "known", None) for t in known]
+                 + [(t, "fact", i) for i, t in enumerate(facts)]
+                 + [(m["text"], "ring" if m.get("ring_no") is not None else "memory",
+                     m.get("ring_no")) for m in top])
         lines = ["[MEMORY CONTEXT]"]
         total_chars = 0
-        for text in known + [mem["text"] for mem in top]:
+        shown = {"known": 0, "facts": [], "rings": []}
+        for text, kind, ref in items:
             line = f"- {text}"
             if total_chars + len(line) > max_chars:
                 break
             lines.append(line)
             total_chars += len(line)
+            if kind == "known":
+                shown["known"] += 1
+            elif kind == "fact":
+                shown["facts"].append(ref)
+            elif kind == "ring":
+                shown["rings"].append(ref)
         lines.append("[END MEMORY CONTEXT]")
 
+        if report is not None:
+            report["facts"] = [fact_ids[i] for i in shown["facts"] if i < len(fact_ids)]
+            report["fact_sources"] = [fact_srcs[i] for i in shown["facts"] if i < len(fact_srcs)]
+            report["rings"] = shown["rings"]
+            report["known"] = shown["known"]
+
         return "\n".join(lines)
+
+    def _facts_index(self):
+        """The owner's facts, indexed by words like the curriculum is - rebuilt
+        only when the set of active facts changes."""
+        version = self.store.facts_version()
+        cached = getattr(self, "_facts_cache", None)
+        if cached and cached[0] == version:
+            return cached[1], cached[2]
+        from logic.facts import fact_index
+        facts = self.store.facts(active_only=True)
+        index = fact_index(facts)
+        by_id = {f["id"]: f for f in facts}
+        self._facts_cache = (version, index, by_id)
+        return index, by_id
+
+    def _fact_lines(self, user_msg: str, report: Optional[Dict] = None) -> List[str]:
+        from logic.facts import (fact_line, fact_query, MAX_FACT_LINES,
+                                 FACTS_BUDGET_CHARS, FACT_SCORE_THRESHOLD)
+        from logic.token_budget import sanitize_injected
+        lines, used, ids = [], 0, []
+        index, by_id = self._facts_index()
+        query = fact_query(user_msg)
+        if index is not None and query.strip():
+            budget = self.config.get("facts_budget_chars", FACTS_BUDGET_CHARS)
+            for r in index.rank(query):
+                if len(lines) >= MAX_FACT_LINES:
+                    break
+                if r["score"] < FACT_SCORE_THRESHOLD:
+                    break                      # ranked by score: nothing below qualifies
+                f = by_id[r["id"]]
+                line = sanitize_injected(fact_line(f["text"], f["source"]))
+                if used + len(line) > budget:
+                    continue                   # a shorter one may still fit
+                lines.append(line)
+                used += len(line)
+                ids.append(f["id"])
+        if report is not None:
+            report["facts"] = ids
+            report["fact_sources"] = [by_id[i]["source"] for i in ids]
+        return lines
 
     def store_interaction(self, user_msg: str, ai_msg: str,
                           resonance: float = 0.5, mode: str = "factual",
@@ -812,6 +1003,7 @@ class AetherRoot:
             "remembered": remembered,
             "set_aside": set_aside,
             "rings": self._ring_status(unconsolidated),
+            "facts": self.store.fact_count(active_only=True),
             "semantic_memories": semantics,
             "identity_traits": identity,
             "willingness_mean": self.willingness.mean(),
@@ -845,48 +1037,66 @@ class AetherRoot:
                 "into": max(0, min(into, of)), "of": of}
 
     def _trigger_consolidation(self):
-        """Sleep-phase consolidation: compress episodes into semantic patterns.
-        For now, simple clustering by similarity. 
-        Full LLM-driven consolidation comes with AetherSpark integration."""
+        """Close a ring: the oldest factual turns waiting become one ring.
+
+        What the ring keeps is decided in logic/rings.py (step 37, Andreas:
+        "both, labelled"). Here, the CHOSEN part - the ring's most distinctive
+        words and the one turn nearest its centre, quoted exactly - which is
+        written now and cannot be invented. Her own sentence about it is asked
+        for afterwards, by the proxy, because only the proxy can reach the model
+        (proxy._write_own_words).
+
+        Still accretion, not distillation: nothing is pruned, and the ring's
+        turns keep retrieving. Returns the new ring's number, or None.
+        """
+        from logic.rings import themes, representative, ring_content, tokens
+        from logic.speaker import label_for
+
         episodes = self.store.get_all_episodes(unconsolidated_only=True,
                                                modes=CONSOLIDATES)
         if len(episodes) < 10:
-            return
+            return None
 
-        # Simple consolidation: group by similarity, create summaries
-        # For v1, we just compress the oldest episodes into a summary
         size = self.config.get("consolidation_batch", DEFAULT_CONFIG["consolidation_batch"])
         batch = episodes[-size:]  # oldest `size` unconsolidated factual
         if len(batch) < 5:
-            return
+            return None
+        batch = list(reversed(batch))          # oldest first, as it was said
 
-        # Create summary text from batch
-        topics = set()
-        for ep in batch:
-            words = ep["user_msg"].lower().split()[:5]
-            topics.update(words)
+        # How common each word is across everything said to the node, so that
+        # a word every turn contains cannot pass for what this ring was about.
+        everything = self.store.get_all_episodes()
+        doc_freq = {}
+        for ep in everything:
+            for t in set(tokens(ep["user_msg"])):
+                doc_freq[t] = doc_freq.get(t, 0) + 1
+        words = themes([ep["user_msg"] for ep in batch], doc_freq, len(everything))
+        rep = batch[representative([ep["embedding"] for ep in batch])]
+        content = ring_content(words, label_for(rep.get("speaker")), rep["user_msg"])
 
-        summary = f"Conversation patterns about: {', '.join(list(topics)[:10])}"
+        ring_no = self.store.get_rings()["count"] + 1
         avg_embedding = np.mean([ep["embedding"] for ep in batch], axis=0)
         avg_resonance = np.mean([ep["resonance"] for ep in batch])
         source_ids = [ep["id"] for ep in batch]
 
         self.store.store_semantic(
-            content=summary,
+            content=content,
             embedding=avg_embedding,
             source_ids=source_ids,
             confidence=0.6,
-            resonance_avg=avg_resonance
+            resonance_avg=avg_resonance,
+            ring_no=ring_no,
         )
 
         self.store.mark_consolidated(source_ids)
 
         self.store.store_growth_event(
             event_type="consolidation",
-            description=f"Consolidated {len(batch)} episodes into semantic memory",
+            description=f"Ring {ring_no}: {len(batch)} episodes",
             resonance=avg_resonance,
             willingness=self.willingness.snapshot()
         )
+        return ring_no
 
     def augment_system_prompt(self, base_prompt: str, user_msg: str) -> str:
         """Augment the system prompt with retrieved memory context."""

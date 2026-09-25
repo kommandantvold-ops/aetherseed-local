@@ -72,6 +72,24 @@ FICTION_LABEL = "[Fiction, written at your request - not fact]"
 # Explicit user framing only. Each pattern is something a person says when they
 # know they are asking for something made up. Ordered roughly by how often they
 # appear in ordinary use.
+# Pieces of the patterns below (step 37, 25 Sep 2026).
+_REQ_EN = (r"(?:give|write|tell|make|create|invent|describe|imagine|need|want|generate|"
+           r"design|build|draw|compose|craft|produce|play|consider|suppose|assume|picture|"
+           r"come\s+up\s+with|think\s+(?:up|of)|dream\s+up|let'?s|let’s)")
+_LABEL_EN = (r"(?:fiction|fictional|fictitious|made[- ]up|invented|"
+             r"imaginary(?!\s+(?:numbers?|units?|parts?|axis|axes))|hypothetical)")
+_SETTING_EN = (r"(?:world|worlds|universe|setting|scenario|story|country|land|city|town|"
+               r"place|kingdom|planet|future|past|version|situation|case|timeline|reality)")
+_REQ_NB = (r"(?:gi|skriv|fortell|lag|lage|finn|beskriv|tenk|trenger|ønsker|vil\s+ha|"
+           r"kom\s+med|dikt|spill|la\s+oss|anta|forestill)")
+_LABEL_NB = (r"(?:oppdiktet|oppdiktede|fiktiv|fiktivt|fiktive|fiksjon|påfunnet|påfunnede|"
+             r"hypotetisk|hypotetiske)")
+_SETTING_NB = (r"(?:verden|univers|land|by|sted|rike|planet|framtid|fremtid|fortid|"
+               r"versjon|situasjon|historie|tidslinje|virkelighet)")
+# A match is not counted when one of these is among the three words before it.
+_NEGATED_EN = r"\b(?:never|not|don'?t|don’t|nor|without|stop)\b"
+_NEGATED_NB = r"\b(?:aldri|ikke|ikkje|uten|slutt)\b"
+
 _FICTION_PATTERNS = [
     (r"\b(?:write|compose|tell|give|make|create)\s+(?:me\s+)?(?:a|an|another|some)?\s*"
      # up to two free modifiers ("short", "two-line", "quick silly"), but not
@@ -83,9 +101,20 @@ _FICTION_PATTERNS = [
     (r"\b(?:pretend|imagine|suppose)\s+(?:that\s+|you\s+|we\s+|i\s+|a\s+|an\s+|the\s+)", "asks to pretend or imagine"),
     (r"\brole[- ]?play\b", "asks to role-play"),
     (r"\bin the (?:voice|style|persona|character) of\b", "asks for another voice"),
-    (r"\bas if (?:you|she|he|they|it|i|we)\b", "asks for an as-if framing"),
-    (r"\b(?:fiction|fictional|fictitious|made[- ]up|invented|imaginary|hypothetical)\b",
-     "names the request as invented"),
+    # "as if" asks for a framing - unless it is negated just before it: "never
+    # state it as if you found it yourself" asks for accuracy (guided rings,
+    # 25 Sep 2026: one of three false alarms in 66 turns of talk about memory).
+    (r"\bas if (?:you|she|he|they|it|i|we)\b", "asks for an as-if framing", _NEGATED_EN),
+    # The labels ("fictional", "made-up", "hypothetical") only where the request
+    # is FOR one: after a request verb, as a heading ("Fictional scenario: ..."),
+    # or setting the scene ("in a fictional world"). Bare, they fired on talk
+    # ABOUT fiction - "each turn with a label: factual, fiction, or set aside",
+    # "your memory held a made-up answer about DNA v2" - the other two of the
+    # three, both stored as fiction and so never used for a factual question.
+    (rf"\b{_REQ_EN}\W+(?:[\w'’-]+\W+){{0,3}}{_LABEL_EN}\b", "names the request as invented"),
+    (rf"(?:^|[.!?]\s+)\W*{_LABEL_EN}(?:\s+[\w-]+)?\s*[:–—-]", "names the request as invented"),
+    (rf"\bin\s+(?:a|an|the|this|that|my|our|your|some)\s+(?:[\w-]+\s+)?{_LABEL_EN}\s+"
+     rf"{_SETTING_EN}\b", "sets the request somewhere invented"),
     (r"\bwhat if\b", "asks a what-if"),
     (r"\b(?:act|speak|answer|respond)\s+as\s+(?:a|an|the|if)\b", "asks the node to act as something"),
     (r"\bfor (?:my|a|an|the)\s+(?:story|novel|screenplay|game|campaign|comic|play)\b",
@@ -108,14 +137,24 @@ _FICTION_PATTERNS = [
     (r"\b(?:tenk|forestill|se\s+for)\s+deg\b", "ber deg forestille deg noe"),
     (r"\brollespill\b", "ber om rollespill"),
     (r"\bi\s+(?:stilen|stemmen|rollen)\s+til\b", "ber om en annen stemme"),
-    (r"\bsom\s+om\s+(?:du|han|hun|de|den|det|jeg|vi)\b", "ber om et som-om"),
-    (r"\b(?:oppdiktet|oppdiktede|fiktiv|fiktive|fiksjon|påfunnet|påfunnede|hypotetisk)\b",
-     "kaller det selv oppdiktet"),
+    (r"\bsom\s+om\s+(?:du|han|hun|de|den|det|jeg|vi)\b", "ber om et som-om", _NEGATED_NB),
+    (rf"\b{_REQ_NB}\W+(?:[\w'’-]+\W+){{0,3}}{_LABEL_NB}\b", "kaller det selv oppdiktet"),
+    (rf"(?:^|[.!?]\s+)\W*{_LABEL_NB}(?:\s+[\w-]+)?\s*[:–—-]", "kaller det selv oppdiktet"),
+    (rf"\bi\s+(?:en|et|ei|den|det|min|mitt|mi|vår|vårt|din|ditt)\s+(?:[\w-]+\s+)?{_LABEL_NB}\s+"
+     rf"{_SETTING_NB}\b", "legger det til et oppdiktet sted"),
     (r"\bhva\s+om\b", "spør hva om"),
     (r"\btil\s+(?:min|mitt|mi|en|et|ei)\s+(?:historie|roman|bok|spill|film|manus|tegneserie)\b",
      "nevner et kreativt verk som mål"),
 ]
-_COMPILED = [(re.compile(p, re.I), why) for p, why in _FICTION_PATTERNS]
+_COMPILED = [(re.compile(entry[0], re.I), entry[1],
+              re.compile(entry[2], re.I) if len(entry) > 2 else None)
+             for entry in _FICTION_PATTERNS]
+
+
+def _negated(text, start, veto):
+    """Is one of the three words before position `start` a negation?"""
+    before = re.findall(r"[\w'’]+", text[max(0, start - 60):start])[-3:]
+    return bool(veto.search(" ".join(before)))
 
 
 def detect_mode(user_msg: str):
@@ -130,10 +169,11 @@ def detect_mode(user_msg: str):
     """
     if not user_msg:
         return FACTUAL, "empty request"
-    for rx, why in _COMPILED:
-        m = rx.search(user_msg)
-        if m:
-            return FICTION, "%s (%r)" % (why, m.group(0)[:40])
+    for rx, why, veto in _COMPILED:
+        for m in rx.finditer(user_msg):
+            if veto is not None and _negated(user_msg, m.start(), veto):
+                continue
+            return FICTION, "%s (%r)" % (why, m.group(0).strip()[:40])
     return FACTUAL, "no fiction framing found"
 
 

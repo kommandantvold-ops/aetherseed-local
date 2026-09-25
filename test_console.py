@@ -153,9 +153,39 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self._req("GET", "/nope")
         self.assertEqual(serve._counts["page"], before["page"] + 1)
         self.assertEqual(serve._counts["refused"], before["refused"] + 1)
-        self.assertEqual(set(serve._counts), {"page", "status", "record", "chat", "setup", "refused"},
+        self.assertEqual(set(serve._counts),
+                         {"page", "status", "record", "rings", "chat", "setup", "refused"},
                          "the heartbeat keeps counts by route and nothing else")
 
+
+
+class TheRingTree(unittest.TestCase):
+    """Step 37: the rings chip opens every ring - what it chose, the model's own
+    sentence labelled as such, and the turns it took."""
+
+    HTML = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui", "index.html"),
+                encoding="utf-8").read()
+
+    def test_both_languages_have_every_string(self):
+        for key in ("told:", "usedFacts:", "usedRing:", "treeTitle:", "treeHelp:", "chosen:",
+                    "ownWords:", "ownPending:", "ownWithheld:", "ringHead:", "growing:",
+                    "noRings:", "noTree:", "owner:", "unknown:"):
+            with self.subTest(key=key):
+                self.assertEqual(2, self.HTML.count(key + " "), key)
+
+    def test_what_people_and_the_model_said_is_never_markup(self):
+        script = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", self.HTML, re.S))
+        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+            self.assertNotIn(sink, script)
+
+    def test_the_rings_are_relayed_read_only(self):
+        self.assertIn("/aetherseed/rings", serve.PROXIED_GET)
+        self.assertNotIn("/aetherseed/rings", serve.PROXIED_POST)
+
+    def test_her_own_words_are_always_labelled(self):
+        # The label is in the same string as the words - there is no way to
+        # render the sentence without it.
+        self.assertIn("${s.ownWords(name)} “${ring.own_words}”", self.HTML)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

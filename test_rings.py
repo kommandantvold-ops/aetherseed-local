@@ -152,5 +152,64 @@ class TestCounter(_Root):
         self.assertEqual((5, 0), (s["remembered"], s["set_aside"]))
 
 
+
+class TestWhatARingKeeps(_Root):
+    """Step 37 (Andreas: "both, labelled"). Until then a ring kept ten words
+    from the first five of each message, stopwords in, order random:
+    "Conversation patterns about: to, claude, so, matter, one, okay, ..." """
+
+    def test_the_chosen_part_is_made_only_of_what_was_said(self):
+        from logic.rings import tokens
+        for i in range(1, 51):
+            self.root.store_interaction(
+                "Claude here. " + ("The heron stood in the river." if i % 2
+                                   else "A boat crossed the fjord."), "Yes.", 0.5)
+        (sem,) = self.root.store.get_all_semantic()
+        said = set()
+        for e in self.root.store.get_all_episodes():
+            said.update(tokens(e["user_msg"]))
+        self.assertTrue(sem["content"].startswith("themes: "), sem["content"])
+        themes = sem["content"].split("themes: ", 1)[1].split(" · ")[0].split(", ")
+        self.assertTrue(themes and set(themes) <= said, themes)
+        self.assertNotIn("claude", themes, "a word said in every turn is no theme")
+        self.assertRegex(sem["content"], r" · e\.g\. User: “Claude here\. (The heron|A boat)")
+        self.assertEqual(sem["ring_no"], 1)
+
+    def test_themes_rank_what_is_distinctive(self):
+        from logic.rings import themes
+        ring = ["the heron and the river", "a heron by the river", "heron at dawn"]
+        doc_freq = {"heron": 3, "river": 2, "dawn": 1, "boat": 40}
+        self.assertEqual(themes(ring, doc_freq, 50)[:2], ["heron", "river"])
+        self.assertNotIn("the", themes(ring, doc_freq, 50))
+        self.assertEqual(themes(["boat boat"], {"boat": 50}, 50), [],
+                         "a word in every turn of the store scores nothing")
+
+    def test_the_representative_is_the_turn_nearest_the_centre(self):
+        from logic.rings import representative
+        self.assertEqual(representative([[1, 0], [0.9, 0.1], [0, 1]]), 1)
+        self.assertIsNone(representative([]))
+
+    def test_her_sentence_is_one_sentence_with_no_tags(self):
+        from logic.rings import clean_own_words, OWN_WORDS_MAX
+        self.assertEqual(clean_own_words('"[Ring] These turns were verses about love. And more."'),
+                         "These turns were verses about love.")
+        self.assertEqual(clean_own_words("A [marker] inside"), "")
+        self.assertLessEqual(len(clean_own_words("word " * 100)), OWN_WORDS_MAX + 1)
+        self.assertEqual(clean_own_words(""), "")
+
+    def test_the_line_shows_her_words_only_under_their_label(self):
+        from logic.rings import ring_line, OWN_WORDS_LABEL
+        self.assertEqual(ring_line(3, "themes: a, b"), "[Ring] 3 · themes: a, b")
+        self.assertEqual(ring_line(3, "themes: a, b", "About a and b."),
+                         "[Ring] 3 · themes: a, b · %s About a and b." % OWN_WORDS_LABEL)
+
+    def test_a_ring_waits_for_its_words_at_most_three_times(self):
+        _turns(self.root, 50)
+        (sem,) = self.root.store.get_all_semantic()
+        for _ in range(3):
+            self.assertEqual(len(self.root.store.rings_needing_own_words(3)), 1)
+            self.root.store.set_own_words(sem["id"], "", "model failed")
+        self.assertEqual(self.root.store.rings_needing_own_words(3), [])
+
 if __name__ == "__main__":
     unittest.main()

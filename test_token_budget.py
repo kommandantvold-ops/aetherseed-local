@@ -40,11 +40,17 @@ class TestLeadingArtefacts(unittest.TestCase):
         self.assertEqual(n, 2)
 
     def test_each_artefact_form(self):
-        for tag in ("[Episode]", "[Pattern]",
+        for tag in ("[Episode]", "[Pattern]", "[Ring]",
                     "[Fiction, written at your request - not fact]"):
             clean, n = strip_leading_artefacts(tag + " Oslo.")
             self.assertEqual(clean, "Oslo.", tag)
             self.assertEqual(n, 1, tag)
+
+    def test_the_owner_tag_is_left_standing(self):
+        # Step 37. Copied to the front of an answer, the tag is still an
+        # attribution; stripped, the owner's words would read as the node's.
+        t = "[Owner told you] In the beginning, God created the heavens and the earth."
+        self.assertEqual(strip_leading_artefacts(t), (t, 0))
 
     def test_an_answer_that_is_only_a_label_becomes_empty(self):
         self.assertEqual(strip_leading_artefacts("[Episode]  "), ("", 1))
