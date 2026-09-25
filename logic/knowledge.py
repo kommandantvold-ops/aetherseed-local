@@ -86,7 +86,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 __all__ = ["Knowledge", "load_knowledge", "KNOWN_PREFIX", "CONTACT_ENTRY",
-           "is_contact_question", "SCORE_THRESHOLD", "WEIGHT_FLOOR",
+           "is_contact_question", "FOUNDERS_ENTRY", "is_founders_question",
+           "exact_entry_for", "UNIT_PREFIX", "SCORE_THRESHOLD", "WEIGHT_FLOOR",
            "MAX_LINES", "MAX_TEXT_CHARS"]
 
 # The third kind of line in the block, beside [Episode] and [Pattern]. Not a
@@ -268,8 +269,84 @@ def is_contact_question(user_msg: str) -> bool:
     return "?" in raw or raw.startswith(_ASKING) or " how do i " in text or " how can i " in text
 
 
+# ---------------------------------------------------------------------------
+# The second answer that must be exact: the founders' names
+# ---------------------------------------------------------------------------
+# Measured on the device 23 Sep (episode #22), with the curriculum live and
+# spelling "Vamsti": the model answered "Andreas Vamasti Kommandantvold", and
+# repeated it the next night (#23). The same failure as the contact address -
+# a 3B model cannot reliably copy a proper noun it has only seen once - and a
+# founder's name given wrongly is not a vague answer, it is a wrong fact about
+# a person. So it gets the contact address's treatment (step 28, then 33).
+#
+# Narrow for the same reason: "who founded Microsoft?" must reach the model.
+# A founder word alone never qualifies; it must be pointed at us - by name, by
+# "you"/"your", by "the company", or as a bare "the founders" that is not
+# followed by "of <something>". "the founders of Rome" is somebody else's.
+FOUNDERS_ENTRY = "as.founders"
+
+_FOUNDER_WORDS = ("founder", "founders", "founded", "cofounder", "cofounders",
+                  "co founder", "co founders")
+_FOUNDER_OURS = (
+    "your founder", "your founders", "founded you", "your co founder",
+    "your co founders", "your cofounders", "founders of the company",
+    "founder of the company", "founders of this company", "company s founders",
+    "founders of your company", "founded the company", "founded this company",
+    "founded your company",
+)
+_FOUNDER_ASKING = _ASKING + ("tell ", "name ", "list ")
+
+
+def is_founders_question(user_msg: str) -> bool:
+    """Is this someone asking who founded AetherSeed?"""
+    toks = _tokens(user_msg)
+    text = " " + " ".join(toks) + " "
+    if not any((" " + w + " ") in text for w in _FOUNDER_WORDS):
+        return False
+    ours = " aetherseed " in text or any((" " + p + " ") in text for p in _FOUNDER_OURS)
+    if not ours:
+        # a bare "the founders" / "the founder", not "the founders of X"
+        for i, t in enumerate(toks[:-1]):
+            if t == "the" and toks[i + 1] in ("founders", "founder"):
+                nxt = toks[i + 2] if i + 2 < len(toks) else ""
+                if nxt != "of":
+                    ours = True
+                    break
+    if not ours:
+        return False
+    raw = (user_msg or "").strip().lower()
+    return "?" in raw or raw.startswith(_FOUNDER_ASKING)
+
+
+def exact_entry_for(user_msg: str) -> Optional[str]:
+    """The curriculum entry this question must be answered with verbatim, if
+    any. One place, so the proxy has one route and the order is explicit."""
+    if is_contact_question(user_msg):
+        return CONTACT_ENTRY
+    if is_founders_question(user_msg):
+        return FOUNDERS_ENTRY
+    return None
+
+
 def _default_path() -> Path:
     return Path(__file__).resolve().parent.parent / "knowledge" / "companion.en.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# What only this unit knows
+# ---------------------------------------------------------------------------
+# The curriculum ships in the cartridge and is the same on every unit. A fact
+# true of ONE unit - "I am R&D Unit 1" - must not be in it, or every pilot unit
+# would say it. So a unit may carry a second file in its own state directory,
+# installed by an operator (never from the console), same format, every id
+# prefixed "unit.". It can add lines; it cannot replace a shipped one - a
+# duplicate id is rejected - so the build still wins on what the node is.
+UNIT_PREFIX = "unit."
+
+
+def _unit_path() -> Path:
+    return Path(os.environ.get("AETHERSEED_UNIT_KNOWLEDGE")
+                or (Path.home() / ".aetherseed" / "unit.jsonl"))
 
 
 def load_knowledge(path=None) -> Optional[Knowledge]:
@@ -282,23 +359,46 @@ def load_knowledge(path=None) -> Optional[Knowledge]:
     `.errors` and printed once, so a build that shipped a broken curriculum says
     so in the journal instead of quietly knowing less than it should.
     """
+    # The unit file rides along only with the unit's own curriculum - never
+    # with a path a caller named, so a test or a tool reading one file gets
+    # exactly that file.
+    default_file = path is None
     if path is None:
         path = os.environ.get("AETHERSEED_KNOWLEDGE") or _default_path()
     path = Path(path)
     if not path.is_file():
         return None
 
+    entries, errors, seen = [], [], set()
+    if not _parse_into(path, entries, errors, seen, prefix=None):
+        return None
+    if default_file:
+        unit = _unit_path()
+        if unit.is_file():
+            _parse_into(unit, entries, errors, seen, prefix=UNIT_PREFIX)
+
+    if errors:
+        print(f"[knowledge] {len(errors)} entr"
+              f"{'y' if len(errors) == 1 else 'ies'} rejected: "
+              f"{'; '.join(errors[:5])}", flush=True)
+    if not entries:
+        return None
+    return Knowledge(entries, source=path, errors=errors)
+
+
+def _parse_into(path: Path, entries: List[Dict], errors: List[str], seen: set,
+                prefix: Optional[str]) -> bool:
+    """Parse one curriculum file into `entries`. False if it cannot be read.
+    With `prefix`, every id must start with it (the unit file)."""
     try:
         from logic.token_budget import sanitize_injected
     except Exception:
         sanitize_injected = lambda s: s   # noqa: E731
-
-    entries, errors, seen = [], [], set()
     try:
         raw = path.read_text(encoding="utf-8")
     except Exception as exc:
         print(f"[knowledge] {path} could not be read: {exc!r}", flush=True)
-        return None
+        return False
 
     for lineno, raw_line in enumerate(raw.splitlines(), 1):
         if not raw_line.strip():
@@ -309,6 +409,10 @@ def load_knowledge(path=None) -> Optional[Knowledge]:
             errors.append(f"line {lineno}: not JSON ({exc})")
             continue
         eid = str(e.get("id") or f"line{lineno}")
+        where = f"{path.name} line {lineno}"
+        if prefix and not eid.startswith(prefix):
+            errors.append(f"{where} ({eid}): unit ids must start with {prefix}")
+            continue
         text = (e.get("text") or "").strip()
         if not text:
             errors.append(f"line {lineno} ({eid}): empty text")
@@ -332,10 +436,4 @@ def load_knowledge(path=None) -> Optional[Knowledge]:
                         "match": str(e.get("match") or ""),
                         "trigger": [str(t) for t in (e.get("trigger") or [])]})
 
-    if errors:
-        print(f"[knowledge] {path.name}: {len(errors)} entr"
-              f"{'y' if len(errors) == 1 else 'ies'} rejected: "
-              f"{'; '.join(errors[:5])}", flush=True)
-    if not entries:
-        return None
-    return Knowledge(entries, source=path, errors=errors)
+    return True

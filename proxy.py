@@ -550,19 +550,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         model still gets the question with the right line in its context.
         """
         try:
-            from logic.knowledge import (is_contact_question, load_knowledge,
-                                         CONTACT_ENTRY)
-            if not is_contact_question(user_msg):
+            from logic.knowledge import exact_entry_for, load_knowledge
+            entry = exact_entry_for(user_msg)
+            if entry is None:
                 return False
             k = load_knowledge()
-            text = k.by_id(CONTACT_ENTRY) if k else None
+            text = k.by_id(entry) if k else None
         except Exception as e:
-            print(f"[knowledge] contact route stood down: {e!r}", flush=True)
+            print(f"[knowledge] exact route stood down: {e!r}", flush=True)
             return False
         if not text:
             return False
 
-        print("[knowledge] answered from the build (model not called)", flush=True)
+        print(f"[knowledge] answered from the build: {entry} (model not called)",
+              flush=True)
         out = [json.dumps({"model": model,
                            "message": {"role": "assistant", "content": text},
                            "done": False}),
