@@ -1,20 +1,22 @@
 # AetherSeed Companion — cartridge manifest
-# Captured 2026-09-24T23:34:30Z on aetherseed
-# Verify with: ./cartridge.sh verify cart27.manifest
+# Captured 2026-09-25T11:30:35Z on aetherseed
+# Verify with: ./cartridge.sh verify cart29.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	1672cc8b3255598bf344a028f021d0614b17c5d76727b02c0b78c94235f6be9a
-app.digest	0a3444addf4523f5d90ab4b2cc9858e3c88f8d2164b41862d423951161f90aa5
-app.files	18
+cartridge-id	60bdef8f787664b4a6dc39861b35c323e0a7d4474959a1d2a1e630d52c4fdbee
+app.digest	11d90b1f5b2a2f751500136a19e855ff0502ea91ba6f64dbf851438aad460427
+app.files	24
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
 file./etc/nftables.conf	3eee0ef33e802a35fe3d25d2a95ad9d5ecdeb1c7a4b46381dbdefa46aef1d8b9
-file./etc/systemd/system/aetherseed-gui.service	24187850a779344457e2a0e2c0ba8927bd7fa221ec079816dd7d0b1b8845c5f2
+file./etc/systemd/system/aetherseed-gui.service	3563c80c5c318d659970b9ff979c44e75e56cb503012ed109e38c438101c8b56
 file./etc/systemd/system/aetherseed-keepalive.service	a68dbe3ce1623b088b96ec4ff07997f98da8b64c4955d962fae89f4865b278a7
-file./etc/systemd/system/aetherseed-kiosk.service	44b41955ad8bf3c066ef8e263a5f046ef4a7dc336cdec346c0d67a640f5fd699
+file./etc/systemd/system/aetherseed-kiosk.service	01cbcf52efd2d12a9ea13e46cc81f57ab7a5ffd3dbdc12195ce2f9bad33cef69
 file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
+file./etc/systemd/system/aetherseed-shutdown.path	129dce474a7502dc8a932160530fae934b1e1b01f107330102428276b59711d4
+file./etc/systemd/system/aetherseed-shutdown.service	9081c570687a5236ae880ab1ac9d4db1297f0ca487b9f14a725f1b3f44c381c7
 file./etc/systemd/system/aetherseed-warmup.service	b43d3c487d742665f047f92bd3c094414ff4c31af5d3b3e8c15a6757ee65e45b
 file./etc/systemd/system/hailo-ollama.service	795efc1df785adb9592fa98fe5fc1d4d882a130df23f2ee1f67c1325854183fe
 file./etc/udev/rules.d/99-aetherseed-hailo.rules	9943a61b6fbc5dfb4c9e7aea5ccb1faeacfc4fe5df671462771ab919f06a6949
