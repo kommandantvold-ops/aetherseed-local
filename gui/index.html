@@ -114,8 +114,6 @@ textarea:focus{outline:none; border-color:var(--accent)}
 .card .err{color:var(--alarm); font-size:13px; margin:8px 0 0}
 .card .row{display:flex; justify-content:space-between; margin-top:18px; gap:10px}
 .card .row .send{margin-left:auto}
-.send.danger{background:var(--alarm); color:#fff}
-.send.danger:hover{color:#fff}
 
 /* The ring tree (step 37): every ring, what it chose, the model's own sentence
    about it - labelled - and the turns it took. Read-only. */
@@ -176,7 +174,9 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
     <p class="err" id="offError" hidden></p>
     <div class="row" id="offRow">
       <button type="button" id="offCancel"></button>
-      <button type="button" class="send danger" id="offGo"></button>
+      <!-- The page's ordinary button, not the alarm colour: quantum rest is
+           an orderly power-off, and a red button reads as a killswitch. -->
+      <button type="button" class="send" id="offGo"></button>
     </div>
   </div>
 </div>
@@ -248,11 +248,11 @@ const T = {
       : m < 2880 ? `${Math.floor(m / 60)} h ago` : `${Math.floor(m / 1440)} days ago`,
     fromRecord: 'from the record, not the model',
     fromKnown: 'from what it was built knowing, not the model',
-    off: 'Shut down', offTitle: (n) => `Shut down ${n || 'the companion'}?`,
-    offHelp: 'Everything is saved. Wait until the screen has gone dark before you unplug the power.',
-    offGo: 'Shut down', offCancel: 'Cancel',
-    offDone: 'Shutting down. Unplug the power when the screen has gone dark.',
-    offFailed: 'Shutdown is not available on this unit. Use the power button on the board.',
+    off: 'Quantum rest', offTitle: (n) => `Put ${n || 'the companion'} into quantum rest?`,
+    offHelp: 'Everything is saved and the unit powers down, so it can be moved or unplugged safely. Nothing is erased. Wait until the screen has gone dark before you unplug the power.',
+    offGo: 'Quantum rest', offCancel: 'Cancel',
+    offDone: 'Going into quantum rest. Unplug the power when the screen has gone dark.',
+    offFailed: 'Quantum rest is not available on this unit. Use the power button on the board.',
     noAnswer: 'The companion did not answer.', cutOff: 'The answer was cut off.',
     noRecord: 'Could not read the record.',
     nameTitle: 'What would you like to call your companion?',
@@ -297,11 +297,11 @@ const T = {
       : m < 2880 ? `for ${Math.floor(m / 60)} t siden` : `for ${Math.floor(m / 1440)} dager siden`,
     fromRecord: 'fra loggen, ikke fra modellen',
     fromKnown: 'fra det den ble bygget med, ikke fra modellen',
-    off: 'Slå av', offTitle: (n) => `Slå av ${n || 'følgesvennen'}?`,
-    offHelp: 'Alt er lagret. Vent til skjermen er mørk før du trekker ut strømmen.',
-    offGo: 'Slå av', offCancel: 'Avbryt',
-    offDone: 'Slår av. Trekk ut strømmen når skjermen er mørk.',
-    offFailed: 'Avslåing er ikke tilgjengelig på denne enheten. Bruk strømknappen på kortet.',
+    off: 'Kvantehvile', offTitle: (n) => `Legge ${n || 'følgesvennen'} i kvantehvile?`,
+    offHelp: 'Alt er lagret, og enheten slår seg av, så den trygt kan flyttes eller kobles fra. Ingenting slettes. Vent til skjermen er mørk før du trekker ut strømmen.',
+    offGo: 'Kvantehvile', offCancel: 'Avbryt',
+    offDone: 'Går i kvantehvile. Trekk ut strømmen når skjermen er mørk.',
+    offFailed: 'Kvantehvile er ikke tilgjengelig på denne enheten. Bruk strømknappen på kortet.',
     noAnswer: 'Følgesvennen svarte ikke.', cutOff: 'Svaret ble avbrutt.',
     noRecord: 'Kunne ikke lese loggen.',
     nameTitle: 'Hva vil du kalle følgesvennen din?',
@@ -465,7 +465,12 @@ $('recordBtn').onclick = async () => {
   scroll();
 };
 
-// ---- shutdown ---------------------------------------------------------------
+// ---- quantum rest -----------------------------------------------------------
+// On screen it is "Quantum rest" (Andreas, 25 Sep 2026): "shutdown could be
+// misunderstood as a killswitch, which it is not." It is an orderly power-off -
+// everything saved, nothing erased - and the confirmation says so in plain
+// words, so the name never has to carry the meaning alone. The route, the
+// systemd units and the confirmation string keep their technical names.
 // The console asks; a root-owned systemd unit does it (gui/serve.py). The
 // overlay stays up after a yes, because the page is about to lose its server
 // and whatever it last showed is what the person reads while the screen goes.

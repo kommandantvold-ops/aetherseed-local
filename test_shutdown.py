@@ -137,6 +137,25 @@ class TheButton(unittest.TestCase):
         for key in ("off:", "offTitle:", "offHelp:", "offGo:", "offCancel:", "offDone:", "offFailed:"):
             self.assertEqual(2, HTML.count(key), key)
 
+    def test_it_is_called_quantum_rest(self):
+        # Andreas, 25 Sep 2026: "shutdown could be misunderstood as a
+        # killswitch, which it is not."
+        self.assertIn("off: 'Quantum rest'", HTML)
+        self.assertIn("offGo: 'Quantum rest'", HTML)
+        self.assertNotIn("'Shut down'", HTML)
+
+    def test_it_is_not_dressed_as_an_alarm(self):
+        # A red confirm button reads as a killswitch whatever it is called.
+        self.assertNotIn("danger", HTML)
+        self.assertIn('class="send" id="offGo"', HTML)
+
+    def test_the_name_never_stands_alone(self):
+        # The confirmation says what actually happens, in plain words, in
+        # both languages: it powers down, and nothing is erased.
+        for words in ("the unit powers down", "Nothing is erased.",
+                      "enheten slår seg av", "Ingenting slettes."):
+            self.assertIn(words, HTML)
+
     def test_no_browser_dialog(self):
         script = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", HTML, re.S))
         for call in ("confirm(", "alert(", "prompt("):
