@@ -48,6 +48,7 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 # tokens, different final paragraph).
 from logic.prompt_builder import charter
 from logic import companion
+from logic.speaker import validate_speaker
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
@@ -612,6 +613,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._proxy_passthrough("POST", body)
             return
 
+        # ---- WHO IS SPEAKING ----
+        # A caller may declare `"speaker": "<name>"`; the console declares
+        # nothing, and its turns are the owner's. A declaration is untrusted
+        # input headed for the prompt, and a refused one is refused LOUDLY -
+        # storing it as the owner instead would put somebody else's words in
+        # the owner's mouth, which is the defect this field exists to end.
+        # Checked before any route, so no answer is given to a turn whose
+        # speaker could not be recorded. See logic/speaker.py.
+        speaker, speaker_err = validate_speaker(data.get("speaker"), _settings()[0])
+        if speaker_err:
+            self._send_json({"error": "speaker refused", "reason": speaker_err},
+                            status=400)
+            return
+
         # ---- THE RECORD ----
         # Asked about its own failures, the node answers FROM THE FILE and the
         # model is never called. A model summarising its own mistakes is the
@@ -839,7 +854,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if not failed_to_invent:
                 try:
                     root.store_interaction(user_msg, ai_content,
-                                           resonance=resonance, mode=stored_mode)
+                                           resonance=resonance, mode=stored_mode,
+                                           speaker=speaker)
                 except Exception:
                     pass
             else:
@@ -861,6 +877,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "remembered": not failed_to_invent,
                 "prompt": user_msg[:160],
                 "answer": ai_content[:160],
+                "speaker": speaker,
             })
 
             try:

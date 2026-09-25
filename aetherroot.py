@@ -176,6 +176,14 @@ class MemoryStore:
             self.conn.execute(
                 "ALTER TABLE episodes ADD COLUMN mode TEXT NOT NULL DEFAULT 'factual'")
             self.conn.commit()
+        # Who said it (logic/speaker.py). Rows from before the column are left
+        # EMPTY - unknown - and render as "User", exactly as they did: the
+        # migration claims nothing about who spoke. Filling them in is an
+        # operator act with a reason and a trail (tools/correct_memory.py).
+        if "speaker" not in have:
+            self.conn.execute(
+                "ALTER TABLE episodes ADD COLUMN speaker TEXT NOT NULL DEFAULT ''")
+            self.conn.commit()
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -193,7 +201,11 @@ class MemoryStore:
                 -- 'unverified'. Without it every past utterance re-enters the
                 -- prompt with equal standing and yesterday's story becomes
                 -- today's fact. See logic/provenance.py.
-                mode        TEXT NOT NULL DEFAULT 'factual'
+                mode        TEXT NOT NULL DEFAULT 'factual',
+                -- Who said it: 'owner' for the console, a declared name for
+                -- anyone else, '' for rows from before the field existed.
+                -- Declared, never verified. See logic/speaker.py.
+                speaker     TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS semantic (
@@ -237,7 +249,8 @@ class MemoryStore:
 
     def store_episode(self, session_id: str, user_msg: str, ai_msg: str,
                       embedding: np.ndarray, resonance: float = 0.5,
-                      topic_tags: str = "", mode: str = "factual") -> int:
+                      topic_tags: str = "", mode: str = "factual",
+                      speaker: str = "") -> int:
         """Store a conversation turn. Returns the episode ID.
 
         `mode` records how the turn came to be said - see logic/provenance.py.
@@ -247,11 +260,11 @@ class MemoryStore:
         cur = self.conn.execute(
             """INSERT INTO episodes
                (timestamp, session_id, user_msg, ai_msg, embedding, resonance,
-                topic_tags, mode)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                topic_tags, mode, speaker)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (datetime.now(timezone.utc).isoformat(),
              session_id, user_msg, ai_msg,
-             embedding.tobytes(), resonance, topic_tags, mode)
+             embedding.tobytes(), resonance, topic_tags, mode, speaker or "")
         )
         self.conn.commit()
         return cur.lastrowid
@@ -264,7 +277,8 @@ class MemoryStore:
         # hardcoded list against whatever the table happened to return, so
         # adding a column silently shifted every field by one.
         columns = ["id", "timestamp", "session_id", "user_msg", "ai_msg",
-                   "embedding", "resonance", "topic_tags", "consolidated", "mode"]
+                   "embedding", "resonance", "topic_tags", "consolidated", "mode",
+                   "speaker"]
         where, args = _episode_filter(unconsolidated_only, modes)
         query = "SELECT " + ", ".join(columns) + " FROM episodes" + where
         query += " ORDER BY timestamp DESC"
@@ -615,6 +629,7 @@ class AetherRoot:
         request then retrieved. test_rings.py holds the regression.
         """
         from logic.provenance import visible_modes, FICTION, FICTION_LABEL
+        from logic.speaker import label_for
 
         query_emb = self.embedder.embed(user_msg)
         allowed = visible_modes(request_mode)
@@ -661,7 +676,10 @@ class AetherRoot:
                 "embedding": ep["embedding"],
                 "resonance": ep["resonance"],
                 "timestamp": ep["timestamp"],
-                "text": f"{label}[Episode] User: {ep['user_msg'][:100]} | AI: {ep['ai_msg'][:100]}",
+                # The speaker goes where "User" always stood: the model reads
+                # who said it in front of what was said (logic/speaker.py).
+                "text": (f"{label}[Episode] {label_for(ep.get('speaker'))}: "
+                         f"{ep['user_msg'][:100]} | AI: {ep['ai_msg'][:100]}"),
                 "type": "episode",
                 # What question this turn answers. Retrieval keeps only the best
                 # episode per key, so one question asked twenty times cannot
@@ -710,7 +728,8 @@ class AetherRoot:
         return "\n".join(lines)
 
     def store_interaction(self, user_msg: str, ai_msg: str,
-                          resonance: float = 0.5, mode: str = "factual"):
+                          resonance: float = 0.5, mode: str = "factual",
+                          speaker: str = ""):
         """Store a conversation turn and update internal state."""
         # Embed and store
         combined = f"{user_msg} {ai_msg}"
@@ -723,7 +742,8 @@ class AetherRoot:
             ai_msg=ai_msg,
             embedding=embedding,
             resonance=resonance,
-            mode=mode
+            mode=mode,
+            speaker=speaker
         )
 
         # Drift willingness based on interaction resonance.

@@ -36,12 +36,24 @@ its own turns, and `summarise_record()` counts its lines as turns - an operator
 action in there would make the node miscount its own conversation. A separate
 file keeps both honest.
 
+WHO SAID IT (step 36)
+---------------------
+`--speaker NAME` sets who said an episode instead of its mode - for rows from
+before the speaker field existed, which are stored as unknown. The same rules:
+dry run by default, a reason to apply, a line in `corrections.log`
+(`action: set_speaker`), and `--restore-speaker` to put it back. `owner` is
+accepted here, although a caller of the API can never declare it: attributing
+a past turn to the owner is exactly the operator decision this tool records.
+Only with the owner's say-so.
+
 USAGE
 -----
     sudo -u aetherseed python3 correct_memory.py --list
     sudo -u aetherseed python3 correct_memory.py --ids 7,9 --reason "..."
     sudo -u aetherseed python3 correct_memory.py --ids 7,9 --reason "..." --apply
     sudo -u aetherseed python3 correct_memory.py --restore --ids 7 --apply
+    sudo -u aetherseed python3 correct_memory.py --ids 39,40 --speaker Claude --reason "..." --apply
+    sudo -u aetherseed python3 correct_memory.py --restore-speaker --ids 39 --apply
 
 Dry run unless --apply is given. Pure stdlib.
 """
@@ -55,17 +67,36 @@ import sqlite3
 import sys
 import time
 
+# The speaker rules live in the application (logic/speaker.py). Found beside
+# this file in a checkout, or in the deployed tree on a unit.
+for _p in (os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+           os.environ.get("AETHERSEED_APP", "/opt/aetherseed")):
+    if os.path.isfile(os.path.join(_p, "logic", "speaker.py")) and _p not in sys.path:
+        sys.path.insert(0, _p)
+
 DEFAULT_DB = os.path.expanduser("~/.aetherseed/aetherroot/memory.db")
 DEFAULT_LOG = os.path.expanduser("~/.aetherseed/corrections.log")
 UNVERIFIED = "unverified"
 
 
+def has_speaker_column(db):
+    con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+    try:
+        return "speaker" in {r[1] for r in con.execute("PRAGMA table_info(episodes)")}
+    finally:
+        con.close()
+
+
 def episodes(db):
+    # A store the proxy has not opened since step 36 has no speaker column
+    # yet: read it as unknown rather than fail, so the mode path still works.
+    speaker = "speaker" if has_speaker_column(db) else "'' AS speaker"
     con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
     con.row_factory = sqlite3.Row
     try:
         return con.execute(
-            "SELECT id, timestamp, mode, user_msg, ai_msg FROM episodes ORDER BY id"
+            "SELECT id, timestamp, mode, %s, user_msg, ai_msg FROM episodes ORDER BY id"
+            % speaker
         ).fetchall()
     finally:
         con.close()
@@ -75,7 +106,8 @@ def show(rows, ids=None):
     for r in rows:
         if ids and r["id"] not in ids:
             continue
-        print("#%-4d %s  mode=%-10s" % (r["id"], r["timestamp"][:19], r["mode"]))
+        print("#%-4d %s  mode=%-10s speaker=%s" % (r["id"], r["timestamp"][:19], r["mode"],
+                                                  r["speaker"] or "(unknown)"))
         print("      U: %s" % (r["user_msg"] or "").replace("\n", " ")[:100])
         print("      A: %s" % (r["ai_msg"] or "").replace("\n", " ")[:150])
 
@@ -88,8 +120,8 @@ def log_line(path, entry):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def previous_modes(path, ids):
-    """The mode each episode had before the most recent correction to it."""
+def previous_modes(path, ids, action="set_mode", field="mode_before"):
+    """The value each episode had before the most recent correction to it."""
     out = {}
     try:
         with open(path, encoding="utf-8") as f:
@@ -98,8 +130,8 @@ def previous_modes(path, ids):
                     e = json.loads(line)
                 except Exception:
                     continue
-                if e.get("episode") in ids and e.get("action") == "set_mode":
-                    out[e["episode"]] = e.get("mode_before")
+                if e.get("episode") in ids and e.get("action") == action:
+                    out[e["episode"]] = e.get(field)
     except FileNotFoundError:
         pass
     return out
@@ -116,8 +148,14 @@ def main(argv=None):
     ap.add_argument("--operator", default=os.environ.get("SUDO_USER") or os.environ.get("USER", "?"))
     ap.add_argument("--restore", action="store_true",
                     help="put the modes back, from the corrections log")
+    ap.add_argument("--speaker", default=None,
+                    help="set who said it instead of the mode ('owner' or a name)")
+    ap.add_argument("--restore-speaker", action="store_true",
+                    help="put the speakers back, from the corrections log")
     ap.add_argument("--apply", action="store_true", help="actually write")
     a = ap.parse_args(argv)
+    if a.speaker is not None or a.restore_speaker:
+        return speakers(a)
 
     rows = episodes(a.db)
     if a.list or not a.ids:
@@ -179,6 +217,79 @@ def main(argv=None):
     for i in sorted(ids):
         ok = "ok" if after[i] == targets[i] else "FAILED (now %s)" % after[i]
         print("  #%d -> %s  %s" % (i, targets[i], ok))
+    print("recorded in %s" % a.log)
+    return 0
+
+
+def speakers(a):
+    """--speaker / --restore-speaker: the same discipline as a mode change."""
+    from logic.speaker import validate_speaker, OWNER
+
+    if not has_speaker_column(a.db):
+        print("this store has no speaker column yet - it is added when the proxy "
+              "next opens it (aetherroot._migrate). Restart the proxy, then retry.",
+              file=sys.stderr)
+        return 2
+    rows = episodes(a.db)
+    ids = {int(x) for x in a.ids.split(",") if x.strip()}
+    if not ids:
+        print("--ids is required", file=sys.stderr)
+        return 2
+    known = {r["id"]: r for r in rows}
+    missing = sorted(ids - set(known))
+    if missing:
+        print("no such episode: %s" % missing, file=sys.stderr)
+        return 2
+
+    if a.restore_speaker:
+        targets = previous_modes(a.log, ids, action="set_speaker", field="speaker_before")
+        unknown = sorted(ids - set(targets))
+        if unknown:
+            print("no recorded previous speaker for: %s" % unknown, file=sys.stderr)
+            return 2
+    elif a.speaker.strip().casefold() == OWNER:
+        targets = {i: OWNER for i in ids}
+    else:
+        name, err = validate_speaker(a.speaker)
+        if err:
+            print("speaker refused: %s" % err, file=sys.stderr)
+            return 2
+        targets = {i: name for i in ids}
+
+    print("episodes to change:")
+    show(rows, ids)
+    print()
+    for i in sorted(ids):
+        print("  #%d  speaker %s -> %s" % (i, known[i]["speaker"] or "(unknown)",
+                                          targets[i] or "(unknown)"))
+    if not a.apply:
+        print("\nDRY RUN. Nothing written. Add --apply (and --reason) to do it.")
+        return 0
+    if not a.reason:
+        print("\n--reason is required to apply: a correction with no stated "
+              "reason is a tamper.", file=sys.stderr)
+        return 2
+
+    con = sqlite3.connect(a.db)
+    try:
+        for i in sorted(ids):
+            con.execute("UPDATE episodes SET speaker = ? WHERE id = ?", (targets[i], i))
+            log_line(a.log, {
+                "action": "set_speaker", "episode": i,
+                "speaker_before": known[i]["speaker"], "speaker_after": targets[i],
+                "reason": a.reason, "operator": a.operator,
+                "restore": bool(a.restore_speaker),
+                "user_msg": (known[i]["user_msg"] or "")[:200],
+            })
+        con.commit()
+    finally:
+        con.close()
+
+    after = {r["id"]: r["speaker"] for r in episodes(a.db)}
+    print("\napplied:")
+    for i in sorted(ids):
+        ok = "ok" if after[i] == targets[i] else "FAILED (now %r)" % after[i]
+        print("  #%d -> %s  %s" % (i, targets[i] or "(unknown)", ok))
     print("recorded in %s" % a.log)
     return 0
 
