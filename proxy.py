@@ -62,16 +62,21 @@ from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
 from logic.provenance import (detect_mode, resolve_mode, is_record_question,
                              summarise_record, FICTION, UNVERIFIED)
 
-# One tokenizer for the process. Loading it costs ~17MB and a moment, so it is
-# built once, lazily, and reused.
-_TOKEN_COUNTER = None
+# One tokenizer per served model for the process. Loading one costs ~17MB and
+# a moment, so each is built once, lazily, and reused. Which model a request
+# is counted for is the model it is sent to (step 42, plan A): counting a Qwen
+# prompt with Llama's tokenizer, or against Llama's ceiling, would be the
+# silent failure this guard exists to prevent. A model with no profile in
+# logic/token_budget.MODELS is refused, not guessed at.
+_TOKEN_COUNTERS = {}
 
 
-def token_counter():
-    global _TOKEN_COUNTER
-    if _TOKEN_COUNTER is None:
-        _TOKEN_COUNTER = TokenCounter()
-    return _TOKEN_COUNTER
+def token_counter(model=None):
+    model = model or MODEL
+    counter = _TOKEN_COUNTERS.get(model)
+    if counter is None:
+        counter = _TOKEN_COUNTERS[model] = TokenCounter(model=model)
+    return counter
 
 # ============================================================
 # SHARED STATE
@@ -308,7 +313,7 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     closing the socket after 20 chunks left the next request answering in
     2.5-4.8s with no reset and no wedge.
     """
-    messages, budget = enforce_budget(token_counter(), messages)
+    messages, budget = enforce_budget(token_counter(model), messages)
     if budget.trimmed:
         print(f"[token-budget] {budget.summary()}", flush=True)
 
@@ -679,7 +684,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         messages = data.get("messages", [])
-        model = data.get("model", "manifests:qwen3")
+        # The served model unless the caller names one (every caller in this
+        # repository names llama3.2:3b). Was "manifests:qwen3", a v1 name
+        # hailo-ollama has never served on this unit.
+        model = data.get("model") or MODEL
 
         if not messages:
             self._proxy_passthrough("POST", body)

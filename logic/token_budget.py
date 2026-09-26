@@ -63,6 +63,51 @@ DEFAULT_TOKENIZER_PATHS = (
     os.path.expanduser("~/.aetherseed/tokenizer.json"),
 )
 
+# ---------------------------------------------------------------------------
+# Which model is being counted for (step 42, plan A)
+# ---------------------------------------------------------------------------
+# Every count is only as good as three facts about the SERVED model: its
+# tokenizer (checked by vocabulary size, so a tokenizer from another model is
+# refused rather than miscounted), the chat template the server wraps the
+# messages in, and the prompt ceiling of its compiled HEF - measured, never
+# taken from a datasheet: Hailo lists "context 2048" for llama3.2:3b, whose
+# prompt ceiling is 864 (build log, step 5).
+#
+# A model whose ceiling has not been measured on this hardware can be counted
+# but not served: the guard would be guessing at the one number it exists to
+# enforce. Llama 3.2 3B is the default and everything about it is unchanged.
+DEFAULT_MODEL = "llama3.2:3b"
+
+MODELS = {
+    "llama3.2:3b": {
+        "vocab": 128256,                 # = 4 x 32064 output heads in the HEF
+        "template": "llama3",
+        "ceiling": PREFILL_CEILING,
+        "tokenizer": "tokenizer.json",
+    },
+    # Plan A (Andreas, 26 Sep): the 5.1.1 zoo's Qwen2.5-1.5B-Instruct, pulled
+    # by the hash in its manifest. Tokenizer: Qwen/Qwen2.5-1.5B-Instruct
+    # tokenizer.json, 151643 + 22 added tokens.
+    "qwen2.5-instruct:1.5b": {
+        "vocab": 151665,
+        "template": "chatml",
+        "ceiling": None,                 # not yet measured on the unit
+        "tokenizer": "qwen2.5-instruct-1.5b.tokenizer.json",
+    },
+}
+
+
+def _tokenizer_paths(model):
+    """Where a model's tokenizer may be. The default model keeps the paths it
+    always had, AETHERSEED_TOKENIZER included."""
+    if model == DEFAULT_MODEL:
+        return list(DEFAULT_TOKENIZER_PATHS)
+    name = MODELS[model]["tokenizer"]
+    return [os.path.join(d, name) for d in (
+        os.environ.get("AETHERSEED_TOKENIZER_DIR", ""),
+        "/var/lib/aetherseed", "/usr/share/aetherseed",
+        os.path.expanduser("~/.aetherseed")) if d]
+
 
 class TokenizerUnavailable(RuntimeError):
     """Raised when no real tokenizer can be loaded.
@@ -70,6 +115,13 @@ class TokenizerUnavailable(RuntimeError):
     Deliberately fatal. The alternative — estimating — under-counts on exactly
     the content that overflows, and the resulting failure is silent.
     """
+
+
+class CeilingUnmeasured(TokenizerUnavailable):
+    """The model can be counted, but its prompt ceiling has not been measured
+    on this hardware, so nothing may be sent to it. A subclass of
+    TokenizerUnavailable so every caller that refuses to serve without a
+    tokenizer also refuses to serve without a ceiling."""
 
 
 class PromptTooLarge(RuntimeError):
@@ -105,7 +157,16 @@ class BudgetReport:
 class TokenCounter:
     """Counts tokens exactly as the server's chat template will produce them."""
 
-    def __init__(self, tokenizer_path: str | None = None):
+    def __init__(self, tokenizer_path: str | None = None, model: str = DEFAULT_MODEL):
+        if model not in MODELS:
+            raise TokenizerUnavailable(
+                f"No profile for model {model!r}. The guard counts only for a "
+                f"model whose tokenizer, template and prompt ceiling are known: "
+                f"{', '.join(sorted(MODELS))}.")
+        profile = MODELS[model]
+        self.model = model
+        self.template = profile["template"]
+        self.ceiling = profile["ceiling"]
         try:
             from tokenizers import Tokenizer  # type: ignore
         except ImportError as exc:
@@ -117,7 +178,7 @@ class TokenCounter:
                 "will silently emit empty responses on long prompts."
             ) from exc
 
-        candidates = [tokenizer_path] if tokenizer_path else list(DEFAULT_TOKENIZER_PATHS)
+        candidates = [tokenizer_path] if tokenizer_path else _tokenizer_paths(model)
         for path in candidates:
             if path and os.path.isfile(path):
                 self._tok = Tokenizer.from_file(path)
@@ -132,14 +193,20 @@ class TokenCounter:
         # Integrity check: the Llama 3.2 vocabulary is 128256, which equals the
         # HEF's four 32064-wide output heads. A mismatch means this tokenizer
         # does not belong to the model being served, and every count would be
-        # wrong in a way nothing downstream would notice.
+        # wrong in a way nothing downstream would notice. Every model in
+        # MODELS carries its own expected size.
         vocab = self._tok.get_vocab_size()
-        if vocab != 128256:
+        if vocab != profile["vocab"]:
+            if model == DEFAULT_MODEL:
+                raise TokenizerUnavailable(
+                    f"Tokenizer at {self.path} has vocab_size={vocab}, expected "
+                    f"128256 (= 4 x 32064 output heads in the llama3.2:3b HEF). "
+                    f"This is the wrong tokenizer for the served model."
+                )
             raise TokenizerUnavailable(
                 f"Tokenizer at {self.path} has vocab_size={vocab}, expected "
-                f"128256 (= 4 x 32064 output heads in the llama3.2:3b HEF). "
-                f"This is the wrong tokenizer for the served model."
-            )
+                f"{profile['vocab']} for {model}. This is the wrong tokenizer "
+                f"for the served model.")
         self.vocab_size = vocab
 
     def count(self, text: str) -> int:
@@ -148,11 +215,15 @@ class TokenCounter:
         return len(self._tok.encode(text, add_special_tokens=False).ids)
 
     def render_chat(self, messages: Iterable[dict], today: str | None = None) -> str:
-        """Reproduce hailo-ollama's Llama 3.2 chat template.
+        """Reproduce the chat template hailo-ollama wraps the messages in.
 
-        Transcribed from the template in the model manifest and verified
-        against the prompt the server echoes into its own log.
+        Llama 3.2: transcribed from the template in the model manifest and
+        verified against the prompt the server echoes into its own log.
+        ChatML (Qwen2.5): transcribed from the 5.1.1 zoo's qwen2.5-instruct
+        manifest, the no-tools branch - the proxy sends no tools.
         """
+        if self.template == "chatml":
+            return self._render_chatml(messages)
         if today is None:
             today = datetime.date.today().strftime("%d %b %Y")
 
@@ -173,6 +244,24 @@ class TokenCounter:
             content = (m.get("content") or "").strip()
             out.append(f"<|start_header_id|>{role}<|end_header_id|>\n\n{content}<|eot_id|>")
         out.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
+        return "".join(out)
+
+    @staticmethod
+    def _render_chatml(messages: Iterable[dict]) -> str:
+        """Qwen2.5's template, no tools: the first system message (or Qwen's
+        own default when there is none), every other message, then the
+        assistant's opening. Content is not trimmed - this template does not."""
+        msgs = list(messages)
+        if msgs and msgs[0].get("role") == "system":
+            out = ["<|im_start|>system\n" + (msgs[0].get("content") or "") + "<|im_end|>\n"]
+            msgs = msgs[1:]
+        else:
+            out = ["<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. "
+                   "You are a helpful assistant.<|im_end|>\n"]
+        for m in msgs:
+            out.append("<|im_start|>" + m.get("role", "user") + "\n"
+                       + (m.get("content") or "") + "<|im_end|>\n")
+        out.append("<|im_start|>assistant\n")
         return "".join(out)
 
     def count_messages(self, messages: Iterable[dict], today: str | None = None) -> int:
@@ -592,7 +681,7 @@ def _split_block(text: str, open_tag: str, close_tag: str):
 
 def enforce_budget(counter: TokenCounter,
                    messages: list,
-                   ceiling: int = PREFILL_CEILING,
+                   ceiling: int | None = None,
                    margin: int = SAFETY_MARGIN) -> tuple:
     """Make an assembled message list fit. Returns (messages, BudgetReport).
 
@@ -600,7 +689,17 @@ def enforce_budget(counter: TokenCounter,
     data (truncated and explicitly marked). Never drops the system message or
     the final user turn — if those alone do not fit, raises PromptTooLarge so
     the caller can say something honest instead of emitting an empty reply.
+
+    The ceiling is the counter's model's, unless one is given; a model whose
+    ceiling has not been measured raises CeilingUnmeasured and nothing is sent.
     """
+    if ceiling is None:
+        ceiling = getattr(counter, "ceiling", PREFILL_CEILING)
+        if ceiling is None:
+            raise CeilingUnmeasured(
+                f"The prompt ceiling of {getattr(counter, 'model', '?')} has not "
+                f"been measured on this hardware. Measure it (build log step 5: "
+                f"N tokens work, N+1 fail) before serving this model.")
     report = BudgetReport(ceiling=ceiling)
     budget = ceiling - margin
     msgs = [dict(m) for m in messages]

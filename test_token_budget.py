@@ -18,7 +18,8 @@ from logic.token_budget import (sanitize_model_output, sanitize_injected,
                                 strip_leading_artefacts, ends_sentence,
                                 TokenCounter, TokenizerUnavailable,
                                 enforce_budget, PromptTooLarge,
-                                PREFILL_CEILING)
+                                PREFILL_CEILING, MODELS, DEFAULT_MODEL,
+                                CeilingUnmeasured)
 
 CHARTER_RULES = ["Never invent facts", "Never claim ability you lack"]
 CHARTER = ("You are Horizon, a local AI companion.\n"
@@ -237,6 +238,83 @@ class TestInjectionSanitizer(unittest.TestCase):
         self.assertNotIn("[END WORKSPACE DATA]", out)
         self.assertIn("(END WORKSPACE DATA)", out,
                       "defanged, not deleted - a reader should still see it")
+
+
+class TestModelProfiles(unittest.TestCase):
+    """Step 42 (plan A): the guard counts for the model a prompt is sent to -
+    its tokenizer, its template, its measured ceiling. Llama is unchanged.
+    Pure stdlib except where a tokenizer is named, and those skip without it."""
+
+    def test_llama_is_the_default_and_unchanged(self):
+        self.assertEqual(DEFAULT_MODEL, "llama3.2:3b")
+        self.assertEqual(MODELS[DEFAULT_MODEL]["ceiling"], PREFILL_CEILING)
+        self.assertEqual(PREFILL_CEILING, 864)
+        self.assertEqual(MODELS[DEFAULT_MODEL]["vocab"], 128256)
+        self.assertEqual(MODELS[DEFAULT_MODEL]["template"], "llama3")
+
+    def test_a_model_without_a_profile_is_refused_not_guessed(self):
+        # the proxy's old default for a request naming no model
+        with self.assertRaises(TokenizerUnavailable) as cm:
+            TokenCounter(model="manifests:qwen3")
+        self.assertIn("No profile", str(cm.exception))
+
+    def test_every_profile_names_a_template_the_counter_can_render(self):
+        for name, p in MODELS.items():
+            with self.subTest(model=name):
+                self.assertIn(p["template"], ("llama3", "chatml"))
+                self.assertTrue(p["tokenizer"].endswith(".json"))
+
+    def test_chatml_is_the_manifests_own_template(self):
+        # Expected strings rendered with jinja2 from the chat_template of the
+        # 5.1.1 zoo's qwen2.5-instruct/1.5b manifest on Lyra (26 Sep 2026).
+        render = TokenCounter._render_chatml
+        self.assertEqual(
+            render([{"role": "system", "content": "You are Lyra.\n[MEMORY CONTEXT]\n- x\n[END MEMORY CONTEXT]"},
+                    {"role": "user", "content": "  What did the dove have?  "}]),
+            "<|im_start|>system\nYou are Lyra.\n[MEMORY CONTEXT]\n- x\n[END MEMORY CONTEXT]<|im_end|>\n"
+            "<|im_start|>user\n  What did the dove have?  <|im_end|>\n<|im_start|>assistant\n")
+        self.assertEqual(
+            render([{"role": "user", "content": "hi"}]),
+            "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful "
+            "assistant.<|im_end|>\n<|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n")
+        self.assertEqual(
+            render([{"role": "system", "content": "S"}, {"role": "user", "content": "a"},
+                    {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]),
+            "<|im_start|>system\nS<|im_end|>\n<|im_start|>user\na<|im_end|>\n"
+            "<|im_start|>assistant\nb<|im_end|>\n<|im_start|>user\nc<|im_end|>\n"
+            "<|im_start|>assistant\n")
+
+    def test_an_unmeasured_ceiling_sends_nothing(self):
+        class Unmeasured:
+            model, ceiling = "qwen2.5-instruct:1.5b", None
+            def count_messages(self, msgs):
+                return 10
+        with self.assertRaises(CeilingUnmeasured) as cm:
+            enforce_budget(Unmeasured(), [{"role": "user", "content": "hi"}])
+        self.assertIsInstance(cm.exception, TokenizerUnavailable,
+                              "every caller that refuses without a tokenizer refuses this too")
+
+    def test_the_counters_own_ceiling_is_the_one_enforced(self):
+        class Small:
+            model, ceiling = "test", 60
+            def count_messages(self, msgs):
+                return sum(len(m.get("content") or "") for m in msgs)
+        msgs = [{"role": "system", "content": "C" * 10 + "\n\n[MEMORY CONTEXT]\n"
+                 + "\n".join("- entry %d" % i for i in range(9)) + "\n[END MEMORY CONTEXT]"},
+                {"role": "user", "content": "q?"}]
+        out, report = enforce_budget(Small(), msgs)
+        self.assertEqual(report.ceiling, 60)
+        self.assertTrue(report.trimmed)
+        self.assertLessEqual(report.total_tokens, 60)
+
+    def test_qwen_tokenizer_when_present(self):
+        try:
+            c = TokenCounter(model="qwen2.5-instruct:1.5b")
+        except TokenizerUnavailable:
+            self.skipTest("no Qwen2.5 tokenizer on this machine")
+        self.assertEqual(c.vocab_size, 151665)
+        self.assertEqual(c.count("<|im_start|>"), 1, "a special token is one token")
+        self.assertEqual(c.template, "chatml")
 
 
 def _counter():

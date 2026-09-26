@@ -109,7 +109,7 @@ class _Proxy(unittest.TestCase):
             "HAILO_OLLAMA_URL", "token_counter", "enforce_budget", "root", "trust",
             "detect_intent", "PROVENANCE_LOG", "COMPANION_FILE", "SOFT_STOP_TOKENS")}
         proxy.HAILO_OLLAMA_URL = "http://127.0.0.1:%d" % cls.model.server_address[1]
-        proxy.token_counter = lambda: None
+        proxy.token_counter = lambda *a, **k: None
         proxy.enforce_budget = lambda c, m: (m, types.SimpleNamespace(trimmed=False))
         proxy.trust = _Trust()
         proxy.detect_intent = lambda *_: None

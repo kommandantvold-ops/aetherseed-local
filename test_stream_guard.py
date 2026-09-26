@@ -88,7 +88,7 @@ class TestStreamGuard(unittest.TestCase):
                      proxy.STOP_AT_PARAGRAPH, proxy.MAX_GENERATION_SECONDS,
                      proxy.enforce_budget, proxy.SOFT_STOP_TOKENS)
         proxy.HAILO_OLLAMA_URL = "http://127.0.0.1:%d" % cls.server.server_address[1]
-        proxy.token_counter = lambda: None
+        proxy.token_counter = lambda *a, **k: None
         proxy.enforce_budget = lambda counter, messages: (messages, types.SimpleNamespace(trimmed=False))
 
     @classmethod
