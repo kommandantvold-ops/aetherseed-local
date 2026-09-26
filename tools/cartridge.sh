@@ -103,6 +103,20 @@ collect() {
     emit model.file MISSING
   fi
 
+  # Any further model on the unit (step 42: plan A's Qwen2.5 beside Llama).
+  # The first blob is reported as it always was, so a unit with one model keeps
+  # its cartridge ID; every other blob is named and hashed too. A manifest that
+  # records one model while two sit on disk would be a manifest that lies.
+  local extra
+  for extra in $(ls -1 "$BLOB_DIR" 2>/dev/null | tail -n +2); do
+    emit "model.extra.$extra.bytes" "$(stat -c %s "$BLOB_DIR/$extra" 2>/dev/null)"
+    if [ "${QUICK:-0}" = "1" ]; then
+      emit "model.extra.$extra.sha256" "SKIPPED(--quick)"
+    else
+      emit "model.extra.$extra.sha256" "$(hash_file "$BLOB_DIR/$extra")"
+    fi
+  done
+
   local f
   for f in "${IDENTITY_FILES[@]}"; do
     emit "file.$f" "$(hash_file "$f")"
@@ -124,6 +138,12 @@ collect() {
     emit app.digest MISSING
   fi
   emit file.tokenizer_json "$(hash_file /var/lib/aetherseed/tokenizer.json)"
+  # A second model's tokenizer, when there is one (logic/token_budget.MODELS).
+  local tk
+  for tk in /var/lib/aetherseed/*.tokenizer.json; do
+    [ -e "$tk" ] || continue
+    emit "file.$tk" "$(hash_file "$tk")"
+  done
 
   emit device.node_mode  "$(stat -c '%a %U:%G' /dev/hailo0 2>/dev/null || echo MISSING)"
   emit service.hailo_ollama.enabled "$(systemctl is-enabled hailo-ollama 2>/dev/null || echo unknown)"

@@ -61,6 +61,10 @@ from logic.prompt_builder import MUSTARDSEED    # noqa: E402
 from honesty_check import check_response        # noqa: E402
 
 REPS = int(os.environ.get("PROBE_REPS", "3"))
+# Which model the probes go to (step 42, the model bench). The default is the
+# served model, so running it bare means what it always meant.
+MODEL = os.environ.get("PROBE_MODEL", "llama3.2:3b")
+TRANSCRIPT = os.path.expanduser(os.environ.get("PROBE_TRANSCRIPT", "~/probe_transcript.json"))
 
 # --- mechanical predicates -------------------------------------------------
 # Each returns (ok, note). They are deliberately narrow: a predicate that could
@@ -199,13 +203,13 @@ def run_one(prompt):
     msgs = [{"role": "system", "content": MUSTARDSEED},
             {"role": "user", "content": prompt}]
     t0 = time.time()
-    _raw, text = proxy.call_hailo_chat("llama3.2:3b", msgs)
+    _raw, text = proxy.call_hailo_chat(MODEL, msgs)
     return text, round(time.time() - t0, 1)
 
 
 def main():
     print("=" * 78)
-    print("  AetherSeed probe suite - NEW baseline, llama3.2:3b")
+    print("  AetherSeed probe suite - NEW baseline, %s" % MODEL)
     print("  Not comparable to the v1 22/25: those probes are not in the repo.")
     print("  app=%s  reps=%d  bounds=%s/%s/%ss" % (
         APP, REPS, proxy.SOFT_STOP_TOKENS,
@@ -243,9 +247,9 @@ def main():
     print("\n  FOR A HUMAN TO SCORE - not counted above:")
     for name, _, _, q in results:
         print("   - %-10s %s" % (name, q))
-    with open(os.path.expanduser("~/probe_transcript.json"), "w") as f:
+    with open(TRANSCRIPT, "w") as f:
         json.dump(transcript, f, indent=1)
-    print("\n  full transcript: ~/probe_transcript.json")
+    print("\n  full transcript: %s" % TRANSCRIPT)
 
 
 if __name__ == "__main__":
