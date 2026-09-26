@@ -97,7 +97,7 @@ _HEDGE = re.compile(
 _REFERENCE = re.compile(
     r"\(?\s*\b(?:genesis|gen\.?)\s*\d+(?:\s*:\s*\d+)?(?:\s*[-–]\s*\d+)?"
     r"(?:\s*(?:,|and)\s*\d+)*\s*\)?"
-    r"|\b(?:chapters?|verses?)\s+\d+(?:\s*[-–]\s*\d+)?"
+    r"|\b(?:chapters?|verses?|sections?)\s+\d+(?:\s*[-–]\s*\d+)?"
     r"|\b\d+\s*:\s*\d+(?:\s*[-–]\s*\d+)?",
     re.I)
 

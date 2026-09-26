@@ -135,6 +135,8 @@ class Figures(unittest.TestCase):
         self.assertEqual(A.numbers("in Genesis 2:2 and 3"), set())
         self.assertEqual(A.numbers("Genesis 1:26-27"), set())
         self.assertEqual(A.numbers("he sent another one, the first light"), set())
+        # the model bench, llama3.2:3b: "chapter 7, section 6" is a reference
+        self.assertEqual(A.numbers("in the book of Genesis, chapter 7, section 6, it says"), set())
 
 
 if __name__ == "__main__":
