@@ -24,58 +24,83 @@ WORKSPACE = os.path.expanduser("~/aetherseed-workspace")
 # ============================================================
 # INTENT PATTERNS
 # ============================================================
+#
+# A tool runs only when the message asks for it by name: a file (named, or
+# with an extension), the workspace, a note with a colon, the to-do list, the
+# system's health, the trust level, the growth log. An ordinary verb never
+# does - not "read", "open", "find", "remember", "I need to" - and every
+# keyword is bounded by \b, so "spread" is not "read".
+#
+# Why (build log, step 40g): in 24 hours of love poetry the old patterns ran a
+# tool 193 times and not once because anyone asked. "My perfume spread its
+# fragrance" ran file_read('its'), "I didn't find him" ran file_search('him.'),
+# "Open to me" ran file_read('to'), and "What do you remember of the song...?"
+# matched note_write 49 times - refused only because the unit was at observer.
+# At builder it would have written 49 notes. Output from a tool goes into the
+# prompt as workspace data, so a false match also changes the answer.
+#
+# test_intent_detection.py holds both halves: every message of that soak, the
+# whole Song of Songs and all of Genesis produce no intent; the explicit
+# requests below still do. Order matters only where two could match: the
+# writes (todo_add, note_write) are checked before the reads of the same thing.
+
+_Q = "['\"‘“]?"                # an optional opening quote
+_APOS = "['’]"                      # what's / what’s
+_NAME = r"([\w](?:[\w./-]*[\w])?)"       # a file name, never ending in "." or "/"
+_EXT = r"(?:txt|md|py|json|log|csv)"
+_NAME_EXT = r"([\w](?:[\w./-]*[\w])?\." + _EXT + r")\b"
+_TODO = r"(?:to-?do|todo)"
 
 INTENT_PATTERNS = [
     # File listing (CHECK BEFORE file_read)
     {
         "intent": "file_list",
         "patterns": [
-            r"(?:list|show|what|see)\s+(?:the\s+)?(?:files?|contents?|what.?s)\s+(?:in\s+)?(?:my\s+)?(?:workspace|directory|folder|files)",
-            r"(?:workspace|files?|directory)\s+(?:list|contents?|show)",
-            r"(?:can you see|do you have|what do you have|show me)\s+(?:a\s+)?(?:workspace|files?|my files?)",
-            r"(?:show|list)\s+(?:me\s+)?(?:my\s+)?files?",
+            r"\b(?:list|show)\s+(?:me\s+)?(?:the\s+|my\s+|your\s+)?(?:files|workspace)\b",
+            r"\bwhat(?:" + _APOS + r"s|\s+is)\s+in\s+(?:the\s+|my\s+|your\s+)?(?:workspace|folder|directory)\b",
+            r"\b(?:workspace|directory)\s+(?:list|listing|contents)\b",
+            r"\b(?:can you see|do you have|what do you have)\s+(?:a\s+|any\s+)?(?:workspace|files)\b",
         ],
         "description": "List workspace files",
         "tier": 1,
     },
-    # File reading
+    # File reading: the word "file" and a name, or a name with an extension
     {
         "intent": "file_read",
         "patterns": [
-            r"(?:read|show|open|display|cat|view|what.?s in|contents? of)\s+(?:the\s+)?(?:file\s+)?['\"]?([^\s'\"]+)['\"]?",
-            r"(?:read|show|open|display)\s+(?:my\s+)?(\w+\.(?:txt|md|py|json|log|csv))",
+            r"\b(?:read|show|open|display|cat|view)\s+(?:me\s+)?(?:the\s+|my\s+|your\s+)?file\s+" + _Q + _NAME,
+            r"\b(?:read|show|open|display|cat|view)\s+(?:me\s+)?(?:the\s+|my\s+|your\s+)?" + _Q + _NAME_EXT,
+            r"\b(?:what(?:" + _APOS + r"s|\s+is)\s+in|contents?\s+of)\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
         ],
         "description": "Read a file",
         "tier": 1,
     },
-    # Todo operations
-    {
-        "intent": "todo_read",
-        "patterns": [
-            r"(?:show|list|read|what|display|check)\s+(?:my\s+)?(?:to.?do|tasks?|todo)",
-            r"(?:to.?do|tasks?|todo)\s+(?:list|show|read|check)",
-            r"what\s+(?:do i|should i|need to)\s+(?:do|work on|focus on)",
-        ],
-        "description": "Read todo list",
-        "tier": 1,
-    },
+    # Todo operations - the add first: an explicit "add" wins
     {
         "intent": "todo_add",
         "patterns": [
-            r"(?:add|put|append|create|new)\s+(?:a\s+)?(?:to.?do|task|item|entry)[\s:]+(.+)",
-            r"(?:remind me to|don.?t forget to|i need to)\s+(.+)",
-            r"(?:add|put)\s+['\"](.+?)['\"]\s+(?:to|on|in)\s+(?:my\s+)?(?:to.?do|tasks?|list)",
+            r"\b(?:add|new)\s+(?:a\s+|an\s+)?(?:" + _TODO + r"|task)(?:\s+item)?\s*:\s*(.+)",
+            r"\badd\s+['\"‘“](.+?)['\"’”]\s+to\s+(?:my\s+|the\s+)?(?:" + _TODO + r"|task)s?(?:\s+list)?\b",
+            r"\badd\s+(.+?)\s+to\s+(?:my\s+|the\s+)(?:" + _TODO + r"|task)\s+list\b",
         ],
         "description": "Add to todo list",
         "tier": 2,
     },
-    # Note operations
+    {
+        "intent": "todo_read",
+        "patterns": [
+            r"\b(?:show|list|read|display|check)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:" + _TODO + r"s?(?:\s+list)?|tasks|task\s+list)\b",
+            r"\bwhat(?:" + _APOS + r"s|\s+is)\s+on\s+(?:my\s+|the\s+)?(?:" + _TODO + r"|task)\s+list\b",
+        ],
+        "description": "Read todo list",
+        "tier": 1,
+    },
+    # Note operations - a verb, the word "note", and a colon
     {
         "intent": "note_write",
         "patterns": [
-            r"(?:write|save|create|make)\s+(?:a\s+)?note[\s:]+(.+)",
-            r"(?:note|remember|log|record)[\s:]+(.+)",
-            r"(?:save|write)\s+(?:this|that)\s+(?:as\s+)?(?:a\s+)?note",
+            r"\b(?:write|save|make|take|create|add)\s+(?:a\s+|this\s+|that\s+)?note\s*:\s*(.+)",
+            r"\b(?:save|write)\s+(?:this|that)\s+as\s+a\s+note\b",
         ],
         "description": "Write a note",
         "tier": 2,
@@ -83,8 +108,8 @@ INTENT_PATTERNS = [
     {
         "intent": "note_list",
         "patterns": [
-            r"(?:show|list|read|what)\s+(?:my\s+)?notes?",
-            r"notes?\s+(?:list|show|read)",
+            r"\b(?:show|list|read)\s+(?:me\s+)?(?:my\s+|the\s+|your\s+)?notes\b",
+            r"\bwhat\s+notes\s+(?:do\s+you\s+have|have\s+you)\b",
         ],
         "description": "List notes",
         "tier": 1,
@@ -93,30 +118,33 @@ INTENT_PATTERNS = [
     {
         "intent": "system_health",
         "patterns": [
-            r"(?:system|health|status|diagnostics?|how.?s the|check the)\s+(?:check|health|status|pi|system|hardware|temperature|temp|cpu|memory|ram|disk)",
-            r"(?:cpu|memory|ram|disk|temperature|temp)\s+(?:usage|status|check|level)",
-            r"how.?s\s+(?:the\s+)?(?:pi|system|hardware|horizon)\s+(?:doing|running|performing)",
+            r"\b(?:system|health)\s+(?:check|status|report)\b",
+            r"\b(?:cpu|ram|disk)\s+(?:usage|status|temperature|temp|load)\b",
+            r"\b(?:cpu|pi|system|board)\s+(?:temperature|temp)\b",
+            r"\bhow(?:" + _APOS + r"s|\s+is)\s+(?:the\s+)?(?:pi|system|hardware)\s+(?:doing|running|performing)\b",
+            r"\bcheck\s+(?:the\s+)?(?:system|hardware|temperature)\b",
         ],
         "description": "System health check",
         "tier": 1,
     },
-    # Growth/trust status
+    # Trust status - the words "trust" or "resonance" with what is asked about
     {
         "intent": "trust_status",
         "patterns": [
-            r"(?:trust|resonance|growth|tier|level|status|how am i|progress|evolution)",
-            r"(?:what|show|check)\s+(?:is\s+)?(?:my\s+)?(?:trust|tier|level|resonance|growth|status)",
-            r"(?:how|where)\s+(?:am i|do i stand|is my)\s+(?:growing|progressing|evolving|at)",
+            r"\b(?:trust|resonance)\s+(?:level|status|score|tier)\b",
+            r"\b(?:what(?:" + _APOS + r"s|\s+is)|show|check)\s+(?:me\s+)?(?:your|my|the)\s+(?:trust|resonance)\b",
         ],
         "description": "Show trust status",
         "tier": 1,
     },
-    # File search
+    # File search: the word "file" and a name, a name with an extension, or
+    # "search ... in my files"
     {
         "intent": "file_search",
         "patterns": [
-            r"(?:find|search|look for|where is)\s+(?:the\s+)?(?:file\s+)?['\"]?(\S+)['\"]?",
-            r"(?:search|find|grep)\s+(?:for\s+)?['\"]?(.+?)['\"]?\s+(?:in|across|within)\s+(?:my\s+)?(?:files?|workspace)",
+            r"\b(?:find|search\s+for|look\s+for|locate|where\s+is)\s+(?:the\s+|my\s+)?file\s+" + _Q + _NAME,
+            r"\b(?:find|search\s+for|look\s+for|locate)\s+(?:the\s+|my\s+)?" + _Q + _NAME_EXT,
+            r"\b(?:search|grep)\s+(?:for\s+)?" + _Q + r"(.+?)['\"’”]?\s+in\s+(?:my\s+|the\s+)?(?:files|workspace|notes)\b",
         ],
         "description": "Search for files",
         "tier": 1,
@@ -125,8 +153,8 @@ INTENT_PATTERNS = [
     {
         "intent": "log_read",
         "patterns": [
-            r"(?:show|read|view|check)\s+(?:the\s+)?(?:growth\s+)?log",
-            r"(?:growth|activity|event)\s+log",
+            r"\b(?:show|read|view|check)\s+(?:me\s+)?the\s+log\b",
+            r"\b(?:growth|activity|event)\s+log\b",
         ],
         "description": "Read growth log",
         "tier": 1,
