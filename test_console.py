@@ -187,5 +187,20 @@ class TheRingTree(unittest.TestCase):
         # render the sentence without it.
         self.assertIn("${s.ownWords(name)} “${ring.own_words}”", self.HTML)
 
+class TheOwnerCreditTag(unittest.TestCase):
+    """Step 41: an answer that credits the owner with something it was not
+    shown is tagged where the person reads it - in both languages, and only
+    when the check said so (owner_backed false, not merely absent)."""
+
+    HTML = TheRingTree.HTML
+
+    def test_both_languages_have_it(self):
+        self.assertEqual(2, self.HTML.count("ownerUnbacked: "))
+
+    def test_it_follows_the_check_and_nothing_else(self):
+        self.assertIn("p.owner_credited && p.owner_backed === false", self.HTML)
+        self.assertIn("tag(s.ownerUnbacked, 'flagged')", self.HTML)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

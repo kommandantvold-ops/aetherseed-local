@@ -227,6 +227,7 @@ const T = {
     fiction: 'Fiction, at your request',
     unverified: 'Unverified source — not used as memory',
     unchecked: 'Not checked for invented sources — not used as memory',
+    ownerUnbacked: 'Credits its owner with something it was not shown — not used as memory',
     usedMemory: 'used memory', usedTools: 'used tools',
     remembered: (r, a) => a ? `${r} remembered · ${a} set aside` : `${r} remembered`,
     told: (n) => `${n} from its owner`,
@@ -276,6 +277,7 @@ const T = {
     fiction: 'Fiksjon, som du ba om',
     unverified: 'Kilde som ikke kan bekreftes — brukes ikke som minne',
     unchecked: 'Ikke sjekket for oppdiktede kilder — brukes ikke som minne',
+    ownerUnbacked: 'Tilskriver eieren noe den ikke ble vist — brukes ikke som minne',
     usedMemory: 'brukte minne', usedTools: 'brukte verktøy',
     remembered: (r, a) => a ? `${r} husket · ${a} lagt til side` : `${r} husket`,
     told: (n) => `${n} fra eieren`,
@@ -370,6 +372,14 @@ function provenance(turnEl, p) {
   } else if (p.unbacked_sources > 0) {
     turnEl.root.classList.add('flagged');
     tag(s.unverified, 'flagged');
+  } else if (p.owner_credited && p.owner_backed === false) {
+    // "My owner told me..." about something no fact shown on this turn says
+    // (build log 41): tagged, and stored where memory never reads it.
+    turnEl.root.classList.add('flagged');
+    tag(s.ownerUnbacked, 'flagged');
+    if (p.owner_why) {
+      const w = document.createElement('span'); w.className = 'why'; w.textContent = p.owner_why; row.append(w);
+    }
   } else if (p.mode === 'fiction') {
     turnEl.root.classList.add('fiction');
     tag(s.fiction, 'fiction');

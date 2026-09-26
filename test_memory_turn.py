@@ -238,6 +238,60 @@ class TestOwnerFacts(_Proxy):
         self.assertEqual((meta["facts_used"], meta["fact_sources"]), (0, []))
 
 
+class TestWhatItSaysTheOwnerToldIt(_Proxy):
+    """Andreas, 26 Sep (40i decision 2, step 41): an answer that credits the
+    owner with no owner fact shown, or with content that is not in what was
+    shown, is tagged and kept out of memory."""
+
+    def setUp(self):
+        super().setUp()
+        proxy.root.store.add_fact(
+            "The dove came back to him at evening and, behold, in her mouth was a freshly "
+            "plucked olive leaf. So Noah knew that the waters were abated from the earth.",
+            "Genesis 8:11")
+
+    def answer(self, reply, question="What did the dove have in her mouth?"):
+        SCRIPT["chunks"] = [reply]
+        status, text, meta = self.ask(question, speaker="Reader")
+        self.assertEqual(status, 200)
+        return meta, proxy.root.store.get_all_episodes()[-1], self.record()[-1]
+
+    def test_the_owners_words_are_remembered(self):
+        meta, ep, rec = self.answer("My owner told me that the dove came back at evening "
+                                    "with a freshly plucked olive leaf in her mouth.")
+        self.assertEqual((meta["owner_credited"], meta["owner_backed"]), (True, True))
+        self.assertEqual((meta["mode"], ep["mode"], rec["owner_backed"]),
+                         ("factual", "factual", True))
+
+    def test_a_figure_he_never_gave_is_kept_out(self):
+        meta, ep, rec = self.answer("My owner told me that the dove came back after 40 days "
+                                    "with an olive leaf.")
+        self.assertEqual((meta["owner_credited"], meta["owner_backed"]), (True, False))
+        self.assertIn("40", meta["owner_why"])
+        self.assertEqual((meta["mode"], ep["mode"], rec["owner_backed"]),
+                         ("unverified", "unverified", False))
+
+    def test_words_he_never_gave_are_kept_out_and_never_come_back(self):
+        meta, ep, _ = self.answer("My owner told me that the dove brought a golden ring from "
+                                  "the mountains of Ararat.")
+        self.assertEqual((meta["owner_backed"], ep["mode"]), (False, "unverified"))
+        ctx = proxy.root.retrieve_context("What did the dove bring from Ararat?")
+        self.assertNotIn("golden ring", ctx)
+
+    def test_no_fact_shown_is_nothing_behind_it(self):
+        meta, ep, _ = self.answer("My owner told me that it will rain tomorrow.",
+                                  question="Good morning.")
+        self.assertEqual((meta["facts_used"], meta["owner_backed"]), (0, False))
+        self.assertEqual(meta["owner_why"], "no owner fact was shown")
+        self.assertEqual(ep["mode"], "unverified")
+
+    def test_an_answer_that_does_not_credit_the_owner_is_untouched(self):
+        meta, ep, rec = self.answer("The dove had an olive leaf in her mouth.")
+        self.assertEqual((meta["owner_credited"], meta["owner_backed"], meta["owner_why"]),
+                         (False, None, ""))
+        self.assertEqual((ep["mode"], rec["owner_credited"]), ("factual", False))
+
+
 class TestAFailedStore(_Proxy):
 
     def test_it_is_said_counted_and_recorded(self):

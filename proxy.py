@@ -50,6 +50,7 @@ from logic.prompt_builder import charter
 from logic import companion
 from logic.speaker import validate_speaker, OWNER
 from logic.facts import FACT_TAG, FACT_NOTE
+from logic.attribution import check as owner_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
@@ -863,6 +864,34 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # than showing nothing and looking clean.
             stored_mode = UNVERIFIED
 
+        # ---- WHAT IT SAYS THE OWNER TOLD IT ----
+        # Andreas, 26 Sep (build log 40i decision 2, step 41): an answer that
+        # credits the owner with no owner fact shown, or with content that is
+        # not in what was shown, is tagged and kept out of memory. In the
+        # reading soak 83 of 254 such answers put something in his mouth he
+        # never entered - Methuselah at 195 years among them - and the stored
+        # answer then grounded its own repetition (40d). Kept out of memory
+        # means stored as unverified: in the record and on the console, never
+        # retrieved, never in a ring. See logic/attribution.py.
+        owner = {"credited": False}
+        if ai_content:
+            try:
+                owner = owner_check(ai_content, retrieval.get("fact_texts") or [])
+            except Exception as e:
+                owner = {"credited": None, "why": "the check could not run"}
+                print(f"[attribution] the check could not run: {e!r}", flush=True)
+                if "owner" in ai_content.lower():
+                    stored_mode = UNVERIFIED
+        if owner.get("credited") and not owner.get("backed"):
+            stored_mode = UNVERIFIED
+            # The kind of miss only - no figure and no words from the answer
+            # go to the journal (37: what was said stays out of it).
+            kind = ("no owner fact shown" if not retrieval.get("fact_texts")
+                    else "a figure not shown" if owner.get("figures")
+                    else "words not shown")
+            print(f"[attribution] credits the owner: {kind} - kept out of memory",
+                  flush=True)
+
         stream(_terminator(raw_response, model, {
             "mode": stored_mode,
             "mode_requested": request_mode,
@@ -877,6 +906,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # of the answer can check it against what was shown.
             "fact_sources": list(retrieval.get("fact_sources") or ()),
             "rings_used": len(retrieval.get("rings") or ()),
+            # A question about what was read or talked about, which asks the
+            # rings first (logic/rings.py, build log 41).
+            "recollection": bool(retrieval.get("recollection")),
+            # Credits the owner, and whether what it credits him with was in
+            # what he told it (logic/attribution.py). owner_backed is null
+            # when the owner is not credited.
+            "owner_credited": bool(owner.get("credited")),
+            "owner_backed": owner.get("backed") if owner.get("credited") else None,
+            "owner_why": owner.get("why", "") if owner.get("credited") else "",
         }))
 
         # Store in AetherRoot
@@ -976,7 +1014,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                       "recorded, not remembered", flush=True)
 
             if stored_mode != "factual":
-                print(f"[provenance] stored as {stored_mode} ({mode_reason})", flush=True)
+                because = ("credits the owner with something not shown"
+                           if owner.get("credited") and not owner.get("backed")
+                           else mode_reason)
+                print(f"[provenance] stored as {stored_mode} ({because})", flush=True)
             record({
                 "mode_requested": request_mode,
                 "mode_stored": stored_mode,
@@ -989,6 +1030,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "checked": not check_failed,
                 "remembered": stored_ok,
                 "facts_used": retrieval.get("facts") or [],
+                "owner_credited": owner.get("credited"),
+                "owner_backed": owner.get("backed") if owner.get("credited") else None,
+                "owner_why": owner.get("why", "") if owner.get("credited") else "",
                 "prompt": user_msg[:160],
                 "answer": ai_content[:160],
                 "speaker": speaker,

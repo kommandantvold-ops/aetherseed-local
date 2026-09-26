@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
     "consolidation_threshold": 50,  # factual episodes waiting before a ring closes
     "consolidation_batch": 20,      # episodes one ring takes - see RINGS below
     "facts_max": 250,               # owner facts a unit may hold (logic/facts.py)
+    "rings_asked": 1,               # rings a "what have you been reading?" question is shown first
     "embedding_dim": 64,            # TF-IDF dimensions (kept small for 1.7B context)
     "willingness_dim": 64,
     "willingness_drift": 0.02,      # slow drift per interaction
@@ -745,7 +746,7 @@ class AetherRoot:
         """
         from logic.provenance import visible_modes, FICTION, FICTION_LABEL
         from logic.speaker import label_for
-        from logic.rings import ring_line
+        from logic.rings import ring_line, is_recollection, rings_for_question
 
         query_emb = self.embedder.embed(user_msg)
         allowed = visible_modes(request_mode)
@@ -824,6 +825,19 @@ class AetherRoot:
         # at most two, within their own share of the block.
         facts = self._fact_lines(user_msg, report)
 
+        # A question about what was read or talked about asks the RINGS first
+        # (Andreas, 26 Sep; build log 40e, 41): in the reading soak none of the
+        # 195 such questions had a ring in the block, and the episodes - its
+        # own earlier answers - answered instead. logic/rings.py.
+        asked = []
+        recollection = is_recollection(user_msg)
+        if recollection:
+            asked = rings_for_question(
+                user_msg, [s for s in semantics if s.get("ring_no") is not None],
+                k=self.config.get("rings_asked", 1))
+        if report is not None:
+            report["recollection"] = recollection
+
         # Retrieve top-k.
         #
         # Ranked WIDE and then deduplicated, rather than ranked to five: the
@@ -838,19 +852,26 @@ class AetherRoot:
                 top_k=max(want * 8, 40)
             )
             top = _dedupe_by_question(ranked, want)
+            asked_nos = {r["ring_no"] for r in asked}
+            top = [m for m in top if m.get("ring_no") is None
+                   or m["ring_no"] not in asked_nos]
 
         # A unit on its first day has no episodes and still knows what it is.
-        if not known and not facts and not top:
+        if not known and not facts and not asked and not top:
             if report is not None:
-                report.update(facts=[], fact_sources=[], rings=[], known=0)
+                report.update(facts=[], fact_sources=[], fact_texts=[], rings=[],
+                              known=0)
             return ""
 
         # Format context. What the report says was used is what made it into
         # the block, not what was ranked: a line past max_chars is not shown.
         fact_ids = (report or {}).get("facts") or []
         fact_srcs = (report or {}).get("fact_sources") or []
+        fact_txts = (report or {}).get("fact_texts") or []
         items = ([(t, "known", None) for t in known]
                  + [(t, "fact", i) for i, t in enumerate(facts)]
+                 + [(ring_line(r["ring_no"], r["content"][:200], r.get("own_words") or ""),
+                     "asked", r["ring_no"]) for r in asked]
                  + [(m["text"], "ring" if m.get("ring_no") is not None else "memory",
                      m.get("ring_no")) for m in top])
         lines = ["[MEMORY CONTEXT]"]
@@ -859,6 +880,8 @@ class AetherRoot:
         for text, kind, ref in items:
             line = f"- {text}"
             if total_chars + len(line) > max_chars:
+                if kind == "asked":
+                    continue         # a ring that does not fit leaves room for the rest
                 break
             lines.append(line)
             total_chars += len(line)
@@ -866,13 +889,16 @@ class AetherRoot:
                 shown["known"] += 1
             elif kind == "fact":
                 shown["facts"].append(ref)
-            elif kind == "ring":
+            elif kind in ("ring", "asked"):
                 shown["rings"].append(ref)
         lines.append("[END MEMORY CONTEXT]")
 
         if report is not None:
             report["facts"] = [fact_ids[i] for i in shown["facts"] if i < len(fact_ids)]
             report["fact_sources"] = [fact_srcs[i] for i in shown["facts"] if i < len(fact_srcs)]
+            # The owner's words as shown - what logic/attribution.py checks an
+            # answer that credits the owner against (build log 41).
+            report["fact_texts"] = [fact_txts[i] for i in shown["facts"] if i < len(fact_txts)]
             report["rings"] = shown["rings"]
             report["known"] = shown["known"]
 
@@ -916,6 +942,7 @@ class AetherRoot:
         if report is not None:
             report["facts"] = ids
             report["fact_sources"] = [by_id[i]["source"] for i in ids]
+            report["fact_texts"] = [by_id[i]["text"] for i in ids]
         return lines
 
     def store_interaction(self, user_msg: str, ai_msg: str,

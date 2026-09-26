@@ -211,5 +211,86 @@ class TestWhatARingKeeps(_Root):
             self.root.store.set_own_words(sem["id"], "", "model failed")
         self.assertEqual(self.root.store.rings_needing_own_words(3), [])
 
+
+class TestAskingTheRings(_Root):
+    """Step 41 (Andreas: "yes give"). In the reading soak none of the 195
+    questions about the reading had a ring in the block (40e); the episodes -
+    its own earlier answers - answered instead."""
+
+    SOAK_RING_QUESTIONS = ("What have you been reading lately?",
+                           "What was the reading about?",
+                           "What do you remember of the song you have been hearing?",
+                           "Who has been reading to you, and what did they read?")
+
+    def two_rings(self):
+        # A ring takes the oldest twenty waiting: the first closes at 50
+        # waiting (turns 1-20, herons), the second 20 turns later (21-40,
+        # boats). The gulls are still waiting.
+        for word, n in (("The heron stood in the river", 20),
+                        ("A boat crossed the fjord", 30),
+                        ("A gull flew over the sea", 20)):
+            for i in range(n):
+                self.root.store_interaction("Reader here. %s %d." % (word, i),
+                                            "Yes.", 0.5, speaker="Reader")
+        rings = [s for s in self.root.store.get_all_semantic() if s.get("ring_no")]
+        self.assertEqual(sorted(r["ring_no"] for r in rings), [1, 2])
+        self.assertIn("heron", [r for r in rings if r["ring_no"] == 1][0]["content"])
+        self.assertIn("boat", [r for r in rings if r["ring_no"] == 2][0]["content"])
+        return rings
+
+    def test_the_soaks_questions_are_recollections_and_its_other_turns_are_not(self):
+        import json, os
+        from logic.rings import is_recollection
+        here = os.path.dirname(os.path.abspath(__file__))
+        for q in self.SOAK_RING_QUESTIONS:
+            self.assertTrue(is_recollection(q), q)
+        with open(os.path.join(here, "tools", "texts", "genesis-probes.json"),
+                  encoding="utf-8") as f:
+            probes = json.load(f)
+        with open(os.path.join(here, "tools", "texts", "song-of-songs.web.jsonl"),
+                  encoding="utf-8") as f:
+            verses = ["%s: %s" % (v["ref"], v["text"]) for v in map(json.loads, f)]
+        others = [p[k] for p in probes["facts"] for k in ("ask", "ask_owner")] + verses
+        self.assertEqual([q for q in others if is_recollection(q)], [])
+
+    def test_a_question_that_names_nothing_gets_the_latest_ring(self):
+        from logic.rings import rings_for_question
+        rings = self.two_rings()
+        (r,) = rings_for_question("What have you been reading lately?", rings)
+        self.assertEqual(r["ring_no"], 2)
+
+    def test_a_question_that_names_something_gets_the_ring_that_holds_it(self):
+        from logic.rings import rings_for_question
+        rings = self.two_rings()
+        (r,) = rings_for_question("What do you remember about the heron?", rings)
+        self.assertEqual(r["ring_no"], 1)
+        self.assertEqual(rings_for_question("What do you remember about my dog?", rings), [],
+                         "no ring holds it: the episodes answer")
+
+    def test_the_block_shows_the_ring_first_and_says_so(self):
+        self.two_rings()
+        report = {}
+        ctx = self.root.retrieve_context("What have you been reading lately?", report=report)
+        lines = ctx.splitlines()
+        self.assertTrue(lines[1].startswith("- [Ring] 2 · "), lines[1])
+        self.assertEqual((report["rings"][:1], report["recollection"]), ([2], True))
+
+    def test_an_ordinary_question_is_not_a_recollection(self):
+        self.two_rings()
+        report = {}
+        self.root.retrieve_context("Where did the heron stand?", report=report)
+        self.assertFalse(report["recollection"])
+
+    def test_a_ring_too_long_for_the_block_leaves_room_for_the_rest(self):
+        self.two_rings()
+        ring = self.root.retrieve_context("What have you been reading lately?").splitlines()[1]
+        self.assertTrue(ring.startswith("- [Ring] 2"), ring)
+        self.root.config["max_context_chars"] = len(ring) - 1   # one character short
+        report = {}
+        ctx = self.root.retrieve_context("What have you been reading lately?", report=report)
+        self.assertNotIn("[Ring]", ctx)
+        self.assertIn("[Episode]", ctx)
+        self.assertEqual(report["rings"], [])
+
 if __name__ == "__main__":
     unittest.main()
