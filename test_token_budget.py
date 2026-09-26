@@ -252,6 +252,11 @@ class TestModelProfiles(unittest.TestCase):
         self.assertEqual(MODELS[DEFAULT_MODEL]["vocab"], 128256)
         self.assertEqual(MODELS[DEFAULT_MODEL]["template"], "llama3")
 
+    def test_qwen_ceiling_is_the_measured_one(self):
+        # measured on Lyra 2026-09-26: 2592 works, 2593 fails (27 x 96)
+        self.assertEqual(MODELS["qwen2.5-instruct:1.5b"]["ceiling"], 2592)
+        self.assertEqual(2592 % 96, 0)
+
     def test_a_model_without_a_profile_is_refused_not_guessed(self):
         # the proxy's old default for a request naming no model
         with self.assertRaises(TokenizerUnavailable) as cm:

@@ -85,13 +85,18 @@ MODELS = {
         "ceiling": PREFILL_CEILING,
         "tokenizer": "tokenizer.json",
     },
-    # Plan A (Andreas, 26 Sep): the 5.1.1 zoo's Qwen2.5-1.5B-Instruct, pulled
-    # by the hash in its manifest. Tokenizer: Qwen/Qwen2.5-1.5B-Instruct
-    # tokenizer.json, 151643 + 22 added tokens.
+    # Plan A (Andreas, 26 Sep): the 5.1.1 zoo's Qwen2.5-1.5B-Instruct, fetched
+    # and checked against the hash in its manifest (5310176848...). Tokenizer:
+    # Qwen/Qwen2.5-1.5B-Instruct tokenizer.json, 151643 + 22 added tokens; the
+    # HEF's four output heads are 4 x 37984 = 151936, Qwen2.5's padded size.
+    # Ceiling measured on Lyra 2026-09-26 with tools/measure_ceiling.py: 2592
+    # works and 2593 fails, twice each on a fresh server. 2592 = 27 x 96, the
+    # same 96-token prefill chunk as Llama's 864 = 9 x 96. Past it: HTTP 200,
+    # no lines at all - silent, as with Llama.
     "qwen2.5-instruct:1.5b": {
         "vocab": 151665,
         "template": "chatml",
-        "ceiling": None,                 # not yet measured on the unit
+        "ceiling": 2592,
         "tokenizer": "qwen2.5-instruct-1.5b.tokenizer.json",
     },
 }
