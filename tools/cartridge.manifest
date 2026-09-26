@@ -1,12 +1,12 @@
 # AetherSeed Companion — cartridge manifest
-# Captured 2026-09-25T19:36:17Z on aetherseed
-# Verify with: ./cartridge.sh verify cart30.manifest
+# Captured 2026-09-26T19:10:21Z on aetherseed
+# Verify with: ./cartridge.sh verify cart42.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	ac61288d4ffb2de2fed7dfd337ccca95c832181f32a5a9a2f40e99974b648956
-app.digest	feb2844c8aae133b2e5e14a7ce2b7f6c85cf0e284ca2d6f2e518366684399b52
-app.files	24
+cartridge-id	235a29d02c48fb1c045f85289e7d40f043dee925ed457fb0f618e58a0f4d581f
+app.digest	80df88b5413c2740dafb94d808c6c4e60d4c59e7ee9f54f96cfa0eda6a5584d1
+app.files	25
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
@@ -21,11 +21,14 @@ file./etc/systemd/system/aetherseed-warmup.service	b43d3c487d742665f047f92bd3c09
 file./etc/systemd/system/hailo-ollama.service	795efc1df785adb9592fa98fe5fc1d4d882a130df23f2ee1f67c1325854183fe
 file./etc/udev/rules.d/99-aetherseed-hailo.rules	9943a61b6fbc5dfb4c9e7aea5ccb1faeacfc4fe5df671462771ab919f06a6949
 file./etc/xdg/hailo-ollama/hailo-ollama.json	b350ac9ecb75e2376293c281c3f71636f683e84ba6cc55524c54a4f34f3b952b
+file./var/lib/aetherseed/qwen2.5-instruct-1.5b.tokenizer.json	c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539
 file.tokenizer_json	6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b
 firmware.version	version 2226a853 (release) (embedded)
 kernel.arch	aarch64
 kernel.release	6.18.50+rpt-rpi-2712
 model.bytes	3370416230
+model.extra.sha256_5310176848638505fbc28add04ba60c97abe345cdb0ec7e3b8ffaa4b0a8c65dd.bytes	2359716464
+model.extra.sha256_5310176848638505fbc28add04ba60c97abe345cdb0ec7e3b8ffaa4b0a8c65dd.sha256	5310176848638505fbc28add04ba60c97abe345cdb0ec7e3b8ffaa4b0a8c65dd
 model.file	sha256_1129f5f8384e4e45c5890104dc4ec1aee77e800ce1484ddc3aa942399aada425
 model.sha256	1129f5f8384e4e45c5890104dc4ec1aee77e800ce1484ddc3aa942399aada425
 packages.count	1650
