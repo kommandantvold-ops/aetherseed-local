@@ -414,7 +414,7 @@ async function ask(text) {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'llama3.2:3b', stream: true,
+      body: JSON.stringify({ stream: true,
                              messages: [{ role: 'user', content: text }] })
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);

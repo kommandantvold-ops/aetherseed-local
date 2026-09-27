@@ -122,7 +122,9 @@ STORE_FAILURES = 0
 # ---- a ring in her own words (logic/rings.py) ------------------------------
 # Asked for after a ring closes, in the background, one ring at a time. Only
 # the proxy can reach the model, so this lives here rather than in AetherRoot.
-MODEL = "llama3.2:3b"
+# The served model is named once, in logic/served.py (step 44).
+from logic.served import SERVED_MODEL
+MODEL = SERVED_MODEL
 _OWN_WORDS_LOCK = threading.Lock()
 
 

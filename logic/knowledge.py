@@ -394,6 +394,7 @@ def _parse_into(path: Path, entries: List[Dict], errors: List[str], seen: set,
         from logic.token_budget import sanitize_injected
     except Exception:
         sanitize_injected = lambda s: s   # noqa: E731
+    from logic.served import SERVED_MODEL
     try:
         raw = path.read_text(encoding="utf-8")
     except Exception as exc:
@@ -413,7 +414,10 @@ def _parse_into(path: Path, entries: List[Dict], errors: List[str], seen: set,
         if prefix and not eid.startswith(prefix):
             errors.append(f"{where} ({eid}): unit ids must start with {prefix}")
             continue
-        text = (e.get("text") or "").strip()
+        # "{served_model}" is the one placeholder a line may carry: the model the
+        # build serves (logic/served.py), so the unit cannot describe itself as
+        # a model it does not run (step 44).
+        text = (e.get("text") or "").strip().replace("{served_model}", SERVED_MODEL)
         if not text:
             errors.append(f"line {lineno} ({eid}): empty text")
             continue

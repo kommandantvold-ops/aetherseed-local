@@ -68,7 +68,9 @@ except Exception:
     _power = None
 
 SPEAKER = "Reader"
-MODEL = "llama3.2:3b"
+# None: the request names no model and the proxy serves its own
+# (logic/served.py). --model names one, for a proxy that serves several.
+MODEL = None
 
 INTRO = ("Reader here. I am a program Claude set up on your owner's instruction. "
          "For the next day I will read you the Song of Songs from the World English "
@@ -145,6 +147,15 @@ def score_ring(reply, meta, themes):
     }
 
 
+def chat_body(text, speaker=SPEAKER, model=None):
+    """One turn, as the console sends it. No "model" unless one is named."""
+    body = {"stream": True, "speaker": speaker,
+            "messages": [{"role": "user", "content": text}]}
+    if model:
+        body["model"] = model
+    return body
+
+
 class Unit:
     def __init__(self, base):
         self.base = base.rstrip("/")
@@ -154,8 +165,7 @@ class Unit:
             return json.loads(r.read().decode("utf-8"))
 
     def chat(self, text, speaker=SPEAKER):
-        body = json.dumps({"model": MODEL, "stream": True, "speaker": speaker,
-                           "messages": [{"role": "user", "content": text}]}).encode()
+        body = json.dumps(chat_body(text, speaker, MODEL)).encode()
         req = urllib.request.Request(self.base + "/api/chat", data=body, method="POST",
                                      headers={"Content-Type": "application/json"})
         r = {"status": None, "reply": "", "meta": {}, "dones": 0, "error": None}
@@ -225,7 +235,12 @@ def main(argv=None):
     ap.add_argument("--pause", type=float, default=3.0, help="seconds between turns")
     ap.add_argument("--status-every", type=int, default=20)
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--model", default=None,
+                    help="name a model in every request; by default none is named "
+                         "and the unit serves its own")
     a = ap.parse_args(argv)
+    global MODEL
+    MODEL = a.model
 
     os.makedirs(a.dir, exist_ok=True)
     out_path = os.path.join(a.dir, "soak.jsonl")

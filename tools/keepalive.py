@@ -14,7 +14,9 @@ request, with temperature and free memory beside it. Latency that drifts
 upward over weeks is the thing this exists to catch.
 
 Environment: KEEPALIVE_DIR (required), KEEPALIVE_SECONDS (default 180),
-KEEPALIVE_URL (default http://127.0.0.1:8000/api/chat).
+KEEPALIVE_URL (default http://127.0.0.1:8000/api/chat), KEEPALIVE_MODEL (the
+model to hold resident; default llama3.2:3b - it must be the one the proxy
+serves, logic/served.py, and test_served_model.py checks the unit file).
 """
 import json, os, subprocess, sys, time, urllib.request
 
@@ -28,7 +30,8 @@ DIR = os.path.abspath(os.environ["KEEPALIVE_DIR"])
 EVERY = float(os.environ.get("KEEPALIVE_SECONDS", "180"))
 URL = os.environ.get("KEEPALIVE_URL", "http://127.0.0.1:8000/api/chat")
 OUT = os.path.join(DIR, "keepalive.jsonl")
-BODY = json.dumps({"model": "llama3.2:3b", "stream": False,
+MODEL = os.environ.get("KEEPALIVE_MODEL", "llama3.2:3b")
+BODY = json.dumps({"model": MODEL, "stream": False,
                    "messages": [{"role": "user", "content": "hi"}],
                    "options": {"num_predict": 1}}).encode()
 
@@ -84,7 +87,7 @@ def main():
     os.makedirs(DIR, exist_ok=True)
     n = fails = 0
     window = []
-    print("[keepalive] every %.0fs -> %s ; log %s" % (EVERY, URL, OUT), flush=True)
+    print("[keepalive] every %.0fs -> %s (%s) ; log %s" % (EVERY, URL, MODEL, OUT), flush=True)
     while True:
         started = time.time()
         secs, status, err = ping()
@@ -92,7 +95,8 @@ def main():
         ok = status == 200 and err is None
         if not ok:
             fails += 1
-        rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "n": n,
+        # The model is in every line: the series spans model changes (step 44).
+        rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "n": n, "model": MODEL,
                "seconds": secs, "status": status, "ok": ok}
         rec.update(power())
         if err:
