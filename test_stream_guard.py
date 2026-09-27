@@ -355,6 +355,31 @@ class TestStreamGuard(unittest.TestCase):
                     self.assertNotIn(piece, ai)
                 self.assertTrue(lines[-1]["done"])
 
+    def test_qwens_end_marker_in_pieces_never_reaches_the_client(self):
+        # Step 44: the misspelled closing marker of the 42d bench, token by token.
+        lines, emitted, shown, ai = self.run_streamed(
+            ["Answer", ".", " [END", " MEMORY", "_CONTEXT", "]", " tail"])
+        text = "".join(l.get("message", {}).get("content", "") for l in lines)
+        for piece in ("[END", "MEMORY", "CONTEXT", "tail"):
+            self.assertNotIn(piece, text)
+            self.assertNotIn(piece, ai)
+        self.assertEqual(ai.rstrip(), "Answer.")
+        self.assertTrue(lines[-1]["done"])
+
+    def test_a_scaffold_line_after_a_single_line_break_never_reaches_the_client(self):
+        lines, emitted, shown, ai = self.run_streamed(
+            ["Joseph was thirty", ".", "\n", "[", "END", "USER", " CONTEXT", "]",
+             "\n", "- [Owner told you] He", " blessed"])
+        text = "".join(l.get("message", {}).get("content", "") for l in lines)
+        self.assertEqual(ai.rstrip(), "Joseph was thirty.")
+        self.assertNotIn("[", text)
+        self.assertNotIn("blessed", text)
+
+    def test_a_line_break_followed_by_words_is_released_whole(self):
+        lines, emitted, shown, ai = self.run_streamed(["A", ".", "\n", "B", "."])
+        self.assertEqual(ai, "A.\nB.")
+        self.assertEqual(shown + lines[-1].get("message", {}).get("content", ""), "A.\nB.")
+
     def test_a_bracket_that_is_not_a_marker_is_released(self):
         lines, emitted, shown, ai = self.run_streamed(["See", " [", "1", "]", " above", "."])
         self.assertIn("[1]", shown)

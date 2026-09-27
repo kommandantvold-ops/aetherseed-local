@@ -99,6 +99,48 @@ class TestScaffoldMarkerCut(unittest.TestCase):
                   "The array is [MEMORY] shaped.", ""):
             self.assertEqual(cut_at_scaffold_marker(s), (s, False), s)
 
+    # ---- step 44: the scaffold in other spellings (Qwen2.5, the 42d bench) ----
+
+    def test_qwens_spellings_of_the_end_marker_are_boundaries(self):
+        for tag in ("[ENDMEMORYCONTEXT]", "[END MEMORY_CONTEXT]", "[END\\_MEMORY CONTEXT]",
+                    "[END\\_MOMEMRY CONTEXT]", "[ENDUSER CONTEXT]", "[END USER CONTEXT]",
+                    "[ENDUSER CONTENT]", "[END\\_DATA]", "[end]", "[end_response]",
+                    "[end_user_response]"):
+            with self.subTest(tag=tag):
+                self.assertEqual(cut_at_scaffold_marker("Answer. " + tag + " tail"),
+                                 ("Answer.", True))
+
+    def test_a_bracketed_line_after_a_single_line_break_is_a_boundary(self):
+        observed = ("My owner told me that Joseph was thirty years old when he stood "
+                    "before Pharoah, the king of Egypt. M\n[ENDUSER CONTEXT]\n- [Owner "
+                    "told you] He blessed them that day")
+        self.assertEqual(cut_at_scaffold_marker(observed)[0],
+                         "My owner told me that Joseph was thirty years old when he stood "
+                         "before Pharoah, the king of Egypt. M")
+        for tail in ("\n- [Owner told you] x", "\n[OWNER TELLS YOU] x", "\n[out of memory]",
+                     "\n  * [Episode] x", "\n- [Truncated] I don't have information"):
+            with self.subTest(tail=tail):
+                self.assertEqual(cut_at_scaffold_marker("A." + tail), ("A.", True))
+
+    def test_what_llama_writes_is_left_alone(self):
+        for s in ("My owner told me that Jacob's new name was Israel. (Genesis 32:27, [Owner told you])",
+                  "See [1] and [2].", "shin[ing] bright", "a list\n- first\n- second",
+                  "The array is [MEMORY] shaped.", "Two lines,\nno brackets."):
+            with self.subTest(s=s):
+                self.assertEqual(cut_at_scaffold_marker(s), (s, False))
+
+    def test_the_hold_covers_the_other_spellings_and_releases_the_rest(self):
+        from logic.token_budget import marker_prefix_len
+        held = {"Answer. [EN": 3, "Answer. [END MEMORY_CONT": 16, "Done.\n": 1,
+                "Done.\n- ": 3, "See [e": 2, "x [": 1}
+        for text, n in held.items():
+            with self.subTest(text=text):
+                self.assertEqual(marker_prefix_len(text), n)
+        for text in ("See [1", "x [Owner", "plain", "[end of the day, as the saying goes, "
+                     "it was all fine"):
+            with self.subTest(text=text):
+                self.assertEqual(marker_prefix_len(text), 0)
+
     def test_a_stored_marker_would_have_closed_the_block(self):
         # Why this matters, asserted rather than only described: the marker the
         # model emitted is byte-identical to the one enforce_budget() splits on.

@@ -610,6 +610,10 @@ def cut_at_scaffold_marker(text: str):
 
     Cut rather than strip: a marker means the model has stopped answering and
     started reciting its own scaffold, and what follows is never the answer.
+
+    Since step 44 it also cuts at the scaffold in other spellings - any
+    bracketed end marker, and a line that opens with a bracket after a single
+    line break (_END_MARKER, _LINE_BRACKET below).
     """
     if not text:
         return text, False
@@ -618,6 +622,10 @@ def cut_at_scaffold_marker(text: str):
         i = text.find(tag)
         if i >= 0 and (first < 0 or i < first):
             first = i
+    for rx in (_END_MARKER, _LINE_BRACKET):
+        m = rx.search(text)
+        if m and (first < 0 or m.start() < first):
+            first = m.start()
     if first < 0:
         return text, False
     return text[:first].rstrip(), True
@@ -625,6 +633,24 @@ def cut_at_scaffold_marker(text: str):
 
 _MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
 _MAX_MARKER = max(len(m) for m in _MARKERS)
+
+# The scaffold in other spellings (build log step 44, the Qwen trial).
+# Qwen2.5-1.5B recites the prompt's structure in spellings of its own. On the
+# step-42 bench 19 of its 156 answers carried a bracketed marker: 15 were end
+# markers, 12 of them the memory block's closing marker misspelled or a sibling
+# invented - "[END MEMORY_CONTEXT]", "[ENDMEMORYCONTEXT]",
+# "[END\_MEMORY CONTEXT]", "[ENDUSER CONTEXT]" - and three went on, after a
+# single line break, with whole lines of the memory block:
+#     "...before Pharoah, the king of Egypt. M\n[ENDUSER CONTEXT]\n- [Owner told you] He blessed..."
+# The exact-spelling cut above and the paragraph stop (a blank line) let all of
+# them through. Llama never wrote one: over its 5953 soak answers and 156
+# bench answers, not one end marker (checked before this went in; the build
+# log lists the few Llama answers it changes).
+_END_MARKER = re.compile(r"\[\s*end[\w\s\\-]{0,30}\]", re.IGNORECASE)
+_END_MARKER_OPEN = re.compile(r"\[\s*(?:e(?:n(?:d[\w\s\\-]{0,30})?)?)?", re.IGNORECASE)
+_LINE_BRACKET = re.compile(r"\n[ \t]*(?:[-*\u2022][ \t]*)?\[")
+_LINE_BRACKET_OPEN = re.compile(r"\n[ \t]*(?:[-*\u2022][ \t]*)?\Z")
+_FUZZY_WINDOW = 40
 
 
 def marker_prefix_len(text: str) -> int:
@@ -644,17 +670,33 @@ def marker_prefix_len(text: str) -> int:
     chunk decides them, and drops them if the stream ends undecided. Only a
     suffix beginning at "[" can count, so an answer with no brackets costs
     nothing, and "[1]" is released as soon as the "1" arrives.
+
+    Since step 44 it also holds what could still become a marker in another
+    spelling: an unclosed "[", "[e", "[en", "[end ..." (at most 30 characters
+    after "end", so the hold cannot run away), and a line break that the next
+    chunk might follow with a bracket. "[1" and "[Owner" are released at once.
     """
     if not text:
         return 0
+    starts = []
     lo = max(0, len(text) - _MAX_MARKER + 1)
     i = text.find("[", lo)
     while i >= 0:
         tail = text[i:]
         if any(m.startswith(tail) and len(tail) < len(m) for m in _MARKERS):
-            return len(tail)
+            starts.append(i)
+            break
         i = text.find("[", i + 1)
-    return 0
+    i = text.find("[", max(0, len(text) - _FUZZY_WINDOW))
+    while i >= 0:
+        if _END_MARKER_OPEN.fullmatch(text[i:]):
+            starts.append(i)
+            break
+        i = text.find("[", i + 1)
+    m = _LINE_BRACKET_OPEN.search(text)
+    if m:
+        starts.append(m.start())
+    return len(text) - min(starts) if starts else 0
 
 
 def _split_block(text: str, open_tag: str, close_tag: str):
