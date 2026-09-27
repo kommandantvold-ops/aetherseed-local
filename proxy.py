@@ -1080,7 +1080,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "facts": rs.get("facts"),
                 "store_failures": STORE_FAILURES,
                 "willingness": rs.get("willingness_mean"),
-                "model": "llama3.2:3b",
+                "model": MODEL,
                 "companion": companion.public(companion.load(COMPANION_FILE)),
                 "languages": companion.language_choices(),
                 "bounds": {

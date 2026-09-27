@@ -78,6 +78,39 @@ class TestOneServedModel(unittest.TestCase):
             os.environ.update(env)
             sys.modules.pop("keepalive", None)
 
+    def test_no_string_in_the_application_names_a_model(self):
+        # The seventh place, found after the first commit: the status endpoint
+        # reported "llama3.2:3b" whatever was served. Comments and docstrings
+        # may name a model; code may not, outside logic/served.py and the token
+        # budget's profiles.
+        import ast
+        for rel in ("proxy.py", "aetherroot.py", "logic/knowledge.py",
+                    "logic/rings.py", "logic/companion.py", "gui/serve.py"):
+            with open(os.path.join(HERE, rel), encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            docstrings = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    body = getattr(node, "body", [])
+                    if body and isinstance(body[0], ast.Expr) and isinstance(
+                            getattr(body[0], "value", None), ast.Constant):
+                        docstrings.add(id(body[0].value))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                        and id(node) not in docstrings:
+                    for m in token_budget.MODELS:
+                        self.assertNotIn(m, node.value,
+                                         "%s:%d names %s" % (rel, node.lineno, m))
+
+    def test_the_status_reports_the_served_model(self):
+        import proxy
+        with open(os.path.join(HERE, "proxy.py"), encoding="utf-8") as f:
+            src = f.read()
+        block = src[src.index('if self.path == "/aetherseed/status"'):]
+        block = block[:block.index("if self.path ==", 10)]
+        self.assertIn('"model": MODEL', block)
+        self.assertEqual(proxy.MODEL, SERVED_MODEL)
+
     def test_the_console_names_no_model(self):
         with open(os.path.join(HERE, "gui", "index.html"), encoding="utf-8") as f:
             page = f.read()
