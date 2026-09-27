@@ -9,6 +9,10 @@ not run. It is named here; everything in the application reads it from here,
 and test_served_model.py fails when a unit file or tool disagrees.
 
 A cartridge serves one model. Changing this line is changing the cartridge.
+
+On the qwen-trial branch (27 Sep): Qwen2.5-1.5B-Instruct, fetched by hash in
+step 42b, prompt ceiling 2592 measured in 42c. The stable build, tag
+stable-llama-2026-09-27, serves llama3.2:3b.
 """
 
-SERVED_MODEL = "llama3.2:3b"
+SERVED_MODEL = "qwen2.5-instruct:1.5b"

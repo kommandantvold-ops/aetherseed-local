@@ -17,6 +17,8 @@ User=andreas
 Group=andreas
 Environment=KEEPALIVE_DIR=/home/andreas/keepalive
 Environment=KEEPALIVE_SECONDS=180
+# The model the build serves (logic/served.py); test_served_model.py checks it.
+Environment=KEEPALIVE_MODEL=qwen2.5-instruct:1.5b
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /home/andreas/keepalive/keepalive.py
 Restart=always

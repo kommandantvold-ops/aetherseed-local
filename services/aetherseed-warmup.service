@@ -37,11 +37,13 @@ Group=aetherseed
 # --retry-connrefused covers the gap between hailo-ollama.service being started
 # and its socket accepting; --max-time bounds a load that never completes.
 # num_predict 1: the point is the HEF load, not the tokens.
+# The model is the one the build serves (logic/served.py); test_served_model.py
+# fails if the two disagree. qwen-trial: Qwen2.5-1.5B, a 2.36 GB HEF.
 ExecStart=/usr/bin/curl --silent --show-error --fail \
     --retry 15 --retry-delay 2 --retry-connrefused --max-time 240 \
     --output /dev/null \
     --header "Content-Type: application/json" \
-    --data '{"model":"llama3.2:3b","messages":[{"role":"user","content":"hi"}],"stream":false,"options":{"num_predict":1}}' \
+    --data '{"model":"qwen2.5-instruct:1.5b","messages":[{"role":"user","content":"hi"}],"stream":false,"options":{"num_predict":1}}' \
     http://127.0.0.1:8000/api/chat
 
 # A failed warm-up must not look like a broken device: the next real question
