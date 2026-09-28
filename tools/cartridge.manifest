@@ -1,19 +1,26 @@
 # AetherSeed Companion — cartridge manifest
-# Captured 2026-09-26T19:10:21Z on aetherseed
-# Verify with: ./cartridge.sh verify cart42.manifest
+# DERIVED, NOT CAPTURED (build log step 45, 28 Sep 2026).
+# Lyra's captured 235a29d0 (tag stable-llama-2026-09-27) with the lines this
+# build changes replaced: app.digest and app.files (tools/keepalive.py and
+# tools/power.py joined the application), the kiosk and keepalive units (no
+# person's account in them), and the second model's three lines removed (the
+# stable build does not carry it). Every other line is Lyra's, captured.
+# The first unit built from this build captures the real one; until then a
+# MATCH is expected, not proven.
+# Verify with: ./cartridge.sh verify cartridge.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	235a29d02c48fb1c045f85289e7d40f043dee925ed457fb0f618e58a0f4d581f
-app.digest	80df88b5413c2740dafb94d808c6c4e60d4c59e7ee9f54f96cfa0eda6a5584d1
-app.files	25
+cartridge-id	db06b3b8cb00541b2541cd4c37b70f01a9b6bca34079631c6a47f4fe16edb6bd
+app.digest	410d15ac3f8988d65b4e8b1d8b1252abf55579c0b4cb4518368541ea5b88ebfe
+app.files	27
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
 file./etc/nftables.conf	3eee0ef33e802a35fe3d25d2a95ad9d5ecdeb1c7a4b46381dbdefa46aef1d8b9
 file./etc/systemd/system/aetherseed-gui.service	3563c80c5c318d659970b9ff979c44e75e56cb503012ed109e38c438101c8b56
-file./etc/systemd/system/aetherseed-keepalive.service	a68dbe3ce1623b088b96ec4ff07997f98da8b64c4955d962fae89f4865b278a7
-file./etc/systemd/system/aetherseed-kiosk.service	01cbcf52efd2d12a9ea13e46cc81f57ab7a5ffd3dbdc12195ce2f9bad33cef69
+file./etc/systemd/system/aetherseed-keepalive.service	be5c68474cd568110bb30f5323123811084a2c90bde6d8e243fe8184c2c8938b
+file./etc/systemd/system/aetherseed-kiosk.service	eda248bdcb23518c8a9638d17d071cd50a5fe2cd55655b74a6c9078c802c15ef
 file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
 file./etc/systemd/system/aetherseed-shutdown.path	129dce474a7502dc8a932160530fae934b1e1b01f107330102428276b59711d4
 file./etc/systemd/system/aetherseed-shutdown.service	9081c570687a5236ae880ab1ac9d4db1297f0ca487b9f14a725f1b3f44c381c7
@@ -21,14 +28,11 @@ file./etc/systemd/system/aetherseed-warmup.service	b43d3c487d742665f047f92bd3c09
 file./etc/systemd/system/hailo-ollama.service	795efc1df785adb9592fa98fe5fc1d4d882a130df23f2ee1f67c1325854183fe
 file./etc/udev/rules.d/99-aetherseed-hailo.rules	9943a61b6fbc5dfb4c9e7aea5ccb1faeacfc4fe5df671462771ab919f06a6949
 file./etc/xdg/hailo-ollama/hailo-ollama.json	b350ac9ecb75e2376293c281c3f71636f683e84ba6cc55524c54a4f34f3b952b
-file./var/lib/aetherseed/qwen2.5-instruct-1.5b.tokenizer.json	c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539
 file.tokenizer_json	6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b
 firmware.version	version 2226a853 (release) (embedded)
 kernel.arch	aarch64
 kernel.release	6.18.50+rpt-rpi-2712
 model.bytes	3370416230
-model.extra.sha256_5310176848638505fbc28add04ba60c97abe345cdb0ec7e3b8ffaa4b0a8c65dd.bytes	2359716464
-model.extra.sha256_5310176848638505fbc28add04ba60c97abe345cdb0ec7e3b8ffaa4b0a8c65dd.sha256	5310176848638505fbc28add04ba60c97abe345cdb0ec7e3b8ffaa4b0a8c65dd
 model.file	sha256_1129f5f8384e4e45c5890104dc4ec1aee77e800ce1484ddc3aa942399aada425
 model.sha256	1129f5f8384e4e45c5890104dc4ec1aee77e800ce1484ddc3aa942399aada425
 packages.count	1650

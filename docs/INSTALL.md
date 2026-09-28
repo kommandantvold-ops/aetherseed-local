@@ -1,9 +1,13 @@
 # Installing the stable Companion build
 
-**Build:** git tag `stable-llama-2026-09-27` (`8e70bca`) — Llama 3.2 3B on
-HailoRT 5.1.1, the build that ran Lyra through soak 2 (build log step 43).
-**Cartridge:** `235a29d02c48fb1c045f85289e7d40f043dee925ed457fb0f618e58a0f4d581f`
-(`tools/cartridge.manifest` at the tag).
+**Build:** git tag `stable-llama-2026-09-28` — Llama 3.2 3B on HailoRT 5.1.1:
+the build that ran Lyra through soak 2 (tag `stable-llama-2026-09-27`, build log
+step 43) **with no person's account in it** (step 45). The kiosk runs as its own
+account, `aetherseed-kiosk`, and the keepalive as the service account.
+**Cartridge:** `db06b3b8cb00541b2541cd4c37b70f01a9b6bca34079631c6a47f4fe16edb6bd`
+— **derived, not captured**: Lyra's captured `235a29d0` with the lines this
+build changes replaced (`tools/cartridge.manifest` says which). The first unit
+built from this guide captures the real one.
 
 Written 27 Sep 2026 from the build log, the repository at the tag, and a
 read-only snapshot of Lyra running this build
@@ -27,7 +31,6 @@ line by line. On a new unit expect these lines, and only these, to differ:
 
 | line | why | what to do |
 |---|---|---|
-| `model.extra.sha256_5310…` (2 lines) and `file./var/lib/aetherseed/qwen2.5-instruct-1.5b.tokenizer.json` | Lyra also carries Qwen2.5-1.5B on disk, **not served** by this build | nothing — leave them out |
 | `packages.count`, `packages.digest` (and `kernel.release`) | the base image or apt state differs from Lyra's | flash the same image; never `apt upgrade` (step 1) |
 | `firmware.version` | a different bootloader/firmware; Lyra's bootloader is the 8 Dec 2025 release, firmware `2226a853` | leave the EEPROM alone, or accept the line |
 
@@ -39,6 +42,8 @@ kernel `6.18.50+rpt-rpi-2712` and 1645 packages before anything was installed.
 
 - Raspberry Pi 5 (Lyra: Model B Rev 1.1, 16 GB) with the AI HAT+ 2 (Hailo-10H),
   boot media, **Ethernet** (step 2 switches Wi-Fi off), a screen for the kiosk.
+- An admin account of your choosing on the unit. **Nothing in the build depends
+  on its name**; the examples call it `admin`.
 - The repository at the tag, from the PC (`C:\aetherseed-local`).
 - The model and its tokenizer, **copied from Lyra** (simplest) or downloaded,
   and checked by hash either way:
@@ -52,10 +57,9 @@ kernel `6.18.50+rpt-rpi-2712` and 1645 packages before anything was installed.
 - Raspberry Pi Imager: **Raspberry Pi OS (64-bit) with desktop, Trixie** — the
   kiosk uses the image's own labwc and Chromium (Lyra: labwc 0.20.1-1+rpt1,
   chromium 152.0.7977.82-1~deb13u1+rpt2).
-- In the Imager's settings: user **`andreas`** — the kiosk and keepalive units
-  run as `andreas` with UID 1000 and `/run/user/1000` (another name means
-  editing those units, which is a different cartridge); a **hostname of its
-  own** (Lyra is `aetherseed`); SSH on; Wi-Fi country NO.
+- In the Imager's settings: an admin user (any name — the build runs as its
+  own two accounts, created in step 6); a **hostname of its own** (Lyra is
+  `aetherseed`); SSH on; Wi-Fi country NO.
 - First boot, then check: `uname -r` should print `6.18.50+rpt-rpi-2712`. If it
   does not, the kernel and package lines will differ — decide before going on.
 - **Never run `apt upgrade` or `full-upgrade`.** `apt-get update` only reads
@@ -134,13 +138,15 @@ table's link; we have not fetched it ourselves), then check the hash:
 ```bash
 B=/usr/share/hailo-ollama/models/blob
 H=1129f5f8384e4e45c5890104dc4ec1aee77e800ce1484ddc3aa942399aada425
-sudo install -d -o andreas -g andreas -m 775 $B
-scp andreas@aetherseed.local:$B/sha256_$H $B/        # from Lyra, ~3.4 GB
-echo "$H  $B/sha256_$H" | sha256sum -c
-chmod 664 $B/sha256_$H
+scp andreas@aetherseed.local:$B/sha256_$H /tmp/      # from Lyra (her account is andreas), ~3.4 GB
+echo "$H  /tmp/sha256_$H" | sha256sum -c
+sudo install -d -o root -g root -m 755 $B
+sudo install -o root -g root -m 644 /tmp/sha256_$H $B/sha256_$H
 ```
 
-(On Lyra the blob directory is `andreas`'s, 775, and the file 664 — as here.)
+Root-owned and read-only to everyone else: hailo-ollama reads the model and
+never writes it. (On Lyra the directory belongs to her operator account, a
+leftover of fetching models by hand; the cartridge does not hash ownership.)
 
 ## 6. The service account and the NPU — steps 6, 8e
 
@@ -149,7 +155,6 @@ sudo useradd --system --home-dir /var/lib/aetherseed --create-home \
   --shell /usr/sbin/nologin --comment "AetherSeed Companion" aetherseed
 sudo groupadd --system hailo
 sudo usermod -aG hailo aetherseed
-sudo usermod -aG hailo andreas
 printf 'SUBSYSTEM=="hailo_chardev", MODE="0660", GROUP="hailo"\n' \
   | sudo tee /etc/udev/rules.d/99-aetherseed-hailo.rules > /dev/null
 sudo udevadm control --reload-rules
@@ -162,15 +167,23 @@ Check: `stat -c '%a %U:%G' /dev/hailo0` prints `660 root:hailo`, and
 the one line, not the repository's `services/99-aetherseed-hailo.rules`**: that
 file carries a comment header, and Lyra's installed rule does not.
 
+The screen's own account (step 45): an ordinary account with no password, no
+shell and no sudo — the kiosk runs as this, never as an admin:
+
+```bash
+sudo useradd --create-home --shell /usr/sbin/nologin \
+  --comment "AetherSeed Companion screen" --groups video,render,input aetherseed-kiosk
+```
+
 ## 7. The application — steps 11, 42g
 
 Copy the tag to the unit, from the repository on the PC:
 
 ```bash
-git archive --prefix=aetherseed-stable/ stable-llama-2026-09-27 | ssh andreas@<unit> "tar -x -C ~"
+git archive --prefix=aetherseed-stable/ stable-llama-2026-09-28 | ssh admin@<unit> "tar -x -C ~"
 ```
 
-On the unit, install the 25 files the build runs from — no more, no fewer —
+On the unit, install the 27 files the build runs from — no more, no fewer —
 root-owned and read-only:
 
 ```bash
@@ -182,6 +195,7 @@ tar -cf - proxy.py aetherroot.py aetherspark.py trust_evolution.py intent_detect
   kiosk/labwc/autostart kiosk/labwc/environment kiosk/labwc/rc.xml \
   logic/__init__.py logic/attribution.py logic/companion.py logic/facts.py logic/knowledge.py \
   logic/prompt_builder.py logic/provenance.py logic/rings.py logic/speaker.py logic/token_budget.py \
+  tools/keepalive.py tools/power.py \
   | sudo tar -x -C /opt/aetherseed --no-same-owner
 sudo chown -R root:root /opt/aetherseed && sudo chmod -R a+rX,go-w /opt/aetherseed
 ```
@@ -205,7 +219,7 @@ sudo install -o aetherseed -g aetherseed -m 644 /tmp/tokenizer.json /var/lib/aet
 ```
 
 Check the application against the cartridge — this must print
-`80df88b5413c2740dafb94d808c6c4e60d4c59e7ee9f54f96cfa0eda6a5584d1`:
+`410d15ac3f8988d65b4e8b1d8b1252abf55579c0b4cb4518368541ea5b88ebfe`:
 
 ```bash
 cd /opt/aetherseed && find . -path ./venv -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum | sha256sum
@@ -221,10 +235,6 @@ for u in hailo-ollama.service aetherseed-proxy.service aetherseed-warmup.service
   sudo install -o root -g root -m 644 services/$u /etc/systemd/system/$u
 done
 sudo install -o root -g root -m 644 services/nftables.conf /etc/nftables.conf
-# the keepalive (an R&D instrument, see below) runs from andreas's home
-install -d -m 775 ~/keepalive
-install -m 755 tools/keepalive.py ~/keepalive/keepalive.py
-install -m 700 tools/power.py ~/keepalive/power.py
 sudo systemctl daemon-reload
 sudo systemctl enable getty@tty2          # the way out of the kiosk, first (18)
 sudo systemctl enable hailo-ollama aetherseed-proxy aetherseed-warmup aetherseed-gui \
@@ -255,7 +265,12 @@ console, the kiosk and the keepalive are active; the screen asks
 **"What would you like to call your companion?"** (the first-run screen, 21a).
 Lyra's first answer after power-on takes about a minute — the warm-up loading
 the model (14a). **Ctrl+Alt+F2** reaches a shell whatever the kiosk does (on an
-Apple keyboard, Ctrl+Alt+fn+F2).
+Apple keyboard, Ctrl+Alt+fn+F2). The keepalive's log is
+`/var/lib/aetherseed-keepalive/keepalive.jsonl`.
+
+The screen under its own account is the one part of step 45 that no screen
+has shown yet: if it stays black, Ctrl+Alt+F2 and
+`journalctl -b -u aetherseed-kiosk`.
 
 The screen: `--force-device-scale-factor=3` in the kiosk unit is fitted to
 Lyra's 72-inch television (18e, 19e), and the kiosk's keyboard layout (`gb`,
@@ -289,10 +304,10 @@ the table at the top; anything else is a step above that did not take.
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds
   the model resident and logs latency every three minutes. It is enabled in
   this cartridge; a unit without it is a different cartridge (25c).
-- **The pilot blockers** still stand (build log, `claude/pilot-readiness.md`):
-  passwordless sudo for `andreas` (the Imager's default), SSH password
-  authentication (LAN-only through the firewall), no Chromium lockdown policy.
-- **`andreas` is written into two units** (kiosk, keepalive). Pilot units will
-  want an account of their own — a change to the units, so a new cartridge.
+- **The pilot blockers**, as far as they still stand (build log,
+  `claude/pilot-readiness.md`): the kiosk no longer runs as an account with
+  sudo (step 45), but the Imager's admin account still has passwordless sudo
+  and Ctrl+Alt+F2 offers a login prompt for it; SSH password authentication
+  (LAN-only through the firewall); no Chromium lockdown policy.
 - **The apt timers run** (they read lists; they do not upgrade a held kernel).
   Whether an appliance should run them is an open decision.

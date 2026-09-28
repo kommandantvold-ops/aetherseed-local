@@ -16,6 +16,17 @@
 # master; started from an SSH shell it fails with "Could not open target tty:
 # Permission denied", which is the whole diagnosis of the first attempt.
 #
+# ITS OWN ACCOUNT (step 45, Andreas 28 Sep: "The llama stable shouldnt be
+# dependent on my username if its on git for pilots"). Until then this ran as
+# andreas - the operator's login, with passwordless sudo - with his home and
+# UID 1000 written in. Now it runs as aetherseed-kiosk: an ordinary account
+# with no password, no shell and no sudo, created at install. Nothing below
+# names a user or a UID: systemd sets HOME from User=, pam_systemd sets
+# XDG_RUNTIME_DIR for the login session, and the browser's profile lives in
+# this unit's own RuntimeDirectory. (%u, %U and %h would not do: in a system
+# unit they name the service manager's user, root, whatever User= says -
+# systemd.unit(5), read on Lyra's systemd 257.)
+#
 # getty@tty2 is enabled alongside this. Ctrl+Alt+F2 always reaches a shell,
 # whatever the kiosk is doing - a device you cannot get into when the screen
 # misbehaves is not an appliance, it is a brick.
@@ -40,7 +51,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=andreas
+User=aetherseed-kiosk
 PAMName=login
 TTYPath=/dev/tty1
 TTYReset=yes
@@ -53,21 +64,25 @@ UtmpIdentifier=tty1
 UtmpMode=user
 
 Environment=XDG_SESSION_TYPE=wayland
-Environment=XDG_RUNTIME_DIR=/run/user/1000
+# XDG_RUNTIME_DIR comes from PAM (pam_systemd), and PAM's value wins over
+# anything set here (systemd.exec(5)); HOME comes from User=.
 # drm ALONE MEANS NO KEYBOARD AND NO MOUSE. wlroots builds only the
 # backends named here; without libinput the compositor has a screen and
 # no input devices at all - it opens none, and logs nothing. Found on
 # 2026-09-23, after the unit had shipped with it since step 18.
 Environment=WLR_BACKENDS=drm,libinput
-Environment=HOME=/home/andreas
+# The browser's profile: tmpfs, owned by the kiosk account, created when the
+# unit starts and removed when it stops or restarts.
+RuntimeDirectory=aetherseed-kiosk
+RuntimeDirectoryMode=0700
 
 # --kiosk and --app together: no tab strip, no omnibox, fullscreen that the
 # browser enforces itself rather than requests. --start-fullscreen alone is a
 # request, and was measured losing to a window size the browser had saved
 # from an earlier run - see below.
 #
-# THE BROWSER KEEPS NOTHING. --user-data-dir is on /run/user/1000, which is
-# tmpfs: every boot starts from an empty profile, and nothing the browser
+# THE BROWSER KEEPS NOTHING. --user-data-dir is in /run/aetherseed-kiosk, which
+# is tmpfs: every start begins from an empty profile, and nothing the browser
 # writes ever reaches the SD card. Three defects in one night came from state
 # a previous run had left behind in the old on-disk profile:
 #   - a keyring the profile had asked to create, prompting for a password
@@ -103,7 +118,7 @@ ExecStart=/usr/bin/labwc -C /opt/aetherseed/kiosk/labwc -s "/usr/bin/chromium \
     --password-store=basic \
     --disable-session-crashed-bubble \
     --noerrdialogs \
-    --user-data-dir=/run/user/1000/aetherseed-kiosk"
+    --user-data-dir=/run/aetherseed-kiosk/chromium"
 
 Restart=always
 RestartSec=5
