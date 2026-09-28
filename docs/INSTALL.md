@@ -268,8 +268,10 @@ the model (14a). **Ctrl+Alt+F2** reaches a shell whatever the kiosk does (on an
 Apple keyboard, Ctrl+Alt+fn+F2). The keepalive's log is
 `/var/lib/aetherseed-keepalive/keepalive.jsonl`.
 
-The screen under its own account is the one part of step 45 that no screen
-has shown yet: if it stays black, Ctrl+Alt+F2 and
+The screen under its own account was shown on Lyra on 28 Sep (build log
+step 45a): this build's kiosk unit, run as `aetherseed-kiosk` on another
+console, brought up labwc and Chromium and loaded the console, and its browser
+profile was gone when it stopped. If the screen stays black, Ctrl+Alt+F2 and
 `journalctl -b -u aetherseed-kiosk`.
 
 The screen: `--force-device-scale-factor=3` in the kiosk unit is fitted to
