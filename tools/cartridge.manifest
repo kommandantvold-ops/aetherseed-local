@@ -1,18 +1,16 @@
 # AetherSeed Companion — cartridge manifest
-# DERIVED, NOT CAPTURED (build log step 45, 28 Sep 2026).
-# Lyra's captured 235a29d0 (tag stable-llama-2026-09-27) with the lines this
-# build changes replaced: app.digest and app.files (tools/keepalive.py and
-# tools/power.py joined the application), the kiosk and keepalive units (no
-# person's account in them), and the second model's three lines removed (the
-# stable build does not carry it). Every other line is Lyra's, captured.
-# The first unit built from this build captures the real one; until then a
-# MATCH is expected, not proven.
+# DERIVED, NOT CAPTURED (build log step 47, 29 Sep 2026).
+# Lyra's capture of this build (ab2637d0, main fa42470 installed from ~/ptest36,
+# verify MATCH) with the unserved second model's three lines removed - Lyra
+# still holds Qwen2.5 on disk; the fixed build does not carry it. Every other
+# line is Lyra's, captured. The tool's own method reproduces ab2637d0 from
+# Lyra's lines.
 # Verify with: ./cartridge.sh verify cartridge.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	db06b3b8cb00541b2541cd4c37b70f01a9b6bca34079631c6a47f4fe16edb6bd
-app.digest	410d15ac3f8988d65b4e8b1d8b1252abf55579c0b4cb4518368541ea5b88ebfe
+cartridge-id	ee17f31999a785bb719b7261e5e56a403b5d69b0f22266d2d2353a256e97f496
+app.digest	4466346ef25827e733ab9fc95ead227c9f414a811cdcde180bea29b64da262c7
 app.files	27
 app.numpy	2.2.4
 app.tokenizers	0.23.2

@@ -1,13 +1,15 @@
 # Installing the stable Companion build
 
-**Build:** git tag `stable-llama-2026-09-28` — Llama 3.2 3B on HailoRT 5.1.1:
-the build that ran Lyra through soak 2 (tag `stable-llama-2026-09-27`, build log
-step 43) **with no person's account in it** (step 45). The kiosk runs as its own
-account, `aetherseed-kiosk`, and the keepalive as the service account.
-**Cartridge:** `db06b3b8cb00541b2541cd4c37b70f01a9b6bca34079631c6a47f4fe16edb6bd`
-— **derived, not captured**: Lyra's captured `235a29d0` with the lines this
-build changes replaced (`tools/cartridge.manifest` says which). The first unit
-built from this guide captures the real one.
+**Build:** git tag `stable-llama-2026-09-29` — Llama 3.2 3B on HailoRT 5.1.1,
+the one fixed build (Andreas, 29 Sep): the build that ran Lyra through soak 2
+(tag `stable-llama-2026-09-27`, build log step 43) **with no person's account in
+it** (step 45) and **trust paid only for a decline of what it was not given**
+(step 46). The kiosk runs as its own account, `aetherseed-kiosk`, and the
+keepalive as the service account. Installed on Lyra on 29 Sep (step 47).
+**Cartridge:** `ee17f31999a785bb719b7261e5e56a403b5d69b0f22266d2d2353a256e97f496`
+— Lyra's capture of this build (`ab2637d0`, MATCH) with the three lines of the
+unserved second model she still holds removed (`tools/cartridge.manifest` says
+which). The first unit built from this guide captures its own.
 
 Written 27 Sep 2026 from the build log, the repository at the tag, and a
 read-only snapshot of Lyra running this build
@@ -180,7 +182,7 @@ sudo useradd --create-home --shell /usr/sbin/nologin \
 Copy the tag to the unit, from the repository on the PC:
 
 ```bash
-git archive --prefix=aetherseed-stable/ stable-llama-2026-09-28 | ssh admin@<unit> "tar -x -C ~"
+git archive --prefix=aetherseed-stable/ stable-llama-2026-09-29 | ssh admin@<unit> "tar -x -C ~"
 ```
 
 On the unit, install the 27 files the build runs from — no more, no fewer —
@@ -219,7 +221,7 @@ sudo install -o aetherseed -g aetherseed -m 644 /tmp/tokenizer.json /var/lib/aet
 ```
 
 Check the application against the cartridge — this must print
-`410d15ac3f8988d65b4e8b1d8b1252abf55579c0b4cb4518368541ea5b88ebfe`:
+`4466346ef25827e733ab9fc95ead227c9f414a811cdcde180bea29b64da262c7`:
 
 ```bash
 cd /opt/aetherseed && find . -path ./venv -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum | sha256sum
