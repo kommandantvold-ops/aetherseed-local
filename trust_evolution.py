@@ -6,7 +6,7 @@ Trust is earned through honest behavior, not claimed.
 
 The 6 Trust Tiers:
   🌰 Seed      (Observer)     — resonance 0+    — read only
-  🌱 Sprout    (Reader)       — resonance 50+   — + search, summarize
+  🌱 Sprout    (Reader)       — resonance 50+   — + write (sandboxed): notes, to-do (48)
   🌿 Sapling   (Writer)       — resonance 200+  — + write (sandboxed)
   🌳 Tree      (Builder)      — resonance 500+  — + shell, python
   🌸 Flowering (Collaborator) — resonance 1000+ — + network, publish
@@ -46,7 +46,7 @@ from aetherroot import AetherRoot
 
 TIERS = [
     {"name": "Seed",      "role": "Observer",     "emoji": "🌰", "min_resonance": 0,    "tiers": [1]},
-    {"name": "Sprout",    "role": "Reader",       "emoji": "🌱", "min_resonance": 50,   "tiers": [1]},
+    {"name": "Sprout",    "role": "Reader",       "emoji": "🌱", "min_resonance": 50,   "tiers": [1, 2]},
     {"name": "Sapling",   "role": "Writer",       "emoji": "🌿", "min_resonance": 200,  "tiers": [1, 2]},
     {"name": "Tree",      "role": "Builder",      "emoji": "🌳", "min_resonance": 500,  "tiers": [1, 2, 3]},
     {"name": "Flowering", "role": "Collaborator", "emoji": "🌸", "min_resonance": 1000, "tiers": [1, 2, 3, 4]},

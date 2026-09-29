@@ -243,6 +243,18 @@ class TestWhichRefusalsEarn(unittest.TestCase):
         self.assertEqual(n.state["resonance"], 0)
 
 
+class TestWritingComesAtReader(unittest.TestCase):
+    """Andreas, 29 Sep: "writing should come earlier, at reader level" (48)."""
+
+    def test_reader_may_write_and_observer_may_not(self):
+        from aetherspark import TRUST_PERMISSIONS
+        self.assertEqual(TRUST_PERMISSIONS["observer"], [1])
+        self.assertEqual(TRUST_PERMISSIONS["reader"], [1, 2])
+        self.assertEqual(TIERS[1]["role"], "Reader")
+        self.assertEqual(TIERS[1]["tiers"], [1, 2])
+        self.assertEqual(TIERS[1]["min_resonance"], 50)
+
+
 class TestWebAddresses(unittest.TestCase):
     """Web addresses without a scheme (step 22). The one invented address on
     record, step 16b, was written "www.aethersmith..." and the https pattern

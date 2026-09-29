@@ -64,6 +64,19 @@ INTENT_PATTERNS = [
         "description": "List workspace files",
         "tier": 1,
     },
+    # Summarize a file: a verb that asks for a summary, and the file named
+    # (Andreas, 29 Sep: "how to summarize"; build log 48). Before file_read, so
+    # "summarize the file notes.md" is not taken for a plain read. Tier 1: it
+    # reads, and what the model writes about it is its own words.
+    {
+        "intent": "summarize",
+        "patterns": [
+            r"\b(?:summari[sz]e|sum\s+up|give\s+(?:me\s+)?a\s+summary\s+of)\s+(?:the\s+|my\s+)?file\s+" + _Q + _NAME,
+            r"\b(?:summari[sz]e|sum\s+up|give\s+(?:me\s+)?a\s+summary\s+of)\s+(?:the\s+|my\s+)?" + _Q + _NAME_EXT,
+        ],
+        "description": "Summarize a workspace file",
+        "tier": 1,
+    },
     # File reading: the word "file" and a name, or a name with an extension
     {
         "intent": "file_read",
@@ -209,6 +222,10 @@ def execute_intent(intent: Dict, spark) -> Optional[str]:
         filename = captures[0] if captures else None
         return _read_file(filename)
 
+    elif name == "summarize":
+        filename = captures[0] if captures else None
+        return _summarize_request(filename)
+
     elif name == "todo_read":
         return _read_file("todo.txt")
 
@@ -289,6 +306,17 @@ def _read_file(filename: str) -> str:
         return f"File: {filename}\n---\n{content}"
     except Exception as e:
         return f"[ERROR] {e}"
+
+
+def _summarize_request(filename: str) -> str:
+    """The file, with what is asked of the model. The summary is the model's
+    own words over what it was shown - the file is the source, not the summary."""
+    content = _read_file(filename)
+    if content.startswith("[ERROR]"):
+        return content
+    return ("You were asked to summarize this file from your workspace. Say that "
+            "it is a summary, keep it to a few sentences, and add nothing that "
+            "is not in the file.\n" + content)
 
 
 def _append_todo(item: str) -> str:

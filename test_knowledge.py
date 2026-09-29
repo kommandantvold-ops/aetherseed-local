@@ -48,7 +48,7 @@ HOUSEHOLD = [
     "what is the address of the dentist", "send this to my wife",
     "my daughter is running a marathon", "what is the capital of France",
     "how do I boil an egg", "my knee hurts when I walk", "what is 17 times 4",
-    "what time is it", "read me the file notes.txt", "explain photosynthesis",
+    "what time is it", "explain photosynthesis",
     "the weather in Bergen tomorrow", "turn the volume down",
     "I have a chicken, some rice and half a lemon, what can I cook tonight",
     "My son is learning fractions and keeps getting stuck on thirds",
@@ -87,6 +87,22 @@ ON_TOPIC = [
     ("what is your email address", "as.contact"),
     ("what does aetherseed stand for", "as.values"),
     ("what is aetherseed's mission", "as.mission"),
+    # the ecosystem (Andreas, 29 Sep; build log 48)
+    ("what is mustardseed", "eco.seed"),
+    ("what is aetherroot", "eco.root"),
+    ("what is aetherspark", "eco.spark"),
+    ("what are your rings", "eco.rings"),
+    ("what has your owner told you as facts", "eco.facts"),
+    ("where is your workspace", "eco.workspace"),
+    ("where is your to-do list", "eco.todo"),
+    ("can you add something to my todo list", "eco.todo"),
+    ("where are your notes", "eco.notes"),
+    ("what tools can you use", "eco.tools"),
+    ("what do the trust levels unlock", "eco.ladder"),
+    ("how do you earn trust", "eco.earn"),
+    ("can you go on the internet", "eco.network"),
+    ("can you summarize a file", "eco.summarize"),
+    ("when does a new trust level take effect", "eco.restart"),
 ]
 
 
@@ -126,6 +142,12 @@ class TheShippedCurriculum(unittest.TestCase):
         missed = [(q, want, ids_for(self.k, q)) for q, want in ON_TOPIC
                   if want not in ids_for(self.k, q)]
         self.assertEqual([], missed)
+
+    def test_a_request_about_her_notes_shows_only_the_workspace_lines(self):
+        # Once the ecosystem lines shipped (48), a request naming her notes is
+        # about her: it may show where notes and the to-do list live, nothing else.
+        got = ids_for(self.k, "read me the file notes.txt")
+        self.assertTrue(set(got) <= {"eco.notes", "eco.todo", "eco.workspace"}, got)
 
     def test_never_more_than_two_lines(self):
         for q, _ in ON_TOPIC:

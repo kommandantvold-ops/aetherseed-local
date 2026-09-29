@@ -54,7 +54,7 @@ BLOCKED_COMMANDS = [
 # Trust tier → allowed tool tiers
 TRUST_PERMISSIONS = {
     "observer":     [1],          # Read only
-    "reader":       [1],          # Read + search
+    "reader":       [1, 2],       # + Write (sandboxed): notes, to-do (Andreas 29 Sep, build log 48)
     "writer":       [1, 2],       # + Write (sandboxed)
     "builder":      [1, 2, 3],    # + Shell, python
     "collaborator": [1, 2, 3, 4], # + Network
