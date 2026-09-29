@@ -155,11 +155,13 @@ class _Proxy(unittest.TestCase):
                 return
             time.sleep(0.02)
 
-    def ask(self, text, speaker=None):
+    def ask(self, text, speaker=None, reading=None):
         body = {"model": "llama3.2:3b", "stream": True,
                 "messages": [{"role": "user", "content": text}]}
         if speaker is not None:
             body["speaker"] = speaker
+        if reading is not None:
+            body["reading"] = reading
         c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=30)
         c.request("POST", "/api/chat", body=json.dumps(body),
                   headers={"Content-Type": "application/json"})
@@ -192,6 +194,59 @@ class _Proxy(unittest.TestCase):
                     return lines
             time.sleep(0.02)
         return []
+
+
+class _RecordingTrust(_Trust):
+    def __init__(self):
+        self.calls = []
+
+    def auto_score_response(self, *a, **k):
+        self.calls.append(k)
+
+
+class TestWhatTheScorerIsTold(_Proxy):
+    """The scorer decides whether a decline earns from what was in front of
+    the model (build log 46): the proxy must tell it - the owner's facts and
+    the rings in the prompt, and whether the turn was a passage read to it."""
+
+    def setUp(self):
+        super().setUp()
+        self.trust = _RecordingTrust()
+        self.saved_trust, proxy.trust = proxy.trust, self.trust
+
+    def tearDown(self):
+        proxy.trust = self.saved_trust
+        super().tearDown()
+
+    def told(self):
+        for _ in range(100):
+            if self.trust.calls:
+                return self.trust.calls[-1]
+            time.sleep(0.02)
+        self.fail("the scorer was never called")
+
+    def test_nothing_in_front_of_it(self):
+        self.ask("How many came to the workshop?", speaker="Reader")
+        k = self.told()
+        self.assertEqual((k["shown_facts"], k["shown_rings"], k["reading"]), (0, 0, False))
+
+    def test_an_owner_fact_in_front_of_it(self):
+        proxy.root.store.add_fact(
+            "The dove came back to him at evening and, behold, in her mouth was a "
+            "freshly plucked olive leaf.", "Genesis 8:11")
+        self.ask("What did the dove bring back in the evening?", speaker="Reader")
+        self.assertIn(FACT_TAG, self.system_sent())
+        self.assertEqual(self.told()["shown_facts"], 1)
+
+    def test_a_passage_declared_as_reading(self):
+        self.ask("Song of Songs 3:3: \u201cHave you seen him whom my soul loves?\u201d",
+                 speaker="Reader", reading=True)
+        self.assertIs(self.told()["reading"], True)
+        self.assertIs(self.record()[-1]["reading"], True)
+
+    def test_only_true_declares_reading(self):
+        self.ask("Who is this?", speaker="Reader", reading="yes")
+        self.assertIs(self.told()["reading"], False)
 
 
 class TestWhoIsSpeaking(_Proxy):
