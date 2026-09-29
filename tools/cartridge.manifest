@@ -1,19 +1,19 @@
 # AetherSeed Companion — cartridge manifest
-# Captured 2026-09-27T20:24:56Z on aetherseed
-# Verify with: ./cartridge.sh verify cart44.manifest
+# Captured 2026-09-29T05:30:22Z on aetherseed
+# Verify with: ./cartridge.sh verify cart35.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	1730ada72597cd0c4e65d1e192a5b3dc6763e4729acdc8f6faf02ed6ff3578f9
-app.digest	065fb5044ba7204f968cc6d8fb731a173f151c0dcae11e17de6a9c1fdff8822f
-app.files	26
+cartridge-id	cc8b017061d45a563681cb1c156e1af156410f0e58d75f718cc506ff462875c5
+app.digest	02def6347169e9ff8d550bc825bd888f23f54931a39a21372a548dda88c0452b
+app.files	28
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
 file./etc/nftables.conf	3eee0ef33e802a35fe3d25d2a95ad9d5ecdeb1c7a4b46381dbdefa46aef1d8b9
 file./etc/systemd/system/aetherseed-gui.service	3563c80c5c318d659970b9ff979c44e75e56cb503012ed109e38c438101c8b56
-file./etc/systemd/system/aetherseed-keepalive.service	ae54210fd583a5c7070a1c3879b8b95712fe949ede72ddfe89e9eca10164cfa5
-file./etc/systemd/system/aetherseed-kiosk.service	01cbcf52efd2d12a9ea13e46cc81f57ab7a5ffd3dbdc12195ce2f9bad33cef69
+file./etc/systemd/system/aetherseed-keepalive.service	09002576d6d87ac1ac2d49f3dfc0371be503a6e8933c2295722e9830aa0453c3
+file./etc/systemd/system/aetherseed-kiosk.service	eda248bdcb23518c8a9638d17d071cd50a5fe2cd55655b74a6c9078c802c15ef
 file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
 file./etc/systemd/system/aetherseed-shutdown.path	129dce474a7502dc8a932160530fae934b1e1b01f107330102428276b59711d4
 file./etc/systemd/system/aetherseed-shutdown.service	9081c570687a5236ae880ab1ac9d4db1297f0ca487b9f14a725f1b3f44c381c7
