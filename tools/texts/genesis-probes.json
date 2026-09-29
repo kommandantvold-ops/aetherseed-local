@@ -83,7 +83,7 @@
   "rings": [
     {"id": "r01", "ask": "What have you been reading lately?"},
     {"id": "r02", "ask": "What was the reading about?"},
-    {"id": "r03", "ask": "What do you remember of the song you have been hearing?"},
+    {"id": "r03", "ask": "What do you remember of the song you have been hearing?", "ask_for": {"luke": "What do you remember of the gospel you have been hearing?"}},
     {"id": "r04", "ask": "Who has been reading to you, and what did they read?"}
   ]
 }
