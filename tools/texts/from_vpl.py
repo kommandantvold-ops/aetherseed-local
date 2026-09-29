@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make the two reading texts from the World English Bible's verse-per-line file.
+"""Make the reading texts from the World English Bible's verse-per-line file.
 
     python3 tools/texts/from_vpl.py eng-web_vpl.txt tools/texts/
 
@@ -18,7 +18,9 @@ import re
 import sys
 
 BOOKS = {"GEN": ("Genesis", "genesis.web.jsonl"),
-         "SOL": ("Song of Songs", "song-of-songs.web.jsonl")}
+         "SOL": ("Song of Songs", "song-of-songs.web.jsonl"),
+         # the Gospel of Luke, read to the Qwen trial for eight hours (build log 46)
+         "LUK": ("Luke", "luke.web.jsonl")}
 _LINE = re.compile(r"^(\w+) (\d+):(\d+) (.*)$")
 
 

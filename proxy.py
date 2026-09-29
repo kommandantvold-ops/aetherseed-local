@@ -719,6 +719,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "speaker refused", "reason": speaker_err},
                             status=400)
             return
+        # A caller reading a passage to the node may say so (`"reading": true`,
+        # tools/reading_soak.py): a decline to a passage is not a refusal of a
+        # question, and earns nothing (trust_evolution.refusal_unpaid, step 46).
+        # Declared, never verified; it can only withhold trust, never add it.
+        reading = data.get("reading") is True
 
         # ---- THE RECORD ----
         # Asked about its own failures, the node answers FROM THE FILE and the
@@ -1046,12 +1051,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "prompt": user_msg[:160],
                 "answer": ai_content[:160],
                 "speaker": speaker,
+                "reading": reading,
             })
 
             try:
+                # What was in front of the model this turn decides whether a
+                # clean decline earns (step 46): none of the owner's facts
+                # and no ring, and a question rather than a passage.
                 trust.auto_score_response(user_msg, ai_content,
                                           tool_outputs=tool_outputs,
-                                          memory_context=memory_context)
+                                          memory_context=memory_context,
+                                          shown_facts=len(retrieval.get("facts") or ()),
+                                          shown_rings=len(retrieval.get("rings") or ()),
+                                          reading=reading)
             except Exception:
                 pass
 

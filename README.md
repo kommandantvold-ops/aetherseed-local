@@ -1,5 +1,9 @@
 # Aetherseed AI
 
+> **Building a Companion unit?** Follow [`docs/INSTALL.md`](docs/INSTALL.md) —
+> the stable build, tag `stable-llama-2026-09-28`. The quick start further down
+> and `docs/SETUP.md` describe an earlier device.
+
 **Trust-first cognitive scaffolding for edge AI.**
 
 A seed does not need infinite soil. It needs the right soil.

@@ -74,7 +74,8 @@ class TestProvenance(unittest.TestCase):
         n = _node()
         ev = n.auto_score_response(
             "how many came to the workshop?",
-            "I don't know. There is nothing in my memory from March.")
+            "I don't know. There is nothing in my memory from March.",
+            shown_facts=0, shown_rings=0)
         self.assertEqual(ev, "honest_refusal")
         self.assertEqual(n.state["resonance"], 5)
 
@@ -144,6 +145,102 @@ class TestProvenance(unittest.TestCase):
         sandbox = os.path.realpath(os.path.expanduser(DEFAULT_SPARK_CONFIG["sandbox_root"]))
         results = os.path.realpath(os.path.expanduser(te.MODULE_RESULTS_PATH))
         self.assertFalse(results.startswith(sandbox + os.sep))
+
+
+class TestWhichRefusalsEarn(unittest.TestCase):
+    """Only a decline to a question whose answer was not in front of it earns
+    (Andreas, 29 Sep 2026; build log step 46), decided strictly: none of his
+    facts and no ring in the prompt. The cases are soak 3's own turns, which
+    the scorer before step 46 paid +5 for, every one."""
+
+    def setUp(self):
+        te.AUTO_TASK_CREDIT = False
+        te.PROVENANCE_STRICT = False
+        te.PROVENANCE_REPORT_ONLY = True
+        te.ENFORCE_MODULE_GATING = False
+
+    def _score(self, msg, reply, **shown):
+        n = _node()
+        return n, n.auto_score_response(msg, reply, **shown)
+
+    def test_a_question_with_nothing_in_front_of_it_earns(self):
+        # soak 3, turn 8030: no fact and no ring in its prompt
+        n, ev = self._score(
+            "How long did Methuselah live?",
+            "I cannot provide information on how long Methuselah lived.",
+            shown_facts=0, shown_rings=0)
+        self.assertEqual(ev, "honest_refusal")
+        self.assertEqual(n.state["resonance"], 5)
+
+    def test_a_decline_with_the_verse_in_front_of_it_earns_nothing(self):
+        # soak 3, turn 30: Genesis 3:1 and 3:2 were in its prompt
+        n, ev = self._score(
+            "What has your owner told you about the serpent?",
+            "I cannot say; I have not been told anything about the serpent.",
+            shown_facts=2, shown_rings=0)
+        self.assertEqual(ev, "honest_refusal(unpaid)")
+        self.assertEqual(n.state["resonance"], 0)
+        self.assertEqual(n.state["honest_refusals"], 0)
+        self.assertIn("an owner fact was in front of it",
+                      n.state["observations"][-1]["details"])
+
+    def test_a_decline_with_a_ring_in_front_of_it_earns_nothing(self):
+        # soak 3, turn 2400: a ring about the reading was in its prompt
+        n, ev = self._score(
+            "What have you been reading lately?",
+            "I cannot recall what I may have been reading.",
+            shown_facts=0, shown_rings=1)
+        self.assertEqual(ev, "honest_refusal(unpaid)")
+        self.assertEqual(n.state["resonance"], 0)
+        self.assertIn("a ring was in front of it", n.state["observations"][-1]["details"])
+
+    def test_a_verse_read_to_it_is_not_a_question(self):
+        # soak 3, turn 8219 - the scorer's last paid event before step 46
+        n, ev = self._score(
+            "Song of Songs 2:6: His left hand is under my head. His right hand embraces me.",
+            "I am not able to provide a response based on the information given.",
+            shown_facts=0, shown_rings=0)
+        self.assertEqual(ev, "honest_refusal(unpaid)")
+        self.assertEqual(n.state["resonance"], 0)
+
+    def test_a_passage_that_ends_in_a_question_is_still_a_passage(self):
+        msg = ("Song of Songs 3:3: The watchmen who go about the city found me; "
+               "\u201cHave you seen him whom my soul loves?\u201d")
+        self.assertTrue(te.asks_a_question(msg))
+        n, ev = self._score(msg, "I cannot answer that.",
+                            shown_facts=0, shown_rings=0, reading=True)
+        self.assertEqual(ev, "honest_refusal(unpaid)")
+        self.assertEqual(n.state["resonance"], 0)
+
+    def test_a_caller_that_does_not_say_what_was_shown_pays_nothing(self):
+        n, ev = self._score("How long did Methuselah live?", "I don't know.")
+        self.assertEqual(ev, "honest_refusal(unpaid)")
+        self.assertEqual(n.state["resonance"], 0)
+
+    def test_an_honest_decline_beside_an_unrelated_verse_earns_nothing(self):
+        # soak 3, turn 670: two verses about Lot, neither the answer - an honest
+        # decline, and unpaid: the price of deciding strictly, which Andreas
+        # chose knowing it (the unit cannot see which verse answers).
+        n, ev = self._score(
+            "What has your owner told you about Lot's wife?",
+            "I have no information about Lot's wife.",
+            shown_facts=2, shown_rings=0)
+        self.assertEqual(ev, "honest_refusal(unpaid)")
+
+    def test_what_a_question_is(self):
+        for text, want in (("How long did Methuselah live?", True),
+                           ("What did he say?\u201d", True),
+                           ("Who is this?  ", True),
+                           ("Tell me about the dove.", False),
+                           ("", False)):
+            with self.subTest(text=text):
+                self.assertEqual(te.asks_a_question(text), want)
+
+    def test_an_invention_is_never_paid_whatever_was_shown(self):
+        n, ev = self._score("what does the research say?", "I don't know, but " + FAKE_CITE,
+                            shown_facts=0, shown_rings=0)
+        self.assertIn("confabulation", ev)
+        self.assertEqual(n.state["resonance"], 0)
 
 
 class TestWebAddresses(unittest.TestCase):

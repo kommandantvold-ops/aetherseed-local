@@ -155,11 +155,13 @@ class _Proxy(unittest.TestCase):
                 return
             time.sleep(0.02)
 
-    def ask(self, text, speaker=None):
+    def ask(self, text, speaker=None, reading=None):
         body = {"model": "llama3.2:3b", "stream": True,
                 "messages": [{"role": "user", "content": text}]}
         if speaker is not None:
             body["speaker"] = speaker
+        if reading is not None:
+            body["reading"] = reading
         c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=30)
         c.request("POST", "/api/chat", body=json.dumps(body),
                   headers={"Content-Type": "application/json"})
@@ -192,6 +194,59 @@ class _Proxy(unittest.TestCase):
                     return lines
             time.sleep(0.02)
         return []
+
+
+class _RecordingTrust(_Trust):
+    def __init__(self):
+        self.calls = []
+
+    def auto_score_response(self, *a, **k):
+        self.calls.append(k)
+
+
+class TestWhatTheScorerIsTold(_Proxy):
+    """The scorer decides whether a decline earns from what was in front of
+    the model (build log 46): the proxy must tell it - the owner's facts and
+    the rings in the prompt, and whether the turn was a passage read to it."""
+
+    def setUp(self):
+        super().setUp()
+        self.trust = _RecordingTrust()
+        self.saved_trust, proxy.trust = proxy.trust, self.trust
+
+    def tearDown(self):
+        proxy.trust = self.saved_trust
+        super().tearDown()
+
+    def told(self):
+        for _ in range(100):
+            if self.trust.calls:
+                return self.trust.calls[-1]
+            time.sleep(0.02)
+        self.fail("the scorer was never called")
+
+    def test_nothing_in_front_of_it(self):
+        self.ask("How many came to the workshop?", speaker="Reader")
+        k = self.told()
+        self.assertEqual((k["shown_facts"], k["shown_rings"], k["reading"]), (0, 0, False))
+
+    def test_an_owner_fact_in_front_of_it(self):
+        proxy.root.store.add_fact(
+            "The dove came back to him at evening and, behold, in her mouth was a "
+            "freshly plucked olive leaf.", "Genesis 8:11")
+        self.ask("What did the dove bring back in the evening?", speaker="Reader")
+        self.assertIn(FACT_TAG, self.system_sent())
+        self.assertEqual(self.told()["shown_facts"], 1)
+
+    def test_a_passage_declared_as_reading(self):
+        self.ask("Song of Songs 3:3: \u201cHave you seen him whom my soul loves?\u201d",
+                 speaker="Reader", reading=True)
+        self.assertIs(self.told()["reading"], True)
+        self.assertIs(self.record()[-1]["reading"], True)
+
+    def test_only_true_declares_reading(self):
+        self.ask("Who is this?", speaker="Reader", reading="yes")
+        self.assertIs(self.told()["reading"], False)
 
 
 class TestWhoIsSpeaking(_Proxy):
@@ -386,8 +441,73 @@ class TestReadingSoak(_Proxy):
             self.assertEqual(json.load(f)["turns"]["verse"], 6)
 
 
+class TestReadingLuke(_Proxy):
+    """The Gospel of Luke, read to the Qwen trial (Andreas, 29 Sep; build log
+    46): the verses are Luke's, each declared as a passage read to it, and a
+    run cannot carry on a different reading's state."""
+
+    def test_a_luke_smoke_run_reads_luke_and_declares_its_verses(self):
+        d = os.path.join(self.tmp, "luke")
+        self.assertEqual(reading_soak.main(["--dir", d, "--unit", self.url, "--smoke",
+                                            "--pause", "0", "--reading", "luke",
+                                            "--hours", "8"]), 0)
+        with open(os.path.join(d, "soak.jsonl"), encoding="utf-8") as f:
+            turns = [json.loads(l) for l in f if '"kind": "status"' not in l]
+        self.assertEqual([t["kind"] for t in turns],
+                         ["intro", "verse", "verse", "verse", "probe_fact"])
+        self.assertEqual([t.get("ref") for t in turns[1:4]],
+                         ["Luke 1:1", "Luke 1:2", "Luke 1:3"])
+        self.assertIn("the Gospel of Luke", turns[0]["sent"])
+        self.assertIn("the next 8 hours", turns[0]["sent"])
+        rec = self.record()
+        self.assertEqual([r["reading"] for r in rec], [False, True, True, True, False])
+
+    def test_a_run_does_not_carry_on_another_readings_state(self):
+        d = os.path.join(self.tmp, "song")
+        reading_soak.main(["--dir", d, "--unit", self.url, "--smoke", "--pause", "0"])
+        self.assertEqual(reading_soak.main(["--dir", d, "--unit", self.url, "--smoke",
+                                            "--pause", "0", "--reading", "luke"]), 2)
+
+
+class TestTheReading(unittest.TestCase):
+
+    def test_the_introduction_of_soaks_1_to_3_is_unchanged(self):
+        self.assertEqual(reading_soak.INTRO,
+                         "Reader here. I am a program Claude set up on your owner's "
+                         "instruction. For the next day I will read you the Song of Songs "
+                         "from the World English Bible, one verse at a time, and now and "
+                         "then I will ask you a question.")
+
+    def test_luke_is_the_whole_gospel(self):
+        luke, _ = reading_soak.load_texts(TEXTS, "luke")
+        self.assertEqual(len(luke), 1151)
+        self.assertEqual((luke[0]["ref"], luke[-1]["ref"]), ("Luke 1:1", "Luke 24:53"))
+        self.assertEqual(sorted({v["chapter"] for v in luke}), list(range(1, 25)))
+
+    def test_a_verse_is_declared_and_nothing_else_is(self):
+        self.assertIs(reading_soak.chat_body("Luke 1:1: ...", reading=True)["reading"], True)
+        self.assertNotIn("reading", reading_soak.chat_body("What was the reading about?"))
+        self.assertNotIn("model", reading_soak.chat_body("hello"))
+        self.assertEqual(reading_soak.chat_body("hello", model="x:1")["model"], "x:1")
+
+    def test_the_question_about_the_reading_fits_what_is_read(self):
+        with open(os.path.join(TEXTS, "genesis-probes.json"), encoding="utf-8") as f:
+            rings = json.load(f)["rings"]
+        song = [reading_soak.ring_ask(p, "song") for p in rings]
+        luke = [reading_soak.ring_ask(p, "luke") for p in rings]
+        self.assertEqual(song, [p["ask"] for p in rings])
+        self.assertEqual(luke[2], "What do you remember of the gospel you have been hearing?")
+        self.assertEqual([luke[i] for i in (0, 1, 3)], [song[i] for i in (0, 1, 3)])
+
+
 class TestWhatTheSoakSaysStaysFactual(unittest.TestCase):
     """If the reading were stored as fiction it would never form a ring."""
+
+    def test_every_verse_of_luke_as_read(self):
+        luke, _ = reading_soak.load_texts(TEXTS, "luke")
+        flagged = [v["ref"] for v in luke
+                   if detect_mode(reading_soak.verse_message(v))[0] != FACTUAL]
+        self.assertEqual(flagged, [])
 
     def test_every_verse_as_read(self):
         with open(os.path.join(TEXTS, "song-of-songs.web.jsonl"), encoding="utf-8") as f:
@@ -400,9 +520,10 @@ class TestWhatTheSoakSaysStaysFactual(unittest.TestCase):
     def test_every_question_and_the_introduction(self):
         with open(os.path.join(TEXTS, "genesis-probes.json"), encoding="utf-8") as f:
             probes = json.load(f)
-        asks = [reading_soak.INTRO] + [p[k] for p in probes["facts"]
-                                       for k in ("ask", "ask_owner")]
+        asks = [reading_soak.INTRO, reading_soak.intro("luke", 8)]
+        asks += [p[k] for p in probes["facts"] for k in ("ask", "ask_owner")]
         asks += [p["ask"] for p in probes["rings"]]
+        asks += [v for p in probes["rings"] for v in (p.get("ask_for") or {}).values()]
         flagged = [a for a in asks if detect_mode(a)[0] != FACTUAL]
         self.assertEqual(flagged, [])
 

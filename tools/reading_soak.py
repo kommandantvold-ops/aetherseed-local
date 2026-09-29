@@ -13,7 +13,10 @@ spoken by SPEAKER ("Reader"), so the store says who said it:
 
   - first, once: who the Reader is and what it will do;
   - then the Song of Songs, one verse per turn, "Song of Songs 2:1: <text>",
-    from tools/texts/song-of-songs.web.jsonl, round and round;
+    from tools/texts/song-of-songs.web.jsonl, round and round - or, with
+    --reading luke, the Gospel of Luke (Andreas, 29 Sep 2026; build log 46).
+    Every verse turn is declared as a passage read to it ("reading": true), so
+    a decline to a verse that ends in a question earns no trust (step 46);
   - every PROBE_EVERY-th turn a question instead (tools/texts/
     genesis-probes.json): about a Genesis verse the owner told it, asked
     plainly or as "What has your owner told you about ...?", alternating; and,
@@ -43,6 +46,10 @@ answer is in soak.jsonl in full for a person to read.
 Run on the device, as the operator:
 
   python3 -u reading_soak.py --dir /home/andreas/soak-2026-09-25-reading --hours 24
+  python3 -u reading_soak.py --dir /home/andreas/soak-2026-09-29-qwen-luke \
+      --hours 8 --reading luke
+
+The request names no model unless --model does: the unit serves its own.
 
 --smoke sends the introduction, three verses and one question, and stops.
 Stop early by creating DIR/STOP. Run again with the same --dir and it carries
@@ -72,9 +79,23 @@ SPEAKER = "Reader"
 # (logic/served.py). --model names one, for a proxy that serves several.
 MODEL = None
 
-INTRO = ("Reader here. I am a program Claude set up on your owner's instruction. "
-         "For the next day I will read you the Song of Songs from the World English "
-         "Bible, one verse at a time, and now and then I will ask you a question.")
+# What is read (--reading): the file in tools/texts, how the introduction names
+# it, and the word a question about it may use. "song" is soaks 1-3's.
+READINGS = {
+    "song": {"file": "song-of-songs.web.jsonl", "title": "the Song of Songs"},
+    "luke": {"file": "luke.web.jsonl", "title": "the Gospel of Luke"},
+}
+
+
+def intro(reading="song", hours=24.0):
+    span = "the next day" if hours == 24 else "the next %g hours" % hours
+    return ("Reader here. I am a program Claude set up on your owner's instruction. "
+            "For %s I will read you %s from the World English Bible, one verse at a "
+            "time, and now and then I will ask you a question."
+            % (span, READINGS[reading]["title"]))
+
+
+INTRO = intro()          # soaks 1-3's introduction, word for word
 
 _OWNER = re.compile(r"\b(?:my|your|the|our)\s+owner\b|\bowner\s+(?:told|said|shared|"
                     r"mentioned|taught)\b", re.I)
@@ -89,12 +110,31 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def load_texts(texts):
-    with open(os.path.join(texts, "song-of-songs.web.jsonl"), encoding="utf-8") as f:
-        song = [json.loads(l) for l in f if l.strip()]
+def load_texts(texts, reading="song"):
+    with open(os.path.join(texts, READINGS[reading]["file"]), encoding="utf-8") as f:
+        verses = [json.loads(l) for l in f if l.strip()]
     with open(os.path.join(texts, "genesis-probes.json"), encoding="utf-8") as f:
         probes = json.load(f)
-    return song, probes
+    return verses, probes
+
+
+def ring_ask(p, reading="song"):
+    """A question about the reading, in the words that fit what is read
+    ("the song you have been hearing" is the Song's; a probe may carry another
+    wording per reading under "ask_for")."""
+    return (p.get("ask_for") or {}).get(reading, p["ask"])
+
+
+def chat_body(text, speaker=SPEAKER, model=None, reading=False):
+    """One turn, as the console sends it. No "model" unless one is named;
+    "reading" only on a passage read to it."""
+    body = {"stream": True, "speaker": speaker,
+            "messages": [{"role": "user", "content": text}]}
+    if model:
+        body["model"] = model
+    if reading:
+        body["reading"] = True
+    return body
 
 
 def verse_message(v):
@@ -147,15 +187,6 @@ def score_ring(reply, meta, themes):
     }
 
 
-def chat_body(text, speaker=SPEAKER, model=None):
-    """One turn, as the console sends it. No "model" unless one is named."""
-    body = {"stream": True, "speaker": speaker,
-            "messages": [{"role": "user", "content": text}]}
-    if model:
-        body["model"] = model
-    return body
-
-
 class Unit:
     def __init__(self, base):
         self.base = base.rstrip("/")
@@ -164,8 +195,8 @@ class Unit:
         with urllib.request.urlopen(self.base + path, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
 
-    def chat(self, text, speaker=SPEAKER):
-        body = json.dumps(chat_body(text, speaker, MODEL)).encode()
+    def chat(self, text, speaker=SPEAKER, reading=False):
+        body = json.dumps(chat_body(text, speaker, MODEL, reading)).encode()
         req = urllib.request.Request(self.base + "/api/chat", data=body, method="POST",
                                      headers={"Content-Type": "application/json"})
         r = {"status": None, "reply": "", "meta": {}, "dones": 0, "error": None}
@@ -235,6 +266,8 @@ def main(argv=None):
     ap.add_argument("--pause", type=float, default=3.0, help="seconds between turns")
     ap.add_argument("--status-every", type=int, default=20)
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--reading", choices=sorted(READINGS), default="song",
+                    help="what is read to it (default: the Song of Songs)")
     ap.add_argument("--model", default=None,
                     help="name a model in every request; by default none is named "
                          "and the unit serves its own")
@@ -246,14 +279,20 @@ def main(argv=None):
     out_path = os.path.join(a.dir, "soak.jsonl")
     state_path = os.path.join(a.dir, "state.json")
     stop_path = os.path.join(a.dir, "STOP")
-    song, probes = load_texts(a.texts)
+    verses, probes = load_texts(a.texts, a.reading)
     unit = Unit(a.unit)
 
     state = {"turn": 0, "verse": 0, "fact": 0, "ring": 0, "question": 0,
-             "intro_sent": False, "started": now(), "runs": 0}
+             "intro_sent": False, "started": now(), "runs": 0, "reading": a.reading}
     if os.path.exists(state_path):
         with open(state_path, encoding="utf-8") as f:
             state.update(json.load(f))
+        was = state.get("reading", "song")       # a state from before --reading
+        if was != a.reading:
+            print("[reading] %s was reading %s; not carrying on with %s"
+                  % (a.dir, was, a.reading), flush=True)
+            return 2
+        state["reading"] = was
     state["runs"] += 1
     deadline = time.time() + a.hours * 3600
 
@@ -314,7 +353,7 @@ def main(argv=None):
         planned = smoke_plan.pop(0) if smoke_plan is not None else None
         entry = {"turn": state["turn"] + 1}
         if planned == "intro" or (planned is None and not state["intro_sent"]):
-            kind, text = "intro", INTRO
+            kind, text = "intro", intro(a.reading, a.hours)
         elif planned == "fact" or (planned is None and state["turn"] % a.probe_every
                                    == a.probe_every - 1):
             q = state["question"]
@@ -322,19 +361,19 @@ def main(argv=None):
                          and rings_now()["count"] > 0)
             if ring_turn:
                 p = probes["rings"][state["ring"] % len(probes["rings"])]
-                kind, text = "probe_ring", p["ask"]
+                kind, text = "probe_ring", ring_ask(p, a.reading)
                 entry.update(probe=p["id"])
             else:
                 p, style = fact_probe(probes, state["fact"])
                 kind, text = "probe_fact", p[style]
                 entry.update(probe=p["id"], style=style, refs=p["refs"])
         else:
-            v = song[state["verse"] % len(song)]
+            v = verses[state["verse"] % len(verses)]
             kind, text = "verse", verse_message(v)
-            entry.update(ref=v["ref"], reading_pass=state["verse"] // len(song) + 1)
+            entry.update(ref=v["ref"], reading_pass=state["verse"] // len(verses) + 1)
 
         # ---- say it -------------------------------------------------------------
-        r = unit.chat(text)
+        r = unit.chat(text, reading=(kind == "verse"))
         entry.update(kind=kind, sent=text, reply=r["reply"], secs=r["secs"],
                      status=r["status"], meta=r["meta"], failures=failure(r))
         if r["error"]:

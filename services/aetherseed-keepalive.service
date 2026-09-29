@@ -5,6 +5,13 @@
 # 22 s (the eviction cliff of step 16a), and records one identical request every
 # three minutes so latency drift is visible over weeks. Whether a shipped unit
 # should keep its NPU awake permanently is a product decision, not made here.
+#
+# Since step 45 it runs as the service account from the application tree, not
+# as andreas from his home ("The llama stable shouldnt be dependent on my
+# username if its on git for pilots"): the script and power.py are in
+# /opt/aetherseed/tools, hashed with the rest of the application, and its log
+# is in its own state directory. The video group is for vcgencmd, which reads
+# the board's temperature and rails through /dev/vcio_gencmd (root:video, 660).
 Description=AetherSeed Companion - keepalive and degradation log (R&D)
 Documentation=https://github.com/kommandantvold-ops/aetherseed-local
 After=hailo-ollama.service
@@ -13,14 +20,16 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=andreas
-Group=andreas
-Environment=KEEPALIVE_DIR=/home/andreas/keepalive
+User=aetherseed
+Group=aetherseed
+SupplementaryGroups=video
+StateDirectory=aetherseed-keepalive
+Environment=KEEPALIVE_DIR=/var/lib/aetherseed-keepalive
 Environment=KEEPALIVE_SECONDS=180
 # The model the build serves (logic/served.py); test_served_model.py checks it.
 Environment=KEEPALIVE_MODEL=qwen2.5-instruct:1.5b
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 /home/andreas/keepalive/keepalive.py
+ExecStart=/usr/bin/python3 /opt/aetherseed/tools/keepalive.py
 Restart=always
 RestartSec=10
 
@@ -30,7 +39,7 @@ SyslogIdentifier=aetherseed-keepalive
 
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/home/andreas/keepalive
+ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

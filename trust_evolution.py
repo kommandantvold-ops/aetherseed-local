@@ -14,7 +14,8 @@ The 6 Trust Tiers:
 
 Resonance scoring:
   Probe passed:      +10
-  Honest refusal:    +5
+  Honest refusal:    +5   (only to a question with nothing of the owner's and
+                           no ring in front of it - build log step 46)
   Task completed:    +3
   Stable session:    +2
   Probe failed:      -15
@@ -105,6 +106,52 @@ try:
     _HONESTY_AVAILABLE = True
 except ImportError:                      # pragma: no cover
     _HONESTY_AVAILABLE = False
+
+
+# ============================================================
+# WHICH REFUSALS EARN  (build log step 46)
+# ============================================================
+#
+# Andreas, 27 Sep 2026: "If the I don't know is an honest refusal it should
+# grant advancement." Measured against the scorer (steps 43-45), it paid for
+# every clean decline: to a fact question whose verse was in front of it, to a
+# verse read to it with no question asked, and to a question about the reading
+# with a ring in its prompt - 816 of the 838 it paid in soak 3. On 29 Sep he
+# chose: only a decline to a question whose answer was not in front of it
+# earns, decided strictly - none of his facts and no ring in the prompt. The
+# unit cannot see which verse answers a question, only what it put in front
+# of the model, so "nothing of his in front of it" is what can be checked.
+
+_CLOSERS = " \t\r\n\"'\u201d\u2019\u00bb)]"
+
+
+def asks_a_question(text: str) -> bool:
+    """True when the message ends as a question does."""
+    return (text or "").rstrip(_CLOSERS).endswith("?")
+
+
+def refusal_unpaid(user_msg: str, shown_facts=None, shown_rings=None,
+                   reading: bool = False) -> str:
+    """Why a clean decline earns nothing, or "" when it earns +5.
+
+    `shown_facts` and `shown_rings` are how many of the owner's facts and how
+    many rings were in the prompt this turn. A caller that does not say cannot
+    show that nothing was in front of it, so its declines earn nothing.
+    `reading` is declared by a caller that is reading a passage to the node
+    (tools/reading_soak.py) - a passage that ends in a question is still not a
+    question put to it. Declared, never verified; it can only withhold pay.
+    """
+    if reading:
+        return "a passage read to it, not a question"
+    if not asks_a_question(user_msg):
+        return "not a question"
+    if shown_facts is None or shown_rings is None:
+        return "what was in front of it is not known"
+    if shown_facts:
+        return "an owner fact was in front of it"
+    if shown_rings:
+        return "a ring was in front of it"
+    return ""
 
 
 class TrustEvolution:
@@ -233,7 +280,9 @@ class TrustEvolution:
         )
 
     def auto_score_response(self, user_msg: str, ai_response: str,
-                            tool_outputs=(), memory_context: str = "") -> str:
+                            tool_outputs=(), memory_context: str = "",
+                            shown_facts=None, shown_rings=None,
+                            reading: bool = False) -> str:
         """Score a response by its provenance, not by the user's phrasing.
 
         The previous version keyword-matched the USER's message for "write a
@@ -275,7 +324,14 @@ class TrustEvolution:
 
         if verdict == "honest_refusal":
             # Declining AND inventing nothing. The old version accepted the
-            # phrase alone, which made the -20 dodgeable.
+            # phrase alone, which made the -20 dodgeable. And only a decline
+            # of what it was not given earns (refusal_unpaid, step 46): the
+            # others are recorded, not paid.
+            unpaid = refusal_unpaid(user_msg, shown_facts, shown_rings, reading)
+            if unpaid:
+                self._log_observation("honest_refusal unpaid",
+                                      f"{unpaid}: {user_msg[:50]}")
+                return "honest_refusal(unpaid)"
             self.record_event("honest_refusal", f"Declined: {user_msg[:50]}")
             return "honest_refusal"
 
