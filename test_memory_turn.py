@@ -229,6 +229,13 @@ class TestWhatTheScorerIsTold(_Proxy):
         self.ask("How many came to the workshop?", speaker="Reader")
         k = self.told()
         self.assertEqual((k["shown_facts"], k["shown_rings"], k["reading"]), (0, 0, False))
+        self.assertIsInstance(k["shown_known"], int)
+
+    def test_a_line_it_knows_in_front_of_it(self):
+        # 48e: the scorer must hear about the curriculum's lines (step 49)
+        self.ask("Can you go on the internet?")
+        self.assertIn("[Known]", self.system_sent())
+        self.assertGreaterEqual(self.told()["shown_known"], 1)
 
     def test_an_owner_fact_in_front_of_it(self):
         proxy.root.store.add_fact(

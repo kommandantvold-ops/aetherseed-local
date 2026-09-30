@@ -25,9 +25,10 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aetherroot import AetherRoot
-from aetherspark import AetherSpark
+from aetherspark import AetherSpark, TRUST_PERMISSIONS
 from trust_evolution import TrustEvolution
 from intent_detection import detect_intent, execute_intent
+from logic.gate_answers import is_level_question, level_text, refusal_text
 
 # ============================================================
 # CONFIGURATION
@@ -653,28 +654,34 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         print(f"[knowledge] answered from the build: {entry} (model not called)",
               flush=True)
+        self._serve_plain(model, text, source="knowledge", mode="known")
+        return True
+        # Deliberately NOT stored as an episode, and not written to the
+        # provenance record - the same treatment the record route gets. The
+        # node repeating a line it shipped with is not a new fact about the
+        # world, and storing it would let it re-enter later prompts as one.
+
+    def _serve_plain(self, model: str, text: str, source: str, mode: str,
+                     used_tools: bool = False):
+        """Send `text` as the whole reply, model not called. Tagged, so the
+        reader can tell it came from the unit and not the model."""
         out = [json.dumps({"model": model,
                            "message": {"role": "assistant", "content": text},
                            "done": False}),
                json.dumps({"model": model,
                            "message": {"role": "assistant", "content": ""},
                            "done": True, "done_reason": "stop",
-                           "source": "knowledge",
+                           "source": source,
                            # Tagged like every other reply, so the reader can
-                           # tell this came from the build and not the model.
-                           "aetherseed": {"mode": "known", "checked": True,
+                           # tell this came from the unit and not the model.
+                           "aetherseed": {"mode": mode, "checked": True,
                                           "unbacked_sources": 0, "unsourced_figures": 0,
-                                          "used_tools": False, "memory_used": False}})]
+                                          "used_tools": used_tools, "memory_used": False}})]
         raw = ("\n".join(out) + "\n").encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
         self.end_headers()
         self.wfile.write(raw)
-        return True
-        # Deliberately NOT stored as an episode, and not written to the
-        # provenance record - the same treatment the record route gets. The
-        # node repeating a line it shipped with is not a new fact about the
-        # world, and storing it would let it re-enter later prompts as one.
 
     def _proxy_chat_augmented(self, body: bytes):
         try:
@@ -749,11 +756,43 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # an unbacked source.
         request_mode, mode_reason = detect_mode(user_msg)
 
+        # ---- ITS TRUST LEVEL ----
+        # From the gate, model not called (build log 49): asked "What is your
+        # trust level?" 49 times in the ecosystem soak, the model recited the
+        # whole ladder every time, the trust status in front of it. The rung
+        # it runs at is the gate's, set when the proxy started; a rung earned
+        # since takes effect at the next start, and the answer says so.
+        if is_level_question(user_msg):
+            earned = None
+            try:
+                earned = trust.get_trust_level_name()
+            except Exception:
+                pass
+            text = level_text(spark.gate.trust_level, earned)
+            print("[gate] trust level answered from the gate (model not called)",
+                  flush=True)
+            self._serve_plain(model, text, source="gate", mode="gate", used_tools=True)
+            return
+
         # ---- INTENT DETECTION ----
         intent = detect_intent(user_msg)
         workspace_data = ""
         if intent:
             result = execute_intent(intent, spark)
+            # A refusal is told as a refusal, model not called (build log 49).
+            # In the ecosystem soak the gate refused every write at observer
+            # and nothing was written - but the model, handed the refusal as
+            # tool output, answered "I can write a note: ..." 40 times in 48.
+            # The refusal is already in the audit log (aetherspark); it is
+            # not stored as an episode and not scored.
+            if result and result.startswith("[DENIED]"):
+                text = refusal_text(intent["intent"], intent["tier"],
+                                    spark.gate.trust_level, TRUST_PERMISSIONS)
+                print(f"[gate] {intent['intent']} refused, told as refused "
+                      f"(model not called)", flush=True)
+                self._serve_plain(model, text, source="gate", mode="gate",
+                                  used_tools=True)
+                return
             if result:
                 workspace_data = result
 
@@ -1054,13 +1093,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
             try:
                 # What was in front of the model this turn decides whether a
-                # clean decline earns (step 46): none of the owner's facts
-                # and no ring, and a question rather than a passage.
+                # clean decline earns (step 46): none of the owner's facts,
+                # no ring, no line it knows (step 49), and a question rather
+                # than a passage. A retrieval that did not report its known
+                # lines passes None, and None earns nothing.
                 trust.auto_score_response(user_msg, ai_content,
                                           tool_outputs=tool_outputs,
                                           memory_context=memory_context,
                                           shown_facts=len(retrieval.get("facts") or ()),
                                           shown_rings=len(retrieval.get("rings") or ()),
+                                          shown_known=retrieval.get("known"),
                                           reading=reading)
             except Exception:
                 pass

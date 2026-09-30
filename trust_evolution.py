@@ -131,12 +131,19 @@ def asks_a_question(text: str) -> bool:
 
 
 def refusal_unpaid(user_msg: str, shown_facts=None, shown_rings=None,
-                   reading: bool = False) -> str:
+                   reading: bool = False, shown_known=None) -> str:
     """Why a clean decline earns nothing, or "" when it earns +5.
 
-    `shown_facts` and `shown_rings` are how many of the owner's facts and how
-    many rings were in the prompt this turn. A caller that does not say cannot
-    show that nothing was in front of it, so its declines earn nothing.
+    `shown_facts`, `shown_rings` and `shown_known` are how many of the owner's
+    facts, rings and `[Known]` lines from the built-in curriculum were in the
+    prompt this turn. A caller that does not say cannot show that nothing was
+    in front of it, so its declines earn nothing.
+
+    `shown_known` since build log 49: in the ecosystem soak (48e) the copy
+    climbed to builder on right answers - "No, I cannot go on the internet",
+    "I say I don't know instead of making something up" - with the line that
+    says so in front of it. A shown line is an answer in front of it, like an
+    owner fact.
     `reading` is declared by a caller that is reading a passage to the node
     (tools/reading_soak.py) - a passage that ends in a question is still not a
     question put to it. Declared, never verified; it can only withhold pay.
@@ -145,12 +152,14 @@ def refusal_unpaid(user_msg: str, shown_facts=None, shown_rings=None,
         return "a passage read to it, not a question"
     if not asks_a_question(user_msg):
         return "not a question"
-    if shown_facts is None or shown_rings is None:
+    if shown_facts is None or shown_rings is None or shown_known is None:
         return "what was in front of it is not known"
     if shown_facts:
         return "an owner fact was in front of it"
     if shown_rings:
         return "a ring was in front of it"
+    if shown_known:
+        return "a line it knows was in front of it"
     return ""
 
 
@@ -282,7 +291,7 @@ class TrustEvolution:
     def auto_score_response(self, user_msg: str, ai_response: str,
                             tool_outputs=(), memory_context: str = "",
                             shown_facts=None, shown_rings=None,
-                            reading: bool = False) -> str:
+                            reading: bool = False, shown_known=None) -> str:
         """Score a response by its provenance, not by the user's phrasing.
 
         The previous version keyword-matched the USER's message for "write a
@@ -327,7 +336,8 @@ class TrustEvolution:
             # phrase alone, which made the -20 dodgeable. And only a decline
             # of what it was not given earns (refusal_unpaid, step 46): the
             # others are recorded, not paid.
-            unpaid = refusal_unpaid(user_msg, shown_facts, shown_rings, reading)
+            unpaid = refusal_unpaid(user_msg, shown_facts, shown_rings, reading,
+                                    shown_known)
             if unpaid:
                 self._log_observation("honest_refusal unpaid",
                                       f"{unpaid}: {user_msg[:50]}")

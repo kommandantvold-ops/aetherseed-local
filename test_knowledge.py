@@ -93,6 +93,9 @@ ON_TOPIC = [
     ("what is aetherspark", "eco.spark"),
     ("what are your rings", "eco.rings"),
     ("what has your owner told you as facts", "eco.facts"),
+    # e06 of the ecosystem soak: eco.facts lost a three-way tie on file order
+    # and was never shown, 49 of 49 (48c); a trigger phrase since 49
+    ("what happens to the facts i tell you", "eco.facts"),
     ("where is your workspace", "eco.workspace"),
     ("where is your to-do list", "eco.todo"),
     ("can you add something to my todo list", "eco.todo"),

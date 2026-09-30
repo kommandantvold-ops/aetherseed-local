@@ -75,7 +75,7 @@ class TestProvenance(unittest.TestCase):
         ev = n.auto_score_response(
             "how many came to the workshop?",
             "I don't know. There is nothing in my memory from March.",
-            shown_facts=0, shown_rings=0)
+            shown_facts=0, shown_rings=0, shown_known=0)
         self.assertEqual(ev, "honest_refusal")
         self.assertEqual(n.state["resonance"], 5)
 
@@ -168,7 +168,7 @@ class TestWhichRefusalsEarn(unittest.TestCase):
         n, ev = self._score(
             "How long did Methuselah live?",
             "I cannot provide information on how long Methuselah lived.",
-            shown_facts=0, shown_rings=0)
+            shown_facts=0, shown_rings=0, shown_known=0)
         self.assertEqual(ev, "honest_refusal")
         self.assertEqual(n.state["resonance"], 5)
 
@@ -177,7 +177,7 @@ class TestWhichRefusalsEarn(unittest.TestCase):
         n, ev = self._score(
             "What has your owner told you about the serpent?",
             "I cannot say; I have not been told anything about the serpent.",
-            shown_facts=2, shown_rings=0)
+            shown_facts=2, shown_rings=0, shown_known=0)
         self.assertEqual(ev, "honest_refusal(unpaid)")
         self.assertEqual(n.state["resonance"], 0)
         self.assertEqual(n.state["honest_refusals"], 0)
@@ -189,7 +189,7 @@ class TestWhichRefusalsEarn(unittest.TestCase):
         n, ev = self._score(
             "What have you been reading lately?",
             "I cannot recall what I may have been reading.",
-            shown_facts=0, shown_rings=1)
+            shown_facts=0, shown_rings=1, shown_known=0)
         self.assertEqual(ev, "honest_refusal(unpaid)")
         self.assertEqual(n.state["resonance"], 0)
         self.assertIn("a ring was in front of it", n.state["observations"][-1]["details"])
@@ -199,7 +199,7 @@ class TestWhichRefusalsEarn(unittest.TestCase):
         n, ev = self._score(
             "Song of Songs 2:6: His left hand is under my head. His right hand embraces me.",
             "I am not able to provide a response based on the information given.",
-            shown_facts=0, shown_rings=0)
+            shown_facts=0, shown_rings=0, shown_known=0)
         self.assertEqual(ev, "honest_refusal(unpaid)")
         self.assertEqual(n.state["resonance"], 0)
 
@@ -208,7 +208,8 @@ class TestWhichRefusalsEarn(unittest.TestCase):
                "\u201cHave you seen him whom my soul loves?\u201d")
         self.assertTrue(te.asks_a_question(msg))
         n, ev = self._score(msg, "I cannot answer that.",
-                            shown_facts=0, shown_rings=0, reading=True)
+                            shown_facts=0, shown_rings=0, shown_known=0,
+                            reading=True)
         self.assertEqual(ev, "honest_refusal(unpaid)")
         self.assertEqual(n.state["resonance"], 0)
 
@@ -224,8 +225,27 @@ class TestWhichRefusalsEarn(unittest.TestCase):
         n, ev = self._score(
             "What has your owner told you about Lot's wife?",
             "I have no information about Lot's wife.",
-            shown_facts=2, shown_rings=0)
+            shown_facts=2, shown_rings=0, shown_known=0)
         self.assertEqual(ev, "honest_refusal(unpaid)")
+
+    def test_a_decline_with_a_line_it_knows_in_front_of_it_earns_nothing(self):
+        # ecosystem soak, 48e: eco.network was in its prompt, and "No, I cannot
+        # browse the internet" is the answer, not a decline - 44 of the 111
+        # refusals that took the copy to builder.
+        n, ev = self._score(
+            "Can you go on the internet?",
+            "No, I cannot browse the Internet or reach anything outside this device.",
+            shown_facts=0, shown_rings=0, shown_known=2)
+        self.assertEqual(ev, "honest_refusal(unpaid)")
+        self.assertEqual(n.state["resonance"], 0)
+        self.assertIn("a line it knows was in front of it",
+                      n.state["observations"][-1]["details"])
+
+    def test_a_caller_that_does_not_say_what_it_knew_pays_nothing(self):
+        n, ev = self._score("How long did Methuselah live?", "I don't know.",
+                            shown_facts=0, shown_rings=0)
+        self.assertEqual(ev, "honest_refusal(unpaid)")
+        self.assertIn("not known", n.state["observations"][-1]["details"])
 
     def test_what_a_question_is(self):
         for text, want in (("How long did Methuselah live?", True),
@@ -238,7 +258,7 @@ class TestWhichRefusalsEarn(unittest.TestCase):
 
     def test_an_invention_is_never_paid_whatever_was_shown(self):
         n, ev = self._score("what does the research say?", "I don't know, but " + FAKE_CITE,
-                            shown_facts=0, shown_rings=0)
+                            shown_facts=0, shown_rings=0, shown_known=0)
         self.assertIn("confabulation", ev)
         self.assertEqual(n.state["resonance"], 0)
 
