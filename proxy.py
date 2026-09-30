@@ -29,7 +29,7 @@ from aetherroot import AetherRoot
 from aetherspark import AetherSpark, TRUST_PERMISSIONS
 from trust_evolution import TrustEvolution
 from intent_detection import detect_intent, execute_intent
-from logic.gate_answers import is_level_question, level_text, refusal_text
+from logic.gate_answers import is_level_question, level_text, refusal_text, todo_text
 
 # ============================================================
 # CONFIGURATION
@@ -795,6 +795,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._serve_plain(model, text, source="gate", mode="gate",
                                   used_tools=True)
                 return
+            # The to-do list is shown as it is, model not called (build log 51):
+            # asked to show it, the model said where it is, 0 of 7 in 50e.
+            if intent["intent"] == "todo_read":
+                shown = todo_text(result)
+                if shown is not None:
+                    print("[tools] to-do list shown from the file (model not called)",
+                          flush=True)
+                    self._serve_plain(model, shown, source="tool", mode="tool",
+                                      used_tools=True)
+                    return
             if result:
                 workspace_data = result
 

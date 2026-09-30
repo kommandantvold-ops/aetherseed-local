@@ -83,3 +83,35 @@ def level_text(running: str, earned: Optional[str] = None) -> str:
         else:
             out += f" My trust has fallen to {earned}; that takes effect when I next start."
     return out
+
+
+# ---------------------------------------------------------------------------
+# The to-do list, shown as it is (build log 51)
+# ---------------------------------------------------------------------------
+# "Show my to-do list" ran the tool and put the list in front of the model on
+# every turn, and the model answered with where the list is instead of what is
+# on it: 3 of 6 in build log 49's run, 0 of 7 in 50e's - "My to-do list is in
+# the file todo.txt in my workspace. You can find it there." The opening was
+# her own earlier answer to "Where is your to-do list?", come back as an
+# episode and copied. Andreas, 30 Sep: "fix the todo list". So the list is
+# shown the way the refusals are: from the file, word for word, model not
+# called. The file is the answer; nothing a model adds to it helps.
+_FILE_HEAD = re.compile(r"^File: [^\n]*\n---\n", re.S)
+
+
+def todo_text(tool_result: str) -> Optional[str]:
+    """What the node says for "show my to-do list", from the tool's output.
+    None when the output is not the file (an error other than a missing file),
+    so the turn falls back to the model."""
+    r = tool_result or ""
+    if r.startswith("[ERROR] File not found"):
+        return "Your to-do list is empty - there is no todo.txt in my workspace yet."
+    m = _FILE_HEAD.match(r)
+    if not m:
+        return None
+    body = r[m.end():].strip("\n")
+    lines = [l.rstrip() for l in body.split("\n") if l.strip()]
+    if not lines:
+        return "Your to-do list is empty."
+    return "Your to-do list (todo.txt in my workspace):\n" + "\n".join(lines)
+

@@ -15,6 +15,13 @@ from test_memory_turn import SCRIPT, _Proxy
 
 class TheWords(unittest.TestCase):
 
+    def test_the_to_do_list_as_it_is(self):
+        from logic.gate_answers import todo_text
+        self.assertEqual(todo_text("File: todo.txt\n---\n- a\n\n- b\n"),
+                         "Your to-do list (todo.txt in my workspace):\n- a\n- b")
+        self.assertEqual(todo_text("File: todo.txt\n---\n\n"), "Your to-do list is empty.")
+        self.assertIsNone(todo_text("[ERROR] Path outside workspace."))
+
     def test_writing_opens_at_reader(self):
         self.assertEqual(lowest_role_for(2, TRUST_PERMISSIONS), "reader")
         self.assertEqual(lowest_role_for(3, TRUST_PERMISSIONS), "builder")
@@ -122,9 +129,35 @@ class AtTheProxy(_Proxy):
         self.ask("When does a new trust level take effect?")
         self.assertGreater(len(SCRIPT["requests"]), n)
 
-    def test_a_read_still_runs_and_reaches_the_model(self):
+    def _in_workspace(self):
+        # The module the proxy's execute_intent actually lives in: under the
+        # whole suite it need not be the one `import intent_detection` returns.
+        g = proxy.execute_intent.__globals__
+        saved, g["WORKSPACE"] = g["WORKSPACE"], self.ws
+        self.addCleanup(g.__setitem__, "WORKSPACE", saved)
+
+    def test_the_to_do_list_is_shown_from_the_file(self):
+        # build log 51: asked to show it, the model said where it is, 0 of 7
+        self._in_workspace()
         n = len(SCRIPT["requests"])
-        self.ask("Show my to-do list")
+        status, reply, meta = self.ask("Show my to-do list")
+        self.assertEqual(reply, "Your to-do list (todo.txt in my workspace):\n"
+                                "- water the plants")
+        self.assertEqual((meta["mode"], meta["used_tools"]), ("tool", True))
+        self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
+        self.assertFalse(os.path.exists(proxy.PROVENANCE_LOG), "not stored")
+
+    def test_no_to_do_list_yet(self):
+        self._in_workspace()
+        os.rename(os.path.join(self.ws, "todo.txt"), os.path.join(self.ws, "old.txt"))
+        _, reply, _ = self.ask("what's on my to-do list")
+        self.assertEqual(reply, "Your to-do list is empty - there is no todo.txt "
+                                "in my workspace yet.")
+
+    def test_other_reads_still_reach_the_model(self):
+        self._in_workspace()
+        n = len(SCRIPT["requests"])
+        self.ask("list my files")
         self.assertGreater(len(SCRIPT["requests"]), n)
 
 
