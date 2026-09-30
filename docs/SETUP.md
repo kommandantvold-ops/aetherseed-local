@@ -3,7 +3,7 @@
 > **Superseded (27 Sep 2026).** This guide describes an earlier device —
 > `hailo-h10-all`, hailo-ollama built from source, Qwen3 pulled over the API.
 > The Companion is built with [`INSTALL.md`](INSTALL.md), for the stable tag
-> `stable-llama-2026-09-29`. Kept for its history.
+> `stable-llama-2026-09-30`. Kept for its history.
 
 **From bare metal to a living AI agent on Raspberry Pi 5 + Hailo-10H**
 

@@ -1,16 +1,16 @@
 # AetherSeed Companion — cartridge manifest
-# DERIVED, NOT CAPTURED (build log step 48, 29 Sep 2026).
-# Lyra's capture of this build (cb5ee914, main 3bb0355's application, verify
+# DERIVED, NOT CAPTURED (build log step 49, 30 Sep 2026).
+# Lyra's capture of this build (64688228, main's application at the tag, verify
 # MATCH) with the unserved second model's three lines removed, as in step 47.
-# Against ee17f319 only app.digest differs (the ecosystem lines, summarize,
-# writing at reader).
+# Against 7b11a933 only app.digest and app.files differ (the gate answers,
+# the scorer counting [Known] lines, eco.facts, and training/).
 # Verify with: ./cartridge.sh verify cartridge.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	7b11a9331f6b2fb05b3bc3183dc61fff4556a6e3607bfa415638acf48209365c
-app.digest	e25a50b244d839bb628b45256fdeb16bed0656535322030f3f3ae66268719c2e
-app.files	27
+cartridge-id	9b1cd0f6fe361d0a29246c6cefcae5a5fafd1cecbf993edc615e347190b0110e
+app.digest	16404dd1d0bab4bb165414f17761294243ccc1c238e1f64b4ba5c7dd7ed03e06
+app.files	35
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo

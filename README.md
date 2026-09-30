@@ -1,8 +1,9 @@
 # Aetherseed AI
 
 > **Building a Companion unit?** Follow [`docs/INSTALL.md`](docs/INSTALL.md) —
-> the stable build, tag `stable-llama-2026-09-29`. The quick start further down
-> and `docs/SETUP.md` describe an earlier device.
+> the stable build, tag `stable-llama-2026-09-30`. The quick start further down
+> and `docs/SETUP.md` describe an earlier device. To check what a unit knows
+> about AetherSeed and itself, on a copy of its memory: [`training/`](training/README.md).
 
 **Trust-first cognitive scaffolding for edge AI.**
 

@@ -1,13 +1,19 @@
 # Installing the stable Companion build
 
-**Build:** git tag `stable-llama-2026-09-29` — Llama 3.2 3B on HailoRT 5.1.1,
+**Build:** git tag `stable-llama-2026-09-30` — Llama 3.2 3B on HailoRT 5.1.1,
 the one fixed build (Andreas, 29 Sep): the build that ran Lyra through soak 2
 (tag `stable-llama-2026-09-27`, build log step 43) **with no person's account in
-it** (step 45) and **trust paid only for a decline of what it was not given**
-(step 46). The kiosk runs as its own account, `aetherseed-kiosk`, and the
-keepalive as the service account. Installed on Lyra on 29 Sep (step 47).
-**Cartridge:** `ee17f31999a785bb719b7261e5e56a403b5d69b0f22266d2d2353a256e97f496`
-— Lyra's capture of this build (`ab2637d0`, MATCH) with the three lines of the
+it** (step 45), **trust paid only for a decline of what it was not given**
+(step 46 — and, since step 49, not when one of its own `[Known]` lines was in
+front of it), **what it knows about AetherSeed and itself** (the ecosystem
+lines, summarize, writing at reader — step 48), **a refused request told as
+refused and its trust level answered from the gate** (step 49), and **the
+ecosystem soak in `training/`**, for a pilot or the owner to run at will
+(step 49; `training/README.md`). The kiosk runs as its own account,
+`aetherseed-kiosk`, and the keepalive as the service account. Installed on Lyra
+on 30 Sep (step 49); the previous tag, `stable-llama-2026-09-29`, is step 47.
+**Cartridge:** `9b1cd0f6fe361d0a29246c6cefcae5a5fafd1cecbf993edc615e347190b0110e`
+— Lyra's capture of this build (`64688228`, MATCH) with the three lines of the
 unserved second model she still holds removed (`tools/cartridge.manifest` says
 which). The first unit built from this guide captures its own.
 
@@ -182,22 +188,24 @@ sudo useradd --create-home --shell /usr/sbin/nologin \
 Copy the tag to the unit, from the repository on the PC:
 
 ```bash
-git archive --prefix=aetherseed-stable/ stable-llama-2026-09-29 | ssh admin@<unit> "tar -x -C ~"
+git archive --prefix=aetherseed-stable/ stable-llama-2026-09-30 | ssh admin@<unit> "tar -x -C ~"
 ```
 
-On the unit, install the 27 files the build runs from — no more, no fewer —
+On the unit, install the 35 files the build runs from — no more, no fewer —
 root-owned and read-only:
 
 ```bash
 cd ~/aetherseed-stable
 sudo install -d -o root -g root -m 755 /opt/aetherseed
-tar -cf - proxy.py aetherroot.py aetherspark.py trust_evolution.py intent_detection.py \
+tar --exclude=__pycache__ -cf - proxy.py aetherroot.py aetherspark.py trust_evolution.py intent_detection.py \
   honesty_check.py requirements.txt config/hardware.yaml config/settings.py \
   gui/index.html gui/serve.py knowledge/companion.en.jsonl \
   kiosk/labwc/autostart kiosk/labwc/environment kiosk/labwc/rc.xml \
-  logic/__init__.py logic/attribution.py logic/companion.py logic/facts.py logic/knowledge.py \
-  logic/prompt_builder.py logic/provenance.py logic/rings.py logic/speaker.py logic/token_budget.py \
-  tools/keepalive.py tools/power.py \
+  logic/__init__.py logic/attribution.py logic/companion.py logic/facts.py logic/gate_answers.py \
+  logic/knowledge.py logic/prompt_builder.py logic/provenance.py logic/rings.py logic/speaker.py \
+  logic/token_budget.py tools/keepalive.py tools/power.py \
+  training/README.md training/run-ecosystem-soak.sh training/ecosystem_soak.py \
+  training/ecosystem-probes.json training/ecosystem-workspace \
   | sudo tar -x -C /opt/aetherseed --no-same-owner
 sudo chown -R root:root /opt/aetherseed && sudo chmod -R a+rX,go-w /opt/aetherseed
 ```
@@ -221,7 +229,7 @@ sudo install -o aetherseed -g aetherseed -m 644 /tmp/tokenizer.json /var/lib/aet
 ```
 
 Check the application against the cartridge — this must print
-`4466346ef25827e733ab9fc95ead227c9f414a811cdcde180bea29b64da262c7`:
+`16404dd1d0bab4bb165414f17761294243ccc1c238e1f64b4ba5c7dd7ed03e06`:
 
 ```bash
 cd /opt/aetherseed && find . -path ./venv -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum | sha256sum
@@ -302,6 +310,23 @@ the table at the top; anything else is a step above that did not take.
   no other unit's.
 - **Memory and trust start empty**: 0 episodes, *observer*, no rings, no owner
   facts (the Genesis facts were for Lyra's soaks).
+
+## 12. Training — the ecosystem soak, whenever you like (step 49)
+
+The build carries a check of what the companion knows about AetherSeed and
+itself — what AetherRoot and AetherSpark are, where its workspace, to-do list
+and notes are, the trust ladder, summarize — run on a **copy** of its memory,
+never on the memory itself:
+
+```bash
+sudo bash /opt/aetherseed/training/run-ecosystem-soak.sh 1      # hours
+```
+
+It returns at once, runs as the service account, and writes a report to
+`/var/lib/aetherseed/training/ecosystem-<time>/report.txt` when the time is up.
+Her answers are slower while it runs (it shares the model): run it when she is
+not in use. `training/README.md` says what it touches, what it does not, and how
+to read the report. First run on Lyra: 30 Sep, build log 49.
 
 ## Decisions this build carries, not steps
 
