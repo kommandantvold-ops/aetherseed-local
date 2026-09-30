@@ -16,6 +16,7 @@ The model stays conversational. The proxy handles the doing.
 
 import http.server
 import json
+import re
 import urllib.request
 import urllib.error
 import threading
@@ -49,7 +50,8 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 # tokens, different final paragraph).
 from logic.prompt_builder import charter
 from logic import companion
-from logic.speaker import validate_speaker, STEWARD
+from logic.speaker import validate_speaker, STEWARD, is_steward
+from logic import steward
 from logic.facts import FACT_TAG, FACT_NOTE
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
@@ -925,21 +927,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # answer then grounded its own repetition (40d). Kept out of memory
         # means stored as unverified: in the record and on the console, never
         # retrieved, never in a ring. See logic/attribution.py.
-        steward = {"credited": False}
+        credit = {"credited": False}
         if ai_content:
             try:
-                steward = steward_check(ai_content, retrieval.get("fact_texts") or [])
+                credit = steward_check(ai_content, retrieval.get("fact_texts") or [])
             except Exception as e:
-                steward = {"credited": None, "why": "the check could not run"}
+                credit = {"credited": None, "why": "the check could not run"}
                 print(f"[attribution] the check could not run: {e!r}", flush=True)
                 if re.search(r"\b(?:steward|owner)\b", ai_content, re.I):
                     stored_mode = UNVERIFIED
-        if steward.get("credited") and not steward.get("backed"):
+        if credit.get("credited") and not credit.get("backed"):
             stored_mode = UNVERIFIED
             # The kind of miss only - no figure and no words from the answer
             # go to the journal (37: what was said stays out of it).
             kind = ("no steward fact shown" if not retrieval.get("fact_texts")
-                    else "a figure not shown" if steward.get("figures")
+                    else "a figure not shown" if credit.get("figures")
                     else "words not shown")
             print(f"[attribution] credits the steward: {kind} - kept out of memory",
                   flush=True)
@@ -964,9 +966,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # Credits the steward, and whether what it credits him with was in
             # what he told it (logic/attribution.py). steward_backed is null
             # when the steward is not credited.
-            "steward_credited": bool(steward.get("credited")),
-            "steward_backed": steward.get("backed") if steward.get("credited") else None,
-            "steward_why": steward.get("why", "") if steward.get("credited") else "",
+            "steward_credited": bool(credit.get("credited")),
+            "steward_backed": credit.get("backed") if credit.get("credited") else None,
+            "steward_why": credit.get("why", "") if credit.get("credited") else "",
         }))
 
         # Store in AetherRoot
@@ -1067,7 +1069,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
             if stored_mode != "factual":
                 because = ("credits the steward with something not shown"
-                           if steward.get("credited") and not steward.get("backed")
+                           if credit.get("credited") and not credit.get("backed")
                            else mode_reason)
                 print(f"[provenance] stored as {stored_mode} ({because})", flush=True)
             record({
@@ -1082,9 +1084,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "checked": not check_failed,
                 "remembered": stored_ok,
                 "facts_used": retrieval.get("facts") or [],
-                "steward_credited": steward.get("credited"),
-                "steward_backed": steward.get("backed") if steward.get("credited") else None,
-                "steward_why": steward.get("why", "") if steward.get("credited") else "",
+                "steward_credited": credit.get("credited"),
+                "steward_backed": credit.get("backed") if credit.get("credited") else None,
+                "steward_why": credit.get("why", "") if credit.get("credited") else "",
                 "prompt": user_msg[:160],
                 "answer": ai_content[:160],
                 "speaker": speaker,
@@ -1146,14 +1148,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/aetherseed/rings":
             # The ring tree: every ring, what it chose, her own words (labelled
-            # by the page), and the turns it took. Read-only.
+            # by the page), the turns it took - and what the steward has done
+            # about it (guided correction, build log 50).
             try:
                 rings = root.store.ring_rows()
                 growing = root.get_status().get("rings")
+                notes = steward.status_for(root.store, "ring", [r["id"] for r in rings])
+                for r in rings:
+                    r["steward"] = notes.get(r["id"], {"support": None, "correction": None})
             except Exception as e:
                 self._send_json({"error": "rings unavailable", "detail": repr(e)[:160]}, status=500)
                 return
             self._send_json({"rings": rings, "growing": growing})
+            return
+        if self.path.split("?", 1)[0] == "/aetherseed/memories":
+            self._memories()
             return
         if self.path == "/aetherseed/record":
             entries = []
@@ -1186,9 +1195,86 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         self._proxy_passthrough("GET")
 
+    def _memories(self):
+        """The turns, newest first, for the steward to look through (build log
+        50): ?before=<id>&q=<words>&limit=<n>. Her words and the turn's, whole;
+        what the steward has done about each."""
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        def one(k, default=""):
+            return (qs.get(k) or [default])[0]
+        try:
+            before = int(one("before", "0")) or None
+            limit = max(1, min(int(one("limit", "30")), 100))
+        except ValueError:
+            self._send_json({"error": "bad request"}, status=400)
+            return
+        q = one("q").strip()[:80]
+        try:
+            rows = root.store.list_episodes(before_id=before, limit=limit + 1, query=q)
+            more = len(rows) > limit
+            rows = rows[:limit]
+            notes = steward.status_for(root.store, "turn", [r["id"] for r in rows])
+        except Exception as e:
+            self._send_json({"error": "memories unavailable", "detail": repr(e)[:160]}, status=500)
+            return
+        self._send_json({"turns": [{
+            "id": r["id"], "at": r["timestamp"], "speaker": r["speaker"],
+            "steward_turn": is_steward(r["speaker"]), "mode": r["mode"],
+            "user": r["user_msg"], "ai": r["ai_msg"],
+            "steward": notes.get(r["id"], {"support": None, "correction": None}),
+        } for r in rows], "more": more, "reasons": steward.REASONS,
+            "support_points": steward.SUPPORT_POINTS})
+
+    def _steward(self, body):
+        """Support, correct, or undo - from the console only (build log 50)."""
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            self._send_json({"error": "only on the device"}, status=403)
+            return
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            self._send_json({"error": "expected application/json"}, status=415)
+            return
+        try:
+            req = json.loads(body or b"{}")
+            if not isinstance(req, dict):
+                raise ValueError
+        except ValueError:
+            self._send_json({"error": "bad request"}, status=400)
+            return
+        log = os.path.join(os.path.dirname(PROVENANCE_LOG), "corrections.log")
+        action = req.get("action")
+        try:
+            if action == "support":
+                out = steward.support(root.store, trust, req.get("target"), req.get("id"),
+                                      log_path=log)
+            elif action == "correct":
+                out = steward.correct(root.store, req.get("target"), req.get("id"),
+                                      req.get("reason"), req.get("text") or "",
+                                      facts_max=root.config.get("facts_max", 250),
+                                      trust=trust, log_path=log)
+            elif action == "undo":
+                out = steward.undo(root.store, trust, req.get("note"), log_path=log)
+            else:
+                self._send_json({"error": "unknown action", "code": "bad_action"}, status=400)
+                return
+        except steward.StewardError as e:
+            self._send_json({"error": e.detail, "code": e.code}, status=400)
+            return
+        except Exception as e:
+            print(f"[steward] {action} failed: {e!r}", flush=True)
+            self._send_json({"error": "could not be saved", "code": "failed"}, status=500)
+            return
+        print(f"[steward] {action} {req.get('target') or ''} "
+              f"{req.get('id') or req.get('note') or ''}", flush=True)
+        self._send_json(dict(out, ok=True))
+
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        if self.path == "/aetherseed/steward":
+            self._steward(body)
+            return
 
         if self.path == "/aetherseed/setup":
             # First run: the steward names the companion and picks its language.

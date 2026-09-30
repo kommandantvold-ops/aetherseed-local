@@ -37,7 +37,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Only these reach the backend. An allow-list rather than a prefix match, so a
 # future route on the proxy is not exposed to the browser by accident.
-PROXIED_POST = ("/api/chat", "/aetherseed/setup")
+# /aetherseed/steward: guided correction (build log 50) - the steward supports
+# or corrects a turn or a ring. The console's only way to change what the
+# companion remembers; the proxy checks and records every one.
+PROXIED_POST = ("/api/chat", "/aetherseed/setup", "/aetherseed/steward")
 
 # SHUTDOWN. So the device can be moved without pulling the plug on a running
 # SQLite store. The console cannot power anything off - it runs unprivileged
@@ -52,7 +55,10 @@ SHUTDOWN_REQUEST = os.environ.get("AETHERSEED_SHUTDOWN_REQUEST",
                                   "/run/aetherseed-gui/shutdown-request")
 SHUTDOWN_CONFIRM = "shut down"
 # /aetherseed/rings: the ring tree (step 37) - read-only, like the record.
+# /aetherseed/memories: the turns, for guided correction (50); it takes a query
+# string (?before=&q=&limit=), so it is matched on its path alone.
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", "/api/tags")
+PROXIED_GET_QUERY = ("/aetherseed/memories",)
 
 # The page's own script is pinned by the hash of its bytes.
 #
@@ -200,6 +206,10 @@ class Console(http.server.SimpleHTTPRequestHandler):
             ).encode())
 
     def do_GET(self):
+        if self.path.split("?", 1)[0] in PROXIED_GET_QUERY:
+            _tally("memories")
+            self._relay("GET")
+            return
         if self.path in PROXIED_GET:
             _tally("status" if self.path.endswith("/status")
                    else "record" if self.path.endswith("/record")
@@ -261,7 +271,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
             _tally("refused")
             self.send_error(404)
             return
-        _tally("setup" if self.path == "/aetherseed/setup" else "chat")
+        _tally("setup" if self.path == "/aetherseed/setup"
+               else "steward" if self.path == "/aetherseed/steward" else "chat")
         n = int(self.headers.get("Content-Length", 0))
         self._relay("POST", self.rfile.read(n) if n else b"")
 

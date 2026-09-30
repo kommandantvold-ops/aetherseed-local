@@ -251,6 +251,27 @@ class MemoryStore:
                 revoked_at  TEXT
             );
 
+            -- What the steward did about a turn or a ring from the console:
+            -- supported it, or corrected it (guided correction, build log 50).
+            -- Nothing here rewrites what was said: a corrected turn has its
+            -- mode set to 'unverified' (prior_mode kept, so it can be put
+            -- back); a corrected ring is left out of retrieval while its note
+            -- is active; what the steward wrote is a fact (fact_id), word for
+            -- word and attributed. Undone notes are kept, with undone_at.
+            CREATE TABLE IF NOT EXISTS steward_notes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT NOT NULL,
+                target      TEXT NOT NULL,         -- 'turn' | 'ring'
+                target_id   INTEGER NOT NULL,      -- episodes.id | semantic.id
+                action      TEXT NOT NULL,         -- 'support' | 'correct'
+                reason      TEXT NOT NULL DEFAULT '',
+                text        TEXT NOT NULL DEFAULT '',
+                fact_id     INTEGER,
+                prior_mode  TEXT NOT NULL DEFAULT '',
+                trust_points REAL NOT NULL DEFAULT 0,
+                undone_at   TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS identity (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 trait       TEXT NOT NULL UNIQUE,
@@ -451,7 +472,7 @@ class MemoryStore:
         out = []
         for s in rings:
             ids = [int(i) for i in str(s["source_ids"]).split(",") if i.strip()]
-            out.append({"ring": s["ring_no"], "closed_at": s["created_at"],
+            out.append({"id": s["id"], "ring": s["ring_no"], "closed_at": s["created_at"],
                         "content": s["content"], "own_words": s["own_words"],
                         "own_words_note": s["own_words_note"],
                         "turns": [{"id": i,
@@ -503,6 +524,93 @@ class MemoryStore:
                           (datetime.now(timezone.utc).isoformat() if revoked else None,
                            fact_id))
         self.conn.commit()
+
+    # ---- the steward's notes (logic/steward.py) --------------------------------
+
+    _NOTE_COLS = ("id", "created_at", "target", "target_id", "action", "reason",
+                  "text", "fact_id", "prior_mode", "trust_points", "undone_at")
+
+    def steward_notes(self, target: Optional[str] = None, target_ids=None,
+                      active_only: bool = True) -> List[Dict]:
+        q = "SELECT " + ", ".join(self._NOTE_COLS) + " FROM steward_notes"
+        where, args = [], []
+        if active_only:
+            where.append("undone_at IS NULL")
+        if target:
+            where.append("target = ?")
+            args.append(target)
+        if target_ids is not None:
+            ids = [int(i) for i in target_ids]
+            if not ids:
+                return []
+            where.append("target_id IN (%s)" % ",".join("?" * len(ids)))
+            args.extend(ids)
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        return [dict(zip(self._NOTE_COLS, r))
+                for r in self.conn.execute(q + " ORDER BY id", args)]
+
+    def steward_note(self, note_id: int) -> Optional[Dict]:
+        r = self.conn.execute("SELECT " + ", ".join(self._NOTE_COLS) +
+                              " FROM steward_notes WHERE id = ?", (int(note_id),)).fetchone()
+        return dict(zip(self._NOTE_COLS, r)) if r else None
+
+    def add_steward_note(self, target: str, target_id: int, action: str,
+                         reason: str = "", text: str = "", fact_id=None,
+                         prior_mode: str = "", trust_points: float = 0) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO steward_notes (created_at, target, target_id, action, reason, "
+            "text, fact_id, prior_mode, trust_points) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), target, int(target_id), action,
+             reason or "", text or "", fact_id, prior_mode or "", float(trust_points)))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def undo_steward_note(self, note_id: int):
+        self.conn.execute("UPDATE steward_notes SET undone_at = ? WHERE id = ?",
+                          (datetime.now(timezone.utc).isoformat(), int(note_id)))
+        self.conn.commit()
+
+    def set_aside_ring_ids(self) -> set:
+        """semantic ids of the rings the steward has corrected (active notes)."""
+        return {r[0] for r in self.conn.execute(
+            "SELECT target_id FROM steward_notes WHERE target = 'ring' "
+            "AND action = 'correct' AND undone_at IS NULL")}
+
+    def episode(self, episode_id: int) -> Optional[Dict]:
+        cols = ("id", "timestamp", "speaker", "mode", "user_msg", "ai_msg")
+        r = self.conn.execute("SELECT " + ", ".join(cols) + " FROM episodes WHERE id = ?",
+                              (int(episode_id),)).fetchone()
+        return dict(zip(cols, r)) if r else None
+
+    def set_episode_mode(self, episode_id: int, mode: str):
+        self.conn.execute("UPDATE episodes SET mode = ? WHERE id = ?", (mode, int(episode_id)))
+        self.conn.commit()
+
+    def ring_by_id(self, semantic_id: int) -> Optional[Dict]:
+        r = self.conn.execute("SELECT id, ring_no, content FROM semantic WHERE id = ?",
+                              (int(semantic_id),)).fetchone()
+        return {"id": r[0], "ring_no": r[1], "content": r[2]} if r else None
+
+    def list_episodes(self, before_id: Optional[int] = None, limit: int = 30,
+                      query: str = "") -> List[Dict]:
+        """Turns for the console's memory view, newest first, without their
+        embeddings. `query` matches either side of the turn, case-blind."""
+        cols = ("id", "timestamp", "speaker", "mode", "user_msg", "ai_msg")
+        where, args = [], []
+        if before_id:
+            where.append("id < ?")
+            args.append(int(before_id))
+        if query:
+            where.append("(user_msg LIKE ? ESCAPE '\\' OR ai_msg LIKE ? ESCAPE '\\')")
+            like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            args += [like, like]
+        q = "SELECT " + ", ".join(cols) + " FROM episodes"
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY id DESC LIMIT ?"
+        args.append(int(limit))
+        return [dict(zip(cols, r)) for r in self.conn.execute(q, args)]
 
     def get_rings(self) -> Dict:
         """How many rings have closed, and when the latest one did.
@@ -781,6 +889,12 @@ class AetherRoot:
         # Get episodic + semantic memories
         episodes = self.store.get_all_episodes()
         semantics = self.store.get_all_semantic()
+        # A ring the steward corrected from the console is not used while the
+        # correction stands (guided correction, logic/steward.py). It stays in
+        # the table and on the ring tree, marked; undone, it comes back.
+        set_aside = self.store.set_aside_ring_ids()
+        if set_aside:
+            semantics = [m for m in semantics if m.get("id") not in set_aside]
 
         # Combine and format for retrieval
         all_memories = []

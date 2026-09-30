@@ -138,8 +138,14 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         for path in serve.PROXIED_POST:
             with self.subTest(path=path):
                 self.assertEqual(self._req("POST", path, b"{}")[0], 502)
-        self.assertEqual(set(serve.PROXIED_POST), {"/api/chat", "/aetherseed/setup"},
+        self.assertEqual(set(serve.PROXIED_POST),
+                         {"/api/chat", "/aetherseed/setup", "/aetherseed/steward"},
                          "a new POST route reaches the proxy only by being added here on purpose")
+        # guided correction's list takes a query string, matched on its path (50)
+        self.assertEqual(self._req("GET", "/aetherseed/memories?limit=5&q=cat")[0], 502)
+        self.assertEqual(self._req("GET", "/aetherseed/memories")[0], 502)
+        self.assertEqual(self._req("GET", "/aetherseed/memoriesX?q=1")[0], 404)
+        self.assertEqual(self._req("GET", "/aetherseed/status?x=1")[0], 404)
 
     def test_the_model_cannot_be_reached_around_the_guards(self):
         # /api/generate goes to the model with none of the proxy's guards.
@@ -153,9 +159,10 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self._req("GET", "/nope")
         self.assertEqual(serve._counts["page"], before["page"] + 1)
         self.assertEqual(serve._counts["refused"], before["refused"] + 1)
-        self.assertEqual(set(serve._counts),
-                         {"page", "status", "record", "rings", "chat", "setup", "refused"},
-                         "the heartbeat keeps counts by route and nothing else")
+        self.assertLessEqual(set(serve._counts),
+                             {"page", "status", "record", "rings", "chat", "setup", "refused",
+                              "memories", "steward"},
+                             "the heartbeat keeps counts by route and nothing else")
 
 
 
@@ -170,8 +177,11 @@ class TheRingTree(unittest.TestCase):
         for key in ("told:", "usedFacts:", "usedRing:", "treeTitle:", "treeHelp:", "chosen:",
                     "ownWords:", "ownPending:", "ownWithheld:", "ringHead:", "growing:",
                     "noRings:", "noTree:", "steward:", "unknown:"):
+            en = self.HTML[self.HTML.index("  en: {"):self.HTML.index("  nb: {")]
+            nb = self.HTML[self.HTML.index("  nb: {"):self.HTML.index("\n};\n")]
             with self.subTest(key=key):
-                self.assertEqual(2, self.HTML.count(key + " "), key)
+                self.assertEqual(1, en.count(key + " "), key)
+                self.assertEqual(1, nb.count(key + " "), key)
 
     def test_what_people_and_the_model_said_is_never_markup(self):
         script = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", self.HTML, re.S))
@@ -181,6 +191,30 @@ class TheRingTree(unittest.TestCase):
     def test_the_rings_are_relayed_read_only(self):
         self.assertIn("/aetherseed/rings", serve.PROXIED_GET)
         self.assertNotIn("/aetherseed/rings", serve.PROXIED_POST)
+
+    def test_guided_correction_speaks_both_languages(self):
+        for key in ("memTitle:", "tabRings:", "tabTurns:", "ringsHelp:", "turnsHelp:",
+                    "right:", "wrong:", "undo:", "supported:", "corrected:", "supportAsk:",
+                    "capped:", "q1:", "reasons:", "q2:", "q2opt:", "q3:", "willTurn:",
+                    "willRing:", "willFact:", "willSupportGone:", "willUndo:", "confirm:",
+                    "stewardErrors:"):
+            en = self.HTML[self.HTML.index("  en: {"):self.HTML.index("  nb: {")]
+            nb = self.HTML[self.HTML.index("  nb: {"):self.HTML.index("\n};\n")]
+            with self.subTest(key=key):
+                for block in (en, nb):
+                    self.assertRegex(block, r"[\s{,]" + re.escape(key) + r" ", key)
+
+    def test_a_correction_says_what_will_change_before_it_is_made(self):
+        # step 3 of the guide lists the change and the undo; only its button
+        # sends the correction.
+        script = self.HTML[self.HTML.index("const step3"):]
+        self.assertLess(script.index("s.willUndo"), script.index("action: 'correct'"))
+        self.assertEqual(1, self.HTML.count("action: 'correct'"))
+
+    def test_the_steward_route_is_the_only_way_to_change_memory(self):
+        self.assertIn("/aetherseed/steward", serve.PROXIED_POST)
+        self.assertIn("/aetherseed/memories", serve.PROXIED_GET_QUERY)
+        self.assertNotIn("/aetherseed/memories", serve.PROXIED_POST)
 
     def test_her_own_words_are_always_labelled(self):
         # The label is in the same string as the words - there is no way to

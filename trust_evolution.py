@@ -63,6 +63,10 @@ RESONANCE_EVENTS = {
     "task_completed":    3,
     "stable_session":    2,
     "quest_contribution": 8,
+    # The steward marks a turn or ring as right on the console (logic/steward.py,
+    # build log 50) - capped there at 10 a day, once per memory; undone, taken back.
+    "steward_support":    2,
+    "steward_support_withdrawn": -2,
     "probe_failed":    -15,
     "confabulation":   -20,
 }

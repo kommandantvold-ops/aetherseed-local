@@ -4,9 +4,11 @@ correct_memory.py — an operator marks a stored answer as not to be used again.
 
 WHY THIS EXISTS
 ---------------
-The steward must not be able to tamper with the node's memory from the console.
-That is a security barrier and a design decision (Andreas, 23 Sep), and it
-holds. But a wrong answer, once stored `factual`, is retrieved as context and
+When this was written the owner could not change the node's memory from the
+console - a barrier and a design decision (Andreas, 23 Sep). Since 30 Sep the
+steward can, through guided correction (logic/steward.py, build log 50):
+supported, corrected, undone - nothing erased, every step in the same
+corrections.log. This tool stays for the operator. But a wrong answer, once stored `factual`, is retrieved as context and
 becomes grounding for its own repetition - measured on this unit the same day
 (build log 26e). Something has to be able to say "that one does not come back",
 and it has to leave a trail.

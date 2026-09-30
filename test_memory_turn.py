@@ -47,6 +47,7 @@ for _name, _attrs in _NAMES.items():
             store_interaction=lambda *_, **__: None,
             get_status=lambda: {"episodes": 0, "willingness_mean": 0.0}))
     sys.modules[_name] = _m
+sys.modules["aetherspark"].TRUST_PERMISSIONS = {"observer": [1], "reader": [1, 2]}
 import proxy  # noqa: E402
 for _name, _mod in _SAVED.items():
     if _mod is None:

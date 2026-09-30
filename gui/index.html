@@ -23,6 +23,8 @@
   }
 }
 *{box-sizing:border-box}
+/* [hidden] must win over a class that sets display (.search, .card .row). */
+[hidden]{display:none !important}
 html,body{height:100%}
 body{
   margin:0; background:var(--ground); color:var(--ink);
@@ -132,6 +134,29 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
 .ring ol{margin:8px 0 0; padding-left:4px; list-style:none; font-size:13px; color:var(--ink-3)}
 .ring li{margin:2px 0; overflow-wrap:anywhere}
 .tree .growing{font-size:13px; color:var(--ink-3)}
+
+/* Guided correction (build log 50): the steward supports or corrects a turn or
+   a ring. Everything the model or a person said is set as text, never markup. */
+.tabs{display:flex; gap:8px; margin:10px 0 4px}
+.tabs button[aria-pressed="true"]{color:var(--ink); border-color:var(--accent); background:var(--accent-soft)}
+.search{display:flex; gap:8px; margin:10px 0 0}
+.search input{flex:1; font-size:15px}
+.mem{border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px; background:var(--surface-2)}
+.mem .head{font-size:12px; color:var(--ink-3); letter-spacing:.02em}
+.mem .said{font-size:14px; margin:6px 0 0; white-space:pre-wrap; overflow-wrap:anywhere}
+.mem .said b{font-weight:600; color:var(--ink-2)}
+.state{font-size:13px; margin:8px 0 0}
+.state.ok{color:var(--accent)} .state.fix{color:var(--brass)} .state.aside{color:var(--ink-3)}
+.acts{display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 0}
+.guide{border-top:1px solid var(--line); margin:10px 0 0; padding:10px 0 0; display:flex; flex-direction:column; gap:8px}
+.guide h2{font-size:14px; margin:0; font-weight:600}
+.guide .choices{display:flex; flex-direction:column; gap:6px}
+.guide .choices button{text-align:left; font-size:14px; color:var(--ink)}
+.guide textarea{width:100%; min-height:70px; font-size:15px}
+.guide .count{font-size:12px; color:var(--ink-3); text-align:right}
+.guide ul{margin:0; padding-left:18px; font-size:14px; color:var(--ink-2)}
+.guide .err{color:var(--alarm); font-size:13px}
+.ring .acts{margin-top:10px}
 </style>
 </head>
 <body>
@@ -140,7 +165,7 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
   <div class="chips">
     <span class="chip"><span class="dot" id="health"></span><span id="healthText"></span></span>
     <span class="chip"><span id="trustLabel"></span> <b id="trust">–</b></span>
-    <span class="chip"><span id="memoryLabel"></span> <b id="episodes">–</b></span>
+    <button type="button" class="chip" id="memoryChip"><span id="memoryLabel"></span> <b id="episodes">–</b></button>
     <button type="button" class="chip" id="rings">–</button>
     <span class="chip" id="modelChip">–</span>
     <button id="recordBtn"></button>
@@ -184,8 +209,17 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
 <div class="setup" id="tree" hidden>
   <div class="card wide">
     <div class="top"><h1 id="treeTitle"></h1><button type="button" id="treeClose"></button></div>
+    <div class="tabs" role="group">
+      <button type="button" id="tabRings" aria-pressed="true"></button>
+      <button type="button" id="tabTurns" aria-pressed="false"></button>
+    </div>
     <p class="help" id="treeHelp"></p>
+    <form class="search" id="turnSearch" hidden>
+      <input id="turnQuery" maxlength="80" autocomplete="off" spellcheck="false">
+      <button type="submit" id="turnFind"></button>
+    </form>
     <div class="tree" id="treeBody"></div>
+    <div class="row" id="turnMoreRow" hidden><button type="button" id="turnMore"></button></div>
   </div>
 </div>
 
@@ -245,6 +279,38 @@ const T = {
     steward: 'steward', unknown: 'unknown',
     ringOf: (i, o) => `${i} of ${o}`,
     lastRing: (ago) => `last ring ${ago}`,
+    // guided correction (build log 50)
+    memTitle: 'Memory', tabRings: 'Rings', tabTurns: 'Turns',
+    ringsHelp: 'You can mark a ring as right, or say what is wrong with it.',
+    turnsHelp: (n) => `Every turn ${n || 'the companion'} remembers, newest first. Mark what is right, or say what is wrong — a correction takes effect at once and you can undo it here. Nothing is deleted.`,
+    find: 'Find', findHint: 'Words from the turn…', more: 'Show older',
+    noTurns: 'No turns.', noMem: 'Could not read the memory.',
+    turnHead: (id, w, when) => `#${id} · ${w} · ${when}`,
+    memUsed: 'used as memory', memAside: 'set aside by the checks — not used as memory',
+    memFiction: 'kept as fiction',
+    right: 'It’s right', wrong: 'Something’s wrong', undo: 'Undo', cancel: 'Cancel',
+    supported: (p) => p ? `You marked this as right (+${p} trust).` : 'You marked this as right.',
+    corrected: (r, x) => `You corrected this: ${r}.` + (x ? ` You wrote: “${x}”` : ''),
+    supportAsk: (n, p) => `Mark this as right? It adds ${p} to ${n || 'the companion'}’s trust — at most 10 a day. A new level takes effect at the next start.`,
+    supportGo: 'Mark as right',
+    capped: 'Marked as right. Today’s trust from marking is used up, so this one adds none.',
+    q1: 'What’s wrong with this?',
+    reasons: { never: 'This never happened', part: 'Part of it is wrong',
+               about: 'This was about something else', detail: 'A name or detail is wrong' },
+    q2: 'What’s true? In your own words — it is kept word for word, as yours.',
+    q2opt: 'Anything to add? You can leave this empty.',
+    q3: 'Here’s what will change:',
+    willTurn: 'This turn is no longer used as memory, and will not go into a ring.',
+    willRing: 'This ring is no longer used as memory.',
+    willFact: (x) => `What you wrote is remembered as yours, word for word: “${x}”`,
+    willSupportGone: 'Your earlier “It’s right” on this is taken back.',
+    willUndo: 'You can undo this here at any time. Nothing is deleted.',
+    next: 'Next', confirm: 'Correct it', back: 'Back',
+    stewardErrors: { text_required: 'Say what is true.', too_long: 'That is too long.',
+                     characters: 'Brackets, vertical bars and line breaks cannot be kept.',
+                     too_many_facts: 'The companion holds as many of your facts as it can.',
+                     already_corrected: 'This is already corrected.', already_supported: 'This is already marked as right.',
+                     corrected: 'Undo the correction first.', failed: 'Could not be saved.' },
     ago: (m) => m < 1 ? 'just now' : m < 60 ? `${m} min ago`
       : m < 2880 ? `${Math.floor(m / 60)} h ago` : `${Math.floor(m / 1440)} days ago`,
     fromRecord: 'from the record, not the model',
@@ -295,6 +361,37 @@ const T = {
     steward: 'forvalter', unknown: 'ukjent',
     ringOf: (i, o) => `${i} av ${o}`,
     lastRing: (ago) => `siste årring ${ago}`,
+    memTitle: 'Minne', tabRings: 'Årringer', tabTurns: 'Samtaler',
+    ringsHelp: 'Du kan merke en årring som riktig, eller si hva som er feil med den.',
+    turnsHelp: (n) => `Alt ${n || 'følgesvennen'} husker fra samtalene, nyeste først. Merk det som stemmer, eller si hva som er feil — en rettelse gjelder med én gang, og du kan angre den her. Ingenting slettes.`,
+    find: 'Finn', findHint: 'Ord fra samtalen…', more: 'Vis eldre',
+    noTurns: 'Ingen samtaler.', noMem: 'Kunne ikke lese minnet.',
+    turnHead: (id, w, when) => `#${id} · ${w} · ${when}`,
+    memUsed: 'brukes som minne', memAside: 'lagt til side av kontrollene — brukes ikke som minne',
+    memFiction: 'tatt vare på som fiksjon',
+    right: 'Det stemmer', wrong: 'Noe er feil', undo: 'Angre', cancel: 'Avbryt',
+    supported: (p) => p ? `Du merket dette som riktig (+${p} tillit).` : 'Du merket dette som riktig.',
+    corrected: (r, x) => `Du rettet dette: ${r}.` + (x ? ` Du skrev: «${x}»` : ''),
+    supportAsk: (n, p) => `Merke dette som riktig? Det gir ${n || 'følgesvennen'} ${p} i tillit — høyst 10 om dagen. Et nytt nivå gjelder fra neste oppstart.`,
+    supportGo: 'Merk som riktig',
+    capped: 'Merket som riktig. Dagens tillit fra merking er brukt opp, så denne gir ingen.',
+    q1: 'Hva er feil med dette?',
+    reasons: { never: 'Dette har aldri skjedd', part: 'En del av det er feil',
+               about: 'Dette handlet om noe annet', detail: 'Et navn eller en detalj er feil' },
+    q2: 'Hva er riktig? Med dine egne ord — det lagres ordrett, som ditt.',
+    q2opt: 'Noe å legge til? Du kan la dette stå tomt.',
+    q3: 'Dette blir endret:',
+    willTurn: 'Denne samtalen brukes ikke lenger som minne, og kommer ikke med i en årring.',
+    willRing: 'Denne årringen brukes ikke lenger som minne.',
+    willFact: (x) => `Det du skrev huskes som ditt, ordrett: «${x}»`,
+    willSupportGone: 'Din tidligere «Det stemmer» på dette trekkes tilbake.',
+    willUndo: 'Du kan angre dette her når som helst. Ingenting slettes.',
+    next: 'Neste', confirm: 'Rett det', back: 'Tilbake',
+    stewardErrors: { text_required: 'Si hva som er riktig.', too_long: 'Det er for langt.',
+                     characters: 'Klammer, loddrette streker og linjeskift kan ikke lagres.',
+                     too_many_facts: 'Følgesvennen har så mange av dine fakta den kan ha.',
+                     already_corrected: 'Dette er allerede rettet.', already_supported: 'Dette er allerede merket som riktig.',
+                     corrected: 'Angre rettelsen først.', failed: 'Kunne ikke lagres.' },
     ago: (m) => m < 1 ? 'nå nettopp' : m < 60 ? `for ${m} min siden`
       : m < 2880 ? `for ${Math.floor(m / 60)} t siden` : `for ${Math.floor(m / 1440)} dager siden`,
     fromRecord: 'fra loggen, ikke fra modellen',
@@ -533,15 +630,178 @@ function who(s, speaker) {
   return speaker || s.unknown;
 }
 
-async function openTree() {
+// ---- memory: the ring tree and the turns, with guided correction -----------
+// Build log 50 (Andreas, 30 Sep): "a guided correction where I can see and
+// select memories and consolidations and make suggestions and support."
+// Structured, not a free-text box (handover 4d): what is wrong, what is true,
+// what will change - then confirm. The proxy checks and records every step
+// (logic/steward.py); this page only asks.
+const MAX_TRUE = 280;             // what fits a fact line with its source
+let memTab = 'rings', turnQuery = '', oldestTurn = null;
+
+async function steward(body) {
+  const r = await fetch('/aetherseed/steward', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body) });
+  let d = {};
+  try { d = await r.json(); } catch {}
+  if (!r.ok) throw Object.assign(new Error(d.error || String(r.status)), { code: d.code || 'failed' });
+  return d;
+}
+
+// The status line and the buttons under one turn or ring. `item` carries
+// {target, id, steward:{support, correction}}; `redraw` re-renders it.
+function actions(box, item, redraw) {
   const s = t();
-  $('treeTitle').textContent = s.treeTitle;
-  $('treeHelp').textContent = s.treeHelp;
+  box.querySelectorAll('.state.steward, .acts, .guide').forEach((e) => e.remove());
+  const st = item.steward || {};
+  if (st.support) box.append(el('p', 'state ok steward', s.supported(st.support.trust_points)));
+  if (st.correction) box.append(el('p', 'state fix steward',
+    s.corrected((s.reasons[st.correction.reason] || st.correction.reason).toLowerCase(), st.correction.text)));
+  const acts = el('div', 'acts');
+  const note = st.correction || st.support;
+  if (note) {
+    const u = el('button', null, s.undo);
+    u.onclick = async () => {
+      u.disabled = true;
+      try {
+        const d = await steward({ action: 'undo', note: note.id });
+        item.steward = {}; if (d.mode) item.mode = d.mode; redraw();
+      }
+      catch (e) { u.disabled = false; acts.append(el('span', 'err', s.stewardErrors[e.code] || s.stewardErrors.failed)); }
+    };
+    acts.append(u);
+  }
+  if (!st.correction && !st.support) {
+    const ok = el('button', null, s.right);
+    ok.onclick = () => askSupport(box, item, redraw);
+    acts.append(ok);
+  }
+  if (!st.correction) {
+    const bad = el('button', null, s.wrong);
+    bad.onclick = () => guide(box, item, redraw);
+    acts.append(bad);
+  }
+  box.append(acts);
+}
+
+function panel(box) {
+  box.querySelectorAll('.guide').forEach((e) => e.remove());
+  const g = el('div', 'guide'); box.append(g); return g;
+}
+
+function askSupport(box, item, redraw) {
+  const s = t(), g = panel(box);
+  g.append(el('h2', null, s.supportAsk(name, supportPoints)));
+  const row = el('div', 'acts');
+  const go = el('button', 'send', s.supportGo), no = el('button', null, s.cancel);
+  no.onclick = () => g.remove();
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      const d = await steward({ action: 'support', target: item.target, id: item.id });
+      item.steward = { support: d.note, correction: null };
+      redraw();
+      if (d.capped) box.append(el('p', 'state aside steward', s.capped));
+    } catch (e) {
+      go.disabled = false; g.append(el('p', 'err', s.stewardErrors[e.code] || s.stewardErrors.failed));
+    }
+  };
+  row.append(go, no); g.append(row);
+}
+
+function guide(box, item, redraw) {
+  const s = t();
+  let reason = null, text = '';
+  const step1 = () => {
+    const g = panel(box);
+    g.append(el('h2', null, s.q1));
+    const ch = el('div', 'choices');
+    for (const k of Object.keys(s.reasons)) {
+      const b = el('button', null, s.reasons[k]);
+      b.onclick = () => { reason = k; step2(); };
+      ch.append(b);
+    }
+    const no = el('button', null, s.cancel); no.onclick = () => g.remove();
+    g.append(ch, el('div', 'acts')); g.lastChild.append(no);
+    ch.querySelector('button')?.focus();
+  };
+  const step2 = () => {
+    const g = panel(box);
+    g.append(el('h2', null, reason === 'never' ? s.q2opt : s.q2));
+    const ta = el('textarea'); ta.maxLength = MAX_TRUE; ta.value = text;
+    const count = el('div', 'count', `${ta.value.length} / ${MAX_TRUE}`);
+    const err = el('p', 'err'); err.hidden = true;
+    ta.oninput = () => { count.textContent = `${ta.value.length} / ${MAX_TRUE}`; };
+    const row = el('div', 'acts');
+    const back = el('button', null, s.back), next = el('button', 'send', s.next);
+    back.onclick = step1;
+    next.onclick = () => {
+      text = ta.value.replace(/\s+/g, ' ').trim();
+      if (!text && reason !== 'never') { err.textContent = s.stewardErrors.text_required; err.hidden = false; return; }
+      if (/[\[\]|]/.test(text)) { err.textContent = s.stewardErrors.characters; err.hidden = false; return; }
+      step3();
+    };
+    row.append(back, next); g.append(ta, count, err, row); ta.focus();
+  };
+  const step3 = () => {
+    const g = panel(box);
+    g.append(el('h2', null, s.q3));
+    const ul = el('ul');
+    ul.append(el('li', null, item.target === 'turn' ? s.willTurn : s.willRing));
+    if (text) ul.append(el('li', null, s.willFact(text)));
+    if ((item.steward || {}).support) ul.append(el('li', null, s.willSupportGone));
+    ul.append(el('li', null, s.willUndo));
+    const err = el('p', 'err'); err.hidden = true;
+    const row = el('div', 'acts');
+    const back = el('button', null, s.back), go = el('button', 'send', s.confirm);
+    back.onclick = step2;
+    go.onclick = async () => {
+      go.disabled = true;
+      try {
+        const d = await steward({ action: 'correct', target: item.target, id: item.id, reason, text });
+        item.steward = { support: null, correction: d.note };
+        if (item.target === 'turn') item.mode = 'unverified';
+        redraw();
+      } catch (e) {
+        go.disabled = false; err.textContent = s.stewardErrors[e.code] || e.message || s.stewardErrors.failed; err.hidden = false;
+      }
+    };
+    row.append(back, go); g.append(ul, err, row); go.focus();
+  };
+  step1();
+}
+
+let supportPoints = 2;
+
+function setTab(tab) {
+  memTab = tab;
+  $('tabRings').setAttribute('aria-pressed', String(tab === 'rings'));
+  $('tabTurns').setAttribute('aria-pressed', String(tab === 'turns'));
+  $('turnSearch').hidden = tab !== 'turns';
+  $('turnMoreRow').hidden = true;
+  const s = t();
+  $('treeHelp').textContent = tab === 'rings' ? `${s.treeHelp} ${s.ringsHelp}` : s.turnsHelp(name);
+  $('treeBody').replaceChildren();
+  (tab === 'rings' ? loadRings : () => loadTurns(true))();
+}
+
+async function openMemory(tab) {
+  const s = t();
+  $('treeTitle').textContent = s.memTitle;
   $('treeClose').textContent = s.close;
-  const body = $('treeBody');
-  body.replaceChildren();
+  $('tabRings').textContent = s.tabRings;
+  $('tabTurns').textContent = s.tabTurns;
+  $('turnFind').textContent = s.find;
+  $('turnQuery').placeholder = s.findHint;
+  $('turnMore').textContent = s.more;
   $('tree').hidden = false;
   $('treeClose').focus();
+  setTab(tab);
+}
+
+async function loadRings() {
+  const s = t(), body = $('treeBody');
   let d;
   try {
     const r = await fetch('/aetherseed/rings');
@@ -551,6 +811,7 @@ async function openTree() {
     body.append(el('p', 'growing', s.noTree));
     return;
   }
+  if (memTab !== 'rings') return;
   const rings = d.rings || [];
   if (!rings.length) body.append(el('p', 'growing', s.noRings));
   for (const ring of rings) {
@@ -570,12 +831,71 @@ async function openTree() {
       list.append(el('li', null, `#${tu.id} · ${who(s, tu.speaker)} · ${tu.user || ''}`));
     }
     node.append(list);
+    const item = { target: 'ring', id: ring.id, steward: ring.steward || {} };
+    const redraw = () => {
+      const sum = node.querySelector('summary');
+      sum.textContent = s.ringHead(ring.ring, (ring.turns || []).length, m == null ? '–' : s.ago(m))
+        + (item.steward.correction ? ' · ✎' : item.steward.support ? ' · ✓' : '');
+      actions(node, item, redraw);
+    };
+    redraw();
     body.append(node);
   }
   const g = d.growing;
   if (g && g.of) body.append(el('p', 'growing', s.growing(g.into, g.of)));
 }
-$('rings').onclick = openTree;
+
+async function loadTurns(fresh) {
+  const s = t(), body = $('treeBody');
+  if (fresh) { body.replaceChildren(); oldestTurn = null; }
+  const qs = new URLSearchParams({ limit: '30' });
+  if (oldestTurn) qs.set('before', String(oldestTurn));
+  if (turnQuery) qs.set('q', turnQuery);
+  let d;
+  try {
+    const r = await fetch('/aetherseed/memories?' + qs.toString());
+    if (!r.ok) throw new Error(String(r.status));
+    d = await r.json();
+  } catch {
+    body.append(el('p', 'growing', s.noMem));
+    return;
+  }
+  if (memTab !== 'turns') return;
+  if (d.support_points != null) supportPoints = d.support_points;
+  const turns = d.turns || [];
+  if (fresh && !turns.length) body.append(el('p', 'growing', s.noTurns));
+  for (const tu of turns) {
+    oldestTurn = tu.id;
+    const box = el('div', 'mem');
+    const m = minutesSince(tu.at);
+    box.append(el('div', 'head', s.turnHead(tu.id, who(s, tu.speaker), m == null ? '–' : s.ago(m))));
+    const said = el('p', 'said');
+    said.append(el('b', null, `${who(s, tu.speaker)}: `), document.createTextNode(tu.user || ''));
+    const answer = el('p', 'said');
+    answer.append(el('b', null, `${name || '–'}: `), document.createTextNode(tu.ai || ''));
+    box.append(said, answer);
+    const item = { target: 'turn', id: tu.id, mode: tu.mode, steward: tu.steward || {} };
+    const modeLine = el('p', 'state aside');
+    box.append(modeLine);
+    const redraw = () => {
+      const corrected = !!(item.steward || {}).correction;
+      modeLine.hidden = corrected;
+      modeLine.textContent = item.mode === 'unverified' ? s.memAside
+        : item.mode === 'fiction' ? s.memFiction : s.memUsed;
+      actions(box, item, redraw);
+    };
+    redraw();
+    body.append(box);
+  }
+  $('turnMoreRow').hidden = !d.more;
+}
+
+$('rings').onclick = () => openMemory('rings');
+$('memoryChip').onclick = () => openMemory('turns');
+$('tabRings').onclick = () => setTab('rings');
+$('tabTurns').onclick = () => setTab('turns');
+$('turnSearch').onsubmit = (e) => { e.preventDefault(); turnQuery = $('turnQuery').value.trim(); loadTurns(true); };
+$('turnMore').onclick = () => loadTurns(false);
 $('treeClose').onclick = () => { $('tree').hidden = true; };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('tree').hidden) $('tree').hidden = true;
