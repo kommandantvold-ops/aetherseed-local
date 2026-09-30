@@ -56,7 +56,7 @@ class OrdinaryLanguageRunsNothing(unittest.TestCase):
         song, probes = rs.load_texts(TEXTS)
         messages = [rs.INTRO] + [rs.verse_message(v) for v in song]
         for p in probes["facts"]:
-            messages += [p["ask"], p["ask_owner"]]
+            messages += [p["ask"], p["ask_steward"]]
         messages += [r["ask"] for r in probes["rings"]]
         self.assertGreater(len(messages), 170)
         self.assertNothing(messages)

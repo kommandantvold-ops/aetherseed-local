@@ -2,7 +2,7 @@
 
     python3 -m unittest test_companion -v
 
-The name is chosen by the owner at first run and goes into the system prompt,
+The name is chosen by the steward at first run and goes into the system prompt,
 which makes it the fourth untrusted-input path into this node's prompt (a
 file, control tokens, the model's own prose; build log 14c). Standard library
 only.

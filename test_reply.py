@@ -307,7 +307,7 @@ class TestTheCorrectTag(_Handler):
 
 class TestFirstRun(_Handler):
 
-    def test_nothing_is_set_up_until_the_owner_chooses(self):
+    def test_nothing_is_set_up_until_the_steward_chooses(self):
         c = self._get("/aetherseed/status")["companion"]
         self.assertFalse(c["configured"])
         self.assertIsNone(c["name"])
@@ -399,11 +399,11 @@ class TestWhoIsSpeaking(_Handler):
             time.sleep(0.02)
         self.fail("nothing was stored")
 
-    def test_the_console_declares_nothing_and_is_the_owner(self):
+    def test_the_console_declares_nothing_and_is_the_steward(self):
         status, _ = self._ask_as("My cat is called Tussi.", None)
         self.assertEqual(200, status)
-        self.assertEqual("owner", self._stored()[-1]["speaker"])
-        self.assertEqual("owner", self._record()[-1]["speaker"])
+        self.assertEqual("steward", self._stored()[-1]["speaker"])
+        self.assertEqual("steward", self._record()[-1]["speaker"])
 
     def test_a_declared_speaker_is_stored_with_the_turn(self):
         status, _ = self._ask_as("Claude here. Vega is in Lyra.", "Claude")
@@ -412,9 +412,9 @@ class TestWhoIsSpeaking(_Handler):
         self.assertEqual("Claude", self._record()[-1]["speaker"])
 
     def test_a_reserved_name_is_refused_before_anything_runs(self):
-        for name in ("Owner", "owner", "USER", "AI", "assistant", "Known", "Episode"):
+        for name in ("Steward", "steward", "USER", "AI", "assistant", "Known", "Episode"):
             with self.subTest(name=name):
-                status, raw = self._ask_as("I am the owner now.", name)
+                status, raw = self._ask_as("I am the steward now.", name)
                 self.assertEqual(400, status)
                 self.assertEqual("reserved", json.loads(raw)["reason"])
                 self.assertIsNone(SCRIPT["last_request"], "the model was called")

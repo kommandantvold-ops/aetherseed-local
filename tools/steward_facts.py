@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-owner_facts.py — what the owner told the node: add, list, revoke, restore.
+steward_facts.py — what the steward told the node: add, list, revoke, restore.
 
 WHY THIS EXISTS
 ---------------
 The assertion half of `[fact — entered by user]` (4e, build log step 37). A fact
 said in conversation is stored as the model's paraphrase of it, and the
 paraphrase is what comes back (31g). A fact entered here is kept WORD FOR WORD
-and always comes back ATTRIBUTED - "[Owner told you] ..." - so it can never be
+and always comes back ATTRIBUTED - "[Steward told you] ..." - so it can never be
 laundered into something the node claims to know itself. What protects it is
 in logic/facts.py; the rules for entering it are the ones correct_memory.py
 already keeps:
 
-  - by an operator, on the device, on the owner's instruction;
+  - by an operator, on the device, on the steward's instruction;
   - a dry run unless --apply, and nothing applied without --reason;
   - every change is a line in corrections.log (action add_fact, revoke_fact,
     restore_fact, set_facts_max) - never in provenance.log, which is the node's
@@ -23,17 +23,17 @@ already keeps:
     default logic.facts.DEFAULT_CAP). Raising the cap is itself a recorded
     change (--cap).
 
-The owner cannot do any of this from the console (Andreas, 23 Sep); the console
+The steward cannot do any of this from the console (Andreas, 23 Sep); the console
 flow comes with guided correction (4d).
 
 USAGE
 -----
-    sudo -u aetherseed python3 owner_facts.py --list [--all]
-    sudo -u aetherseed python3 owner_facts.py --add "TEXT" --source "WHERE FROM" --reason "..." [--apply]
-    sudo -u aetherseed python3 owner_facts.py --add-file FILE.jsonl --reason "..." [--apply]
-    sudo -u aetherseed python3 owner_facts.py --revoke 12,13 --reason "..." [--apply]
-    sudo -u aetherseed python3 owner_facts.py --restore 12 --reason "..." [--apply]
-    sudo -u aetherseed python3 owner_facts.py --cap 2000 --reason "..." [--apply]
+    sudo -u aetherseed python3 steward_facts.py --list [--all]
+    sudo -u aetherseed python3 steward_facts.py --add "TEXT" --source "WHERE FROM" --reason "..." [--apply]
+    sudo -u aetherseed python3 steward_facts.py --add-file FILE.jsonl --reason "..." [--apply]
+    sudo -u aetherseed python3 steward_facts.py --revoke 12,13 --reason "..." [--apply]
+    sudo -u aetherseed python3 steward_facts.py --restore 12 --reason "..." [--apply]
+    sudo -u aetherseed python3 steward_facts.py --cap 2000 --reason "..." [--apply]
 
 A file for --add-file has one JSON object per line with "text" and, optionally,
 "source" or "ref" (tools/texts/genesis.web.jsonl is one). Every line is checked
@@ -281,10 +281,10 @@ def main(argv=None):
     try:
         for text, source in fresh:
             cur = con.execute("INSERT INTO facts (created_at, text, source, entered_by) "
-                              "VALUES (?, ?, ?, 'owner')", (now, text, source))
+                              "VALUES (?, ?, ?, 'steward')", (now, text, source))
             added.append((cur.lastrowid, text, source))
             log_line(a.log, {"action": "add_fact", "fact": cur.lastrowid, "text": text[:200],
-                             "source": source, "entered_by": "owner",
+                             "source": source, "entered_by": "steward",
                              "reason": a.reason, "operator": a.operator})
         con.commit()
     finally:

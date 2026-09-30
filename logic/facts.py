@@ -1,14 +1,14 @@
-"""What the owner told the node - kept word for word, and always attributed.
+"""What the steward told the node - kept word for word, and always attributed.
 
 Step 37 (25 Sep 2026): the assertion half of `[fact - entered by user]` (4e).
 
 WHY. A fact given in conversation is stored as a paraphrase, and the paraphrase
-is what comes back (31g): the node rewrote its owner's radiator into "I have a
+is what comes back (31g): the node rewrote its steward's radiator into "I have a
 radiator at my apartment in Oslo". An assertion has to be stored VERBATIM as
-entered, and it has to come back ATTRIBUTED - "your owner told you X", never
+entered, and it has to come back ATTRIBUTED - "your steward told you X", never
 "X" - so that it can never be laundered into something the node claims to know.
 
-WHAT PROTECTS IT. An owner's claim is unverifiable by construction, so the
+WHAT PROTECTS IT. A steward's claim is unverifiable by construction, so the
 protection is procedural, not epistemic (the 4e failsafes, handover 25 Sep):
 
   - attribution always: every line carries FACT_TAG, and FACT_NOTE tells the
@@ -22,21 +22,21 @@ protection is procedural, not epistemic (the 4e failsafes, handover 25 Sep):
     prompt marker - no brackets, pipes or line breaks - is accepted at all;
   - every answer that used one says so (`facts_used` on the terminator);
   - listable and revocable, and every change is in `corrections.log`
-    (tools/owner_facts.py). A revoked fact is kept, never retrieved.
+    (tools/steward_facts.py). A revoked fact is kept, never retrieved.
 
-ENTRY. By an operator, on the owner's instruction, with a reason - the console
-flow comes with guided correction (4d). The retraction half (an owner marking
+ENTRY. By an operator, on the steward's instruction, with a reason - the console
+flow comes with guided correction (4d). The retraction half (a steward marking
 an episode as never having happened) comes with it too.
 """
 
 import re
 
-FACT_TAG = "[Owner told you]"
+FACT_TAG = "[Steward told you]"
 
 # Appended to the system prompt only on a turn whose memory block carries a
 # fact line - about 30 tokens, paid only when it means something.
-FACT_NOTE = ("Lines marked [Owner told you] are things your owner told you. "
-             "When you use one, say that your owner told you; never present "
+FACT_NOTE = ("Lines marked [Steward told you] are things your steward told you. "
+             "When you use one, say that your steward told you; never present "
              "it as something you know yourself.")
 
 MAX_FACT_CHARS = 320        # Genesis in the World English Bible peaks at 296
@@ -65,8 +65,9 @@ DEFAULT_CAP = 250           # per unit; `facts_max` in its config raises it
 #     two: 2:6 and 8:3). At 0.45, within the budget below, the right verse was
 #     among those shown for 15 of 26 plain questions ("What did the dove have
 #     in her mouth?") and 17 of 26 asked as "What has your owner told you
-#     about ...?" once the telling words below are left out of the query (3 of
-#     26 with them in: "owner" occurs in no verse, and an unknown word counts
+#     about ...?" (the word then; "steward" since build log 50) once the
+#     telling words below are left out of the query (3 of 26 with them in:
+#     "owner" occurs in no verse, and an unknown word counts
 #     heavily against every entry). Most misses are a neighbouring verse on
 #     the same subject shown instead (8:8 for the dove of 8:11).
 #   - the curriculum's idf, log(n/d), gives a word in EVERY fact a weight of
@@ -82,9 +83,11 @@ DEFAULT_CAP = 250           # per unit; `facts_max` in its config raises it
 FACT_SCORE_THRESHOLD = 0.45
 
 # Words about the telling, not about what was told: left out of the query that
-# looks for a fact, so "What has your owner told you about the dove?" looks for
+# looks for a fact, so "What has your steward told you about the dove?" looks for
 # the dove.
-FRAMING_WORDS = frozenset({"owner", "told", "tell", "taught", "remember"})
+# "steward" is a word Genesis uses (43:16, 43:19, 44:1, 44:4) - left out of
+# the query all the same: in "What has your steward told you" it is the telling.
+FRAMING_WORDS = frozenset({"steward", "owner", "told", "tell", "taught", "remember"})
 
 # A fact is shown to the model inside the memory block. Anything that could
 # open or close a line, a tag or the block itself is refused outright rather

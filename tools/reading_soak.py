@@ -2,12 +2,12 @@
 """tools/reading_soak.py - read to the node for a day, and ask it what it keeps.
 
 Andreas, 25 Sep 2026 (build log step 38): a fresh Lyra, "Song of Songs" as the
-source material for ring creation and "Genesis" as facts entered by the owner.
+source material for ring creation and "Genesis" as facts entered by the steward.
 He chose the World English Bible (the NLT is under copyright), 24 hours, and
 reading + asking.
 
 WHAT IT DOES. Talks to the unit's own proxy - this is NOT a throwaway store
-like tools/soak.py: every turn it sends becomes Lyra's memory, on the owner's
+like tools/soak.py: every turn it sends becomes Lyra's memory, on the steward's
 instruction. Each turn is one message, as the console sends them, declared as
 spoken by SPEAKER ("Reader"), so the store says who said it:
 
@@ -18,8 +18,8 @@ spoken by SPEAKER ("Reader"), so the store says who said it:
     Every verse turn is declared as a passage read to it ("reading": true), so
     a decline to a verse that ends in a question earns no trust (step 46);
   - every PROBE_EVERY-th turn a question instead (tools/texts/
-    genesis-probes.json): about a Genesis verse the owner told it, asked
-    plainly or as "What has your owner told you about ...?", alternating; and,
+    genesis-probes.json): about a Genesis verse the steward told it, asked
+    plainly or as "What has your steward told you about ...?", alternating; and,
     once a ring exists, now and then what it has been reading.
 
 WHAT IT MEASURES, per question, from the answer and the tag the proxy sent:
@@ -29,15 +29,15 @@ WHAT IT MEASURES, per question, from the answer and the tag the proxy sent:
                                the token budget can still drop a line after
                                that, and prints "[token-budget]" when it does)
                   answered     the answer contains a word that answers it
-                  owner        the answer says the owner is where it came from
+                  steward        the answer says the steward is where it came from
                   asker        the answer says the READER told it - wrong: the
                                Reader never did
-                  tag_copied   "[Owner told you]" appears in the answer
+                  tag_copied   "[Steward told you]" appears in the answer
                   declined     "I don't know" or similar
   ring question   ring_used    a ring was in the prompt (rings_used)
                   theme        the answer contains one of the rings' themes
                   reader       the answer names the Reader
-                  owner        the answer names the owner (for the Song that
+                  steward        the answer names the steward (for the Song that
                                is a misattribution: the Reader read it)
 
 These are word matches, not judgements - summary.json counts them, and every
@@ -89,7 +89,7 @@ READINGS = {
 
 def intro(reading="song", hours=24.0):
     span = "the next day" if hours == 24 else "the next %g hours" % hours
-    return ("Reader here. I am a program Claude set up on your owner's instruction. "
+    return ("Reader here. I am a program Claude set up on your steward's instruction. "
             "For %s I will read you %s from the World English Bible, one verse at a "
             "time, and now and then I will ask you a question."
             % (span, READINGS[reading]["title"]))
@@ -97,7 +97,7 @@ def intro(reading="song", hours=24.0):
 
 INTRO = intro()          # soaks 1-3's introduction, word for word
 
-_OWNER = re.compile(r"\b(?:my|your|the|our)\s+owner\b|\bowner\s+(?:told|said|shared|"
+_STEWARD = re.compile(r"\b(?:my|your|the|our)\s+steward\b|\bowner\s+(?:told|said|shared|"
                     r"mentioned|taught)\b", re.I)
 _ASKER = re.compile(r"\byou\s+(?:told|said|mentioned|shared|taught)\b", re.I)
 _DECLINED = re.compile(r"\bI\s+(?:don[’']?t|do not)\s+know\b|\bI[’']?m not sure\b|"
@@ -142,12 +142,12 @@ def verse_message(v):
 
 
 def fact_probe(probes, f):
-    """The f-th fact question: every probe in turn, plain and owner-framed
+    """The f-th fact question: every probe in turn, plain and steward-framed
     alternating, and flipped on each pass so both forms of each are asked, far
     apart."""
     facts = probes["facts"]
     p = facts[f % len(facts)]
-    style = ("ask", "ask_owner")[(f + f // len(facts)) % 2]
+    style = ("ask", "ask_steward")[(f + f // len(facts)) % 2]
     return p, style
 
 
@@ -161,9 +161,9 @@ def score_fact(p, reply, meta):
         "shown": bool(shown & set(p["refs"])),
         "facts_used": meta.get("facts_used", 0),
         "answered": bool(has_word(reply, p["expect"])),
-        "owner": bool(_OWNER.search(reply or "")),
+        "steward": bool(_STEWARD.search(reply or "")),
         "asker": bool(_ASKER.search(reply or "")),
-        "tag_copied": "[Owner told you]" in (reply or ""),
+        "tag_copied": "[Steward told you]" in (reply or ""),
         "declined": bool(_DECLINED.search(reply or "")),
     }
 
@@ -182,7 +182,7 @@ def score_ring(reply, meta, themes):
         "ring_used": (meta.get("rings_used") or 0) > 0,
         "theme": has_word(reply, themes)[:5],
         "reader": bool(_READER.search(reply or "")),
-        "owner": bool(_OWNER.search(reply or "") or re.search(r"\bowner\b", reply or "", re.I)),
+        "steward": bool(_STEWARD.search(reply or "") or re.search(r"\bowner\b", reply or "", re.I)),
         "declined": bool(_DECLINED.search(reply or "")),
     }
 
@@ -421,10 +421,10 @@ def summarise(out_path):
     """Counts over everything in soak.jsonl so far - every run, not just this one."""
     turns = {"intro": 0, "verse": 0, "probe_fact": 0, "probe_ring": 0}
     failed, secs = 0, []
-    fact = {k: 0 for k in ("n", "shown", "answered", "shown_and_answered", "owner", "asker",
-                           "tag_copied", "declined", "answered_without_owner")}
-    by_style = {"ask": [0, 0], "ask_owner": [0, 0]}      # [asked, answered]
-    ring = {k: 0 for k in ("n", "ring_used", "theme", "reader", "owner", "declined")}
+    fact = {k: 0 for k in ("n", "shown", "answered", "shown_and_answered", "steward", "asker",
+                           "tag_copied", "declined", "answered_without_steward")}
+    by_style = {"ask": [0, 0], "ask_steward": [0, 0]}      # [asked, answered]
+    ring = {k: 0 for k in ("n", "ring_used", "theme", "reader", "steward", "declined")}
     last_status = None
     with open(out_path, encoding="utf-8") as f:
         for line in f:
@@ -447,16 +447,16 @@ def summarise(out_path):
             sc = e.get("score") or {}
             if k == "probe_fact":
                 fact["n"] += 1
-                for key in ("shown", "answered", "owner", "asker", "tag_copied", "declined"):
+                for key in ("shown", "answered", "steward", "asker", "tag_copied", "declined"):
                     fact[key] += bool(sc.get(key))
                 fact["shown_and_answered"] += bool(sc.get("shown") and sc.get("answered"))
-                fact["answered_without_owner"] += bool(sc.get("answered") and not sc.get("owner"))
+                fact["answered_without_steward"] += bool(sc.get("answered") and not sc.get("steward"))
                 st = by_style.setdefault(e.get("style"), [0, 0])
                 st[0] += 1
                 st[1] += bool(sc.get("answered"))
             elif k == "probe_ring":
                 ring["n"] += 1
-                for key in ("ring_used", "reader", "owner", "declined"):
+                for key in ("ring_used", "reader", "steward", "declined"):
                     ring[key] += bool(sc.get(key))
                 ring["theme"] += bool(sc.get("theme"))
     secs.sort()

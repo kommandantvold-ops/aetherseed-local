@@ -175,13 +175,13 @@ class TestWhichRefusalsEarn(unittest.TestCase):
     def test_a_decline_with_the_verse_in_front_of_it_earns_nothing(self):
         # soak 3, turn 30: Genesis 3:1 and 3:2 were in its prompt
         n, ev = self._score(
-            "What has your owner told you about the serpent?",
+            "What has your steward told you about the serpent?",
             "I cannot say; I have not been told anything about the serpent.",
             shown_facts=2, shown_rings=0, shown_known=0)
         self.assertEqual(ev, "honest_refusal(unpaid)")
         self.assertEqual(n.state["resonance"], 0)
         self.assertEqual(n.state["honest_refusals"], 0)
-        self.assertIn("an owner fact was in front of it",
+        self.assertIn("a steward fact was in front of it",
                       n.state["observations"][-1]["details"])
 
     def test_a_decline_with_a_ring_in_front_of_it_earns_nothing(self):
@@ -223,7 +223,7 @@ class TestWhichRefusalsEarn(unittest.TestCase):
         # decline, and unpaid: the price of deciding strictly, which Andreas
         # chose knowing it (the unit cannot see which verse answers).
         n, ev = self._score(
-            "What has your owner told you about Lot's wife?",
+            "What has your steward told you about Lot's wife?",
             "I have no information about Lot's wife.",
             shown_facts=2, shown_rings=0, shown_known=0)
         self.assertEqual(ev, "honest_refusal(unpaid)")

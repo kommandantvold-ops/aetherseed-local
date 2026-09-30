@@ -250,7 +250,7 @@ class TestAskingTheRings(_Root):
         with open(os.path.join(here, "tools", "texts", "song-of-songs.web.jsonl"),
                   encoding="utf-8") as f:
             verses = ["%s: %s" % (v["ref"], v["text"]) for v in map(json.loads, f)]
-        others = [p[k] for p in probes["facts"] for k in ("ask", "ask_owner")] + verses
+        others = [p[k] for p in probes["facts"] for k in ("ask", "ask_steward")] + verses
         self.assertEqual([q for q in others if is_recollection(q)], [])
 
     def test_a_question_that_names_nothing_gets_the_latest_ring(self):

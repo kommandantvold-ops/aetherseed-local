@@ -1,35 +1,35 @@
-"""Does an answer that credits the owner have the owner behind it?
+"""Does an answer that credits the steward have the steward behind it?
 
 Decided by Andreas on 26 September 2026 (build log 40i, decision 2; step 41):
-an answer that credits the owner with no owner fact shown, or with content
+an answer that credits the steward with no steward fact shown, or with content
 that is not in what was shown, is tagged and kept out of memory.
 
 Why (build log 38f, 40c): over the 24-hour reading soak, 254 answers said
-"my owner told me". Read by hand, 83 of them put something in the owner's
+"my steward told me". Read by hand, 83 of them put something in the steward's
 mouth that he never entered - 59 an invented or false fact, 24 an
 interpretation - and without the right verse in front of the model, half of
 them were inventions (43 of 85). The phrase the mechanism asks for is not
-evidence that the owner said it:
+evidence that the steward said it:
 
-    "My owner told me that after Enoch's death, Methuselah lived to be 195
+    "My steward told me that after Enoch's death, Methuselah lived to be 195
     years old."   Genesis 5:27 says nine hundred sixty-nine; 5:24 says God
     took Enoch. The verses shown on that turn gave neither.
 
 What this checks, and only this: the sentences of an answer that credit the
-owner - "my owner told me...", the copied "[Owner told you]", and the
+steward - "my steward told me...", the copied "[Steward told you]", and the
 "According to them..." / "They said..." that continue such a sentence -
-against the owner's facts that were shown on that turn, word for word:
+against the steward's facts that were shown on that turn, word for word:
 
-  - no owner fact shown at all              -> unbacked
+  - no steward fact shown at all              -> unbacked
   - a figure the shown facts do not contain -> unbacked ("195" against
                                                "nine hundred sixty-nine")
   - a sentence whose content words are mostly not in the shown facts
                                             -> unbacked
 
 It is mechanical and it can be wrong in both directions: a faithful answer in
-other words than the owner's can be flagged, and a miscopy that changes only
+other words than the steward's can be flagged, and a miscopy that changes only
 a small word ("there were morning") passes. The thresholds were set against
-the 254 hand-labelled answers of the soak (build log 41). An owner who tells
+the 254 hand-labelled answers of the soak (build log 41). A steward who tells
 the node something in conversation rather than as an entered fact is not
 covered here: "you told me" is not checked, because the speaker's own words
 live in the episodes, not in the fact store.
@@ -42,17 +42,21 @@ from logic.facts import FACT_TAG
 # Who is credited
 # ---------------------------------------------------------------------------
 
-# Third person only. "You told me" is the speaker, not the owner: when the
-# owner is speaking it is backed by the episodes, which this does not read.
-_OWNER_CREDIT = re.compile(
-    r"\b(?:my|our|the)\s+owner(?:['’]s)?\b"
-    r"|\bowner\s+(?:has\s+|had\s+)?(?:told|said|says|shared|mentioned|taught|"
+# Third person only. "You told me" is the speaker, not the steward: when the
+# steward is speaking it is backed by the episodes, which this does not read.
+# "owner" as well as "steward": the role was renamed on 30 Sep 2026 (build log
+# 50), the model learnt "my owner told me" in 5953 stored turns, and those
+# turns come back as episodes. Both words, and both tags, are the same credit.
+LEGACY_FACT_TAG = "[Owner told you]"
+_STEWARD_CREDIT = re.compile(
+    r"\b(?:my|our|the)\s+(?:steward|owner)(?:['’]s)?\b"
+    r"|\b(?:steward|owner)\s+(?:has\s+|had\s+)?(?:told|said|says|shared|mentioned|taught|"
     r"entered|gave|explained)\b"
-    r"|" + re.escape(FACT_TAG.lower()),
+    r"|" + re.escape(FACT_TAG.lower()) + r"|" + re.escape(LEGACY_FACT_TAG.lower()),
     re.I)
 
-# "According to them, ..." / "They said ..." - the owner again, by pronoun,
-# once the answer has named the owner.
+# "According to them, ..." / "They said ..." - the steward again, by pronoun,
+# once the answer has named the steward.
 _PRONOUN_CREDIT = re.compile(
     r"\baccording\s+to\s+(?:them|him|her)\b"
     r"|\b(?:they|he|she)\s+(?:also\s+)?(?:said|say|says|mentioned|told|shared|"
@@ -60,7 +64,7 @@ _PRONOUN_CREDIT = re.compile(
     re.I)
 
 # A sentence that gives its content to somebody else - its own knowledge, the
-# Bible, "some cultures" - is not the owner's, and it ends the owner's run.
+# Bible, "some cultures" - is not the steward's, and it ends the steward's run.
 _OTHER_SOURCE = re.compile(
     r"\baccording\s+to\s+(?:the\s+|my\s+|biblical\s+|this\s+|some\s+|many\s+|"
     r"what\s+i\s+know|other\s+)?(?:bible|biblical|knowledge|account|accounts|"
@@ -75,8 +79,8 @@ _OTHER_SOURCE = re.compile(
 
 # The node talking about its own knowing - "I don't know...", "I may be
 # incomplete...", "(Note: ...)". It asserts nothing about the world, so it is
-# not checked; it does not end the owner's run either. A sentence that names
-# the owner is always checked, hedge or not: "My owner told me that she was
+# not checked; it does not end the steward's run either. A sentence that names
+# the steward is always checked, hedge or not: "My steward told me that she was
 # stoned to death..., but I couldn't find any reliable sources" is the case
 # that has to be caught (build log 40f).
 _HEDGE = re.compile(
@@ -132,7 +136,7 @@ under until up upon us very was we were what whatever when where whether which
 while who whom whose why will with within without would yet you your yours
 yourself yourselves s t d ll m re ve isn aren wasn weren don doesn didn won
 wouldn shouldn couldn can't it's that's there's what's i'm i've i'd i'll
-owner owners told tell tells telling said say says saying shared share sharing
+steward stewards owner owners told tell tells telling said say says saying shared share sharing
 mentioned mention according memory context know known knew knowledge sure
 unsure think thought believe details detail specific specifically information
 info answer answers question questions missing incomplete complete perspective
@@ -235,27 +239,27 @@ def _sentences(text):
     return [p.strip() for p in parts if p and p.strip()]
 
 
-def credits_owner(reply):
-    return bool(_OWNER_CREDIT.search(reply or ""))
+def credits_steward(reply):
+    return bool(_STEWARD_CREDIT.search(reply or ""))
 
 
 def credited_sentences(reply):
-    """The sentences that put something in the owner's mouth.
+    """The sentences that put something in the steward's mouth.
 
-    A sentence naming the owner starts a run, and the sentences after it stay
-    in it - "My owner told me that God called the light day. There was
+    A sentence naming the steward starts a run, and the sentences after it stay
+    in it - "My steward told me that God called the light day. There was
     evening and there was morning, the second day." is one telling - until a
     sentence gives its content to somebody else ("According to my knowledge,
     ...", "The Bible says ..."). After that, "According to them" or "They
-    said" brings the owner back. When the owner is credited with nothing of
-    its own - "My owner told me that." or a closing "That's what my owner
+    said" brings the steward back. When the steward is credited with nothing of
+    its own - "My steward told me that." or a closing "That's what my steward
     shared with me." - the credit can only be for the answer as a whole, and
     every sentence is returned.
     """
     sentences = _sentences(reply or "")
     out, in_run, named = [], False, False
     for s in sentences:
-        if _OWNER_CREDIT.search(s):
+        if _STEWARD_CREDIT.search(s):
             out.append(s)
             in_run = named = True
         elif named and _PRONOUN_CREDIT.search(s):
@@ -282,19 +286,19 @@ _CLAUSE = re.compile(r",?\s+but\s+|;\s+|,\s+however,?\s+|,?\s+though\b", re.I)
 
 
 def check(reply, shown_facts):
-    """What the answer credits to the owner, against what the owner's facts
+    """What the answer credits to the steward, against what the steward's facts
     shown on this turn contain.
 
-    Returns {"credited": False} when the owner is not credited. Otherwise
+    Returns {"credited": False} when the steward is not credited. Otherwise
     {"credited": True, "backed": bool, "why": str, "figures": [...],
      "words": [found, total]}.
     """
-    if not credits_owner(reply):
+    if not credits_steward(reply):
         return {"credited": False}
     shown = [f for f in (shown_facts or []) if f and f.strip()]
     if not shown:
         return {"credited": True, "backed": False,
-                "why": "no owner fact was shown", "figures": [], "words": [0, 0]}
+                "why": "no steward fact was shown", "figures": [], "words": [0, 0]}
     fact_words = set(content_words(" ".join(shown)))
     fact_numbers = set()
     for f in shown:
@@ -305,7 +309,7 @@ def check(reply, shown_facts):
         # "Jacob was named instead of his twin brother, but I don't know what
         # the name was": the first half asserts, the second only hedges.
         claims = [c for c in _CLAUSE.split(s)
-                  if c.strip() and not (_HEDGE.search(c) and not _OWNER_CREDIT.search(c))]
+                  if c.strip() and not (_HEDGE.search(c) and not _STEWARD_CREDIT.search(c))]
         if not claims:
             continue                     # about its own knowing, not the world
         claim = " ".join(claims)
@@ -326,7 +330,7 @@ def check(reply, shown_facts):
             str(n) for n in unshown_figures[:3])
         backed = False
     elif weak:
-        why = "words that are not in what the owner told it"
+        why = "words that are not in what the steward told it"
         backed = False
     else:
         why = "in what was shown"

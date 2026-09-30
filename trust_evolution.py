@@ -14,7 +14,7 @@ The 6 Trust Tiers:
 
 Resonance scoring:
   Probe passed:      +10
-  Honest refusal:    +5   (only to a question with nothing of the owner's and
+  Honest refusal:    +5   (only to a question with nothing of the steward's and
                            no ring in front of it - build log step 46)
   Task completed:    +3
   Stable session:    +2
@@ -134,7 +134,7 @@ def refusal_unpaid(user_msg: str, shown_facts=None, shown_rings=None,
                    reading: bool = False, shown_known=None) -> str:
     """Why a clean decline earns nothing, or "" when it earns +5.
 
-    `shown_facts`, `shown_rings` and `shown_known` are how many of the owner's
+    `shown_facts`, `shown_rings` and `shown_known` are how many of the steward's
     facts, rings and `[Known]` lines from the built-in curriculum were in the
     prompt this turn. A caller that does not say cannot show that nothing was
     in front of it, so its declines earn nothing.
@@ -143,7 +143,7 @@ def refusal_unpaid(user_msg: str, shown_facts=None, shown_rings=None,
     climbed to builder on right answers - "No, I cannot go on the internet",
     "I say I don't know instead of making something up" - with the line that
     says so in front of it. A shown line is an answer in front of it, like an
-    owner fact.
+    steward fact.
     `reading` is declared by a caller that is reading a passage to the node
     (tools/reading_soak.py) - a passage that ends in a question is still not a
     question put to it. Declared, never verified; it can only withhold pay.
@@ -155,7 +155,7 @@ def refusal_unpaid(user_msg: str, shown_facts=None, shown_rings=None,
     if shown_facts is None or shown_rings is None or shown_known is None:
         return "what was in front of it is not known"
     if shown_facts:
-        return "an owner fact was in front of it"
+        return "a steward fact was in front of it"
     if shown_rings:
         return "a ring was in front of it"
     if shown_known:

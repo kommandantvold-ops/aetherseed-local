@@ -41,7 +41,7 @@ DEFAULT_CONFIG = {
     "max_context_chars": 800,   # 1500 did not fit the 864-token prefill ceiling
     "consolidation_threshold": 50,  # factual episodes waiting before a ring closes
     "consolidation_batch": 20,      # episodes one ring takes - see RINGS below
-    "facts_max": 250,               # owner facts a unit may hold (logic/facts.py)
+    "facts_max": 250,               # steward facts a unit may hold (logic/facts.py)
     "rings_asked": 1,               # rings a "what have you been reading?" question is shown first
     "embedding_dim": 64,            # TF-IDF dimensions (kept small for 1.7B context)
     "willingness_dim": 64,
@@ -215,7 +215,7 @@ class MemoryStore:
                 -- prompt with equal standing and yesterday's story becomes
                 -- today's fact. See logic/provenance.py.
                 mode        TEXT NOT NULL DEFAULT 'factual',
-                -- Who said it: 'owner' for the console, a declared name for
+                -- Who said it: 'steward' for the console, a declared name for
                 -- anyone else, '' for rows from before the field existed.
                 -- Declared, never verified. See logic/speaker.py.
                 speaker     TEXT NOT NULL DEFAULT ''
@@ -240,14 +240,14 @@ class MemoryStore:
                 own_words_tries INTEGER NOT NULL DEFAULT 0
             );
 
-            -- What the owner told the node, word for word (logic/facts.py).
+            -- What the steward told the node, word for word (logic/facts.py).
             -- Revoked facts are kept and never retrieved.
             CREATE TABLE IF NOT EXISTS facts (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at  TEXT NOT NULL,
                 text        TEXT NOT NULL,
                 source      TEXT NOT NULL DEFAULT '',
-                entered_by  TEXT NOT NULL DEFAULT 'owner',
+                entered_by  TEXT NOT NULL DEFAULT 'steward',
                 revoked_at  TEXT
             );
 
@@ -472,9 +472,9 @@ class MemoryStore:
             % ",".join("?" * len(ids)), ids).fetchall()
         return [dict(zip(("id", "speaker", "mode", "user_msg"), r)) for r in rows]
 
-    # ---- owner facts (logic/facts.py) ----------------------------------------
+    # ---- steward facts (logic/facts.py) ----------------------------------------
 
-    def add_fact(self, text: str, source: str = "", entered_by: str = "owner") -> int:
+    def add_fact(self, text: str, source: str = "", entered_by: str = "steward") -> int:
         cur = self.conn.execute(
             "INSERT INTO facts (created_at, text, source, entered_by) VALUES (?, ?, ?, ?)",
             (datetime.now(timezone.utc).isoformat(), text, source or "", entered_by))
@@ -767,7 +767,7 @@ class AetherRoot:
         #   invented source - the tag crying wolf about the one address on the
         #   device that is certain.
         #
-        # Half the budget at most: the other half is what its owner said to it.
+        # Half the budget at most: the other half is what its steward said to it.
         known = []
         if self.knowledge is not None:
             try:
@@ -820,7 +820,7 @@ class AetherRoot:
                 "ring_no": sem.get("ring_no"),
             })
 
-        # What the owner told the node (logic/facts.py): after the build's own
+        # What the steward told the node (logic/facts.py): after the build's own
         # lines, before anything remembered. Word for word, always attributed,
         # at most two, within their own share of the block.
         facts = self._fact_lines(user_msg, report)
@@ -896,8 +896,8 @@ class AetherRoot:
         if report is not None:
             report["facts"] = [fact_ids[i] for i in shown["facts"] if i < len(fact_ids)]
             report["fact_sources"] = [fact_srcs[i] for i in shown["facts"] if i < len(fact_srcs)]
-            # The owner's words as shown - what logic/attribution.py checks an
-            # answer that credits the owner against (build log 41).
+            # The steward's words as shown - what logic/attribution.py checks an
+            # answer that credits the steward against (build log 41).
             report["fact_texts"] = [fact_txts[i] for i in shown["facts"] if i < len(fact_txts)]
             report["rings"] = shown["rings"]
             report["known"] = shown["known"]
@@ -905,7 +905,7 @@ class AetherRoot:
         return "\n".join(lines)
 
     def _facts_index(self):
-        """The owner's facts, indexed by words like the curriculum is - rebuilt
+        """The steward's facts, indexed by words like the curriculum is - rebuilt
         only when the set of active facts changes."""
         version = self.store.facts_version()
         cached = getattr(self, "_facts_cache", None)

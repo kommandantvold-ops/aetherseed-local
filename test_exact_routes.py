@@ -3,7 +3,7 @@
 Step 33 (25 Sep 2026). Episode #22: with the curriculum live and spelling
 "Vamsti", the model answered "Andreas Vamasti Kommandantvold", and repeated it
 the next night (#23). The founders line is now served from the build like the
-contact address (step 28). Episode #29: the node told its owner it was "not a
+contact address (step 28). Episode #29: the node told its steward it was "not a
 part of R&D Unit 1" - a fact true of one unit only, so it lives in a per-unit
 file, not the shared curriculum.
 """

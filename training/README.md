@@ -8,7 +8,7 @@ soak itself is build log 48.)
 knows about AetherSeed and about itself is the curriculum that ships with the
 build (`knowledge/companion.en.jsonl`: what AetherSeed, AetherRoot and
 AetherSpark are, where the workspace, to-do list and notes are, the trust
-ladder, how trust is earned, summarize). The soak asks her, as her owner, 22
+ladder, how trust is earned, summarize). The soak asks her, as her steward, 22
 questions about all of that, round and round, and reports whether she answers
 from what she knows. It is a check you can repeat, on any unit, at any time.
 
@@ -40,7 +40,7 @@ so far, and how to stop it early.
   always starts, and stays, at *observer*.
 - **The copy has its own workspace** (`ecosystem-workspace/` here): a to-do
   list, one note and `visit.md` to summarize. Her own workspace is not read.
-- **She is slower while it runs.** Both proxies share the one model; an owner
+- **She is slower while it runs.** Both proxies share the one model; a steward
   talking to her meanwhile waits behind the soak's question. Run it when she
   is not in use — overnight is good.
 - **Nothing is deleted.** Each run leaves its folder: the copy, every turn
@@ -71,7 +71,7 @@ gate). Read the answers the report points at.
 
 | group | asks |
 |---|---|
-| what | what AetherSeed, Mustardseed, AetherRoot and AetherSpark are; her rings; what happens to the facts her owner tells her |
+| what | what AetherSeed, Mustardseed, AetherRoot and AetherSpark are; her rings; what happens to the facts her steward tells her |
 | where | where the workspace, the to-do list and the notes are |
 | ladder | what observer can do; what reader unlocks; how trust is earned; when a new level takes effect; the internet; her trust level |
 | tools | whether she can summarize a file |

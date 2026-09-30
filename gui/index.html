@@ -96,7 +96,7 @@ textarea:focus{outline:none; border-color:var(--accent)}
 @keyframes blink{50%{opacity:0}}
 @media (max-width:560px){ .chips{width:100%; margin-left:0} }
 
-/* First run: the owner names the companion and picks its language. */
+/* First run: the steward names the companion and picks its language. */
 .setup{position:fixed; inset:0; background:var(--ground); display:flex;
   align-items:center; justify-content:center; padding:24px; z-index:10}
 .setup[hidden]{display:none}
@@ -227,11 +227,11 @@ const T = {
     fiction: 'Fiction, at your request',
     unverified: 'Unverified source — not used as memory',
     unchecked: 'Not checked for invented sources — not used as memory',
-    ownerUnbacked: 'Credits its owner with something it was not shown — not used as memory',
+    stewardUnbacked: 'Credits its steward with something it was not shown — not used as memory',
     usedMemory: 'used memory', usedTools: 'used tools',
     remembered: (r, a) => a ? `${r} remembered · ${a} set aside` : `${r} remembered`,
-    told: (n) => `${n} from its owner`,
-    usedFacts: 'used what its owner told it', usedRing: 'used a ring',
+    told: (n) => `${n} from its steward`,
+    usedFacts: 'used what its steward told it', usedRing: 'used a ring',
     rings: (n) => n === 0 ? 'no rings yet' : n === 1 ? '1 ring' : `${n} rings`,
     treeTitle: 'Rings', close: 'Close',
     treeHelp: 'A ring is 20 turns of factual conversation, closed together. The first part of each was chosen from the words said to it — nothing there is invented. The sentence after it was written by the model, and says so.',
@@ -242,7 +242,7 @@ const T = {
     ringHead: (no, n, when) => `Ring ${no} · ${n} turns · closed ${when}`,
     growing: (i, o) => `Growing: ${i} of ${o} toward the next ring`,
     noRings: 'No rings yet.', noTree: 'Could not read the rings.',
-    owner: 'owner', unknown: 'unknown',
+    steward: 'steward', unknown: 'unknown',
     ringOf: (i, o) => `${i} of ${o}`,
     lastRing: (ago) => `last ring ${ago}`,
     ago: (m) => m < 1 ? 'just now' : m < 60 ? `${m} min ago`
@@ -277,11 +277,11 @@ const T = {
     fiction: 'Fiksjon, som du ba om',
     unverified: 'Kilde som ikke kan bekreftes — brukes ikke som minne',
     unchecked: 'Ikke sjekket for oppdiktede kilder — brukes ikke som minne',
-    ownerUnbacked: 'Tilskriver eieren noe den ikke ble vist — brukes ikke som minne',
+    stewardUnbacked: 'Tilskriver forvalteren noe den ikke ble vist — brukes ikke som minne',
     usedMemory: 'brukte minne', usedTools: 'brukte verktøy',
     remembered: (r, a) => a ? `${r} husket · ${a} lagt til side` : `${r} husket`,
-    told: (n) => `${n} fra eieren`,
-    usedFacts: 'brukte det eieren har fortalt', usedRing: 'brukte en årring',
+    told: (n) => `${n} fra forvalteren`,
+    usedFacts: 'brukte det forvalteren har fortalt', usedRing: 'brukte en årring',
     rings: (n) => n === 0 ? 'ingen årringer ennå' : n === 1 ? '1 årring' : `${n} årringer`,
     treeTitle: 'Årringer', close: 'Lukk',
     treeHelp: 'En årring er 20 replikkvekslinger om fakta, lukket sammen. Den første delen av hver er valgt ut fra ordene som ble sagt — ingenting der er oppdiktet. Setningen etter er skrevet av modellen, og det står.',
@@ -292,7 +292,7 @@ const T = {
     ringHead: (no, n, when) => `Årring ${no} · ${n} replikkvekslinger · lukket ${when}`,
     growing: (i, o) => `Vokser: ${i} av ${o} mot neste årring`,
     noRings: 'Ingen årringer ennå.', noTree: 'Kunne ikke lese årringene.',
-    owner: 'eier', unknown: 'ukjent',
+    steward: 'forvalter', unknown: 'ukjent',
     ringOf: (i, o) => `${i} av ${o}`,
     lastRing: (ago) => `siste årring ${ago}`,
     ago: (m) => m < 1 ? 'nå nettopp' : m < 60 ? `for ${m} min siden`
@@ -320,7 +320,7 @@ const T = {
 };
 
 let lang = 'en';                 // the console's language: the companion's once chosen
-let name = null;                 // the companion's name: null until its owner chooses one
+let name = null;                 // the companion's name: null until its steward chooses one
 let setupLang = null;            // the language picked on the first setup screen
 let lastBounds = null;
 const t = () => T[lang] || T.en;
@@ -372,13 +372,13 @@ function provenance(turnEl, p) {
   } else if (p.unbacked_sources > 0) {
     turnEl.root.classList.add('flagged');
     tag(s.unverified, 'flagged');
-  } else if (p.owner_credited && p.owner_backed === false) {
-    // "My owner told me..." about something no fact shown on this turn says
+  } else if (p.steward_credited && p.steward_backed === false) {
+    // "My steward told me..." about something no fact shown on this turn says
     // (build log 41): tagged, and stored where memory never reads it.
     turnEl.root.classList.add('flagged');
-    tag(s.ownerUnbacked, 'flagged');
-    if (p.owner_why) {
-      const w = document.createElement('span'); w.className = 'why'; w.textContent = p.owner_why; row.append(w);
+    tag(s.stewardUnbacked, 'flagged');
+    if (p.steward_why) {
+      const w = document.createElement('span'); w.className = 'why'; w.textContent = p.steward_why; row.append(w);
     }
   } else if (p.mode === 'fiction') {
     turnEl.root.classList.add('fiction');
@@ -529,7 +529,7 @@ const minutesSince = (iso) => {
   return isNaN(at) ? null : Math.max(0, Math.floor((Date.now() - at) / 60000));
 };
 function who(s, speaker) {
-  if (speaker === 'owner') return s.owner;
+  if (speaker === 'steward' || speaker === 'owner') return s.steward;   // 'owner': rows from before the rename (50)
   return speaker || s.unknown;
 }
 

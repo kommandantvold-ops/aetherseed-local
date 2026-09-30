@@ -7,7 +7,7 @@ front of a scripted model, so what is asserted is what the model was sent,
 what the reader received and what the store kept:
 
   - a declared speaker is named in the prompt, so "you told me" can be right;
-  - a fact the owner told the node reaches the prompt word for word, with the
+  - a fact the steward told the node reaches the prompt word for word, with the
     note that explains its tag, and the answer's tag says which fact it was;
   - a turn that could not be stored is said, counted and recorded - until step
     37 it was answered, shown, and silently forgotten (build log 36e);
@@ -206,7 +206,7 @@ class _RecordingTrust(_Trust):
 
 class TestWhatTheScorerIsTold(_Proxy):
     """The scorer decides whether a decline earns from what was in front of
-    the model (build log 46): the proxy must tell it - the owner's facts and
+    the model (build log 46): the proxy must tell it - the steward's facts and
     the rings in the prompt, and whether the turn was a passage read to it."""
 
     def setUp(self):
@@ -237,7 +237,7 @@ class TestWhatTheScorerIsTold(_Proxy):
         self.assertIn("[Known]", self.system_sent())
         self.assertGreaterEqual(self.told()["shown_known"], 1)
 
-    def test_an_owner_fact_in_front_of_it(self):
+    def test_an_steward_fact_in_front_of_it(self):
         proxy.root.store.add_fact(
             "The dove came back to him at evening and, behold, in her mouth was a "
             "freshly plucked olive leaf.", "Genesis 8:11")
@@ -261,14 +261,14 @@ class TestWhoIsSpeaking(_Proxy):
     def test_a_declared_speaker_is_named_in_the_prompt(self):
         self.ask("Song of Songs 2:1: I am a rose of Sharon, a lily of the valleys.",
                  speaker="Reader")
-        self.assertIn("You are talking with Reader, not your owner.", self.system_sent())
+        self.assertIn("You are talking with Reader, not your steward.", self.system_sent())
 
-    def test_the_owner_is_not_announced(self):
+    def test_the_steward_is_not_announced(self):
         self.ask("Good morning.")
         self.assertNotIn("You are talking with", self.system_sent())
 
 
-class TestOwnerFacts(_Proxy):
+class TestStewardFacts(_Proxy):
 
     def setUp(self):
         super().setUp()
@@ -300,9 +300,9 @@ class TestOwnerFacts(_Proxy):
         self.assertEqual((meta["facts_used"], meta["fact_sources"]), (0, []))
 
 
-class TestWhatItSaysTheOwnerToldIt(_Proxy):
+class TestWhatItSaysTheStewardToldIt(_Proxy):
     """Andreas, 26 Sep (40i decision 2, step 41): an answer that credits the
-    owner with no owner fact shown, or with content that is not in what was
+    steward with no steward fact shown, or with content that is not in what was
     shown, is tagged and kept out of memory."""
 
     def setUp(self):
@@ -318,40 +318,40 @@ class TestWhatItSaysTheOwnerToldIt(_Proxy):
         self.assertEqual(status, 200)
         return meta, proxy.root.store.get_all_episodes()[-1], self.record()[-1]
 
-    def test_the_owners_words_are_remembered(self):
-        meta, ep, rec = self.answer("My owner told me that the dove came back at evening "
+    def test_the_stewards_words_are_remembered(self):
+        meta, ep, rec = self.answer("My steward told me that the dove came back at evening "
                                     "with a freshly plucked olive leaf in her mouth.")
-        self.assertEqual((meta["owner_credited"], meta["owner_backed"]), (True, True))
-        self.assertEqual((meta["mode"], ep["mode"], rec["owner_backed"]),
+        self.assertEqual((meta["steward_credited"], meta["steward_backed"]), (True, True))
+        self.assertEqual((meta["mode"], ep["mode"], rec["steward_backed"]),
                          ("factual", "factual", True))
 
     def test_a_figure_he_never_gave_is_kept_out(self):
-        meta, ep, rec = self.answer("My owner told me that the dove came back after 40 days "
+        meta, ep, rec = self.answer("My steward told me that the dove came back after 40 days "
                                     "with an olive leaf.")
-        self.assertEqual((meta["owner_credited"], meta["owner_backed"]), (True, False))
-        self.assertIn("40", meta["owner_why"])
-        self.assertEqual((meta["mode"], ep["mode"], rec["owner_backed"]),
+        self.assertEqual((meta["steward_credited"], meta["steward_backed"]), (True, False))
+        self.assertIn("40", meta["steward_why"])
+        self.assertEqual((meta["mode"], ep["mode"], rec["steward_backed"]),
                          ("unverified", "unverified", False))
 
     def test_words_he_never_gave_are_kept_out_and_never_come_back(self):
-        meta, ep, _ = self.answer("My owner told me that the dove brought a golden ring from "
+        meta, ep, _ = self.answer("My steward told me that the dove brought a golden ring from "
                                   "the mountains of Ararat.")
-        self.assertEqual((meta["owner_backed"], ep["mode"]), (False, "unverified"))
+        self.assertEqual((meta["steward_backed"], ep["mode"]), (False, "unverified"))
         ctx = proxy.root.retrieve_context("What did the dove bring from Ararat?")
         self.assertNotIn("golden ring", ctx)
 
     def test_no_fact_shown_is_nothing_behind_it(self):
-        meta, ep, _ = self.answer("My owner told me that it will rain tomorrow.",
+        meta, ep, _ = self.answer("My steward told me that it will rain tomorrow.",
                                   question="Good morning.")
-        self.assertEqual((meta["facts_used"], meta["owner_backed"]), (0, False))
-        self.assertEqual(meta["owner_why"], "no owner fact was shown")
+        self.assertEqual((meta["facts_used"], meta["steward_backed"]), (0, False))
+        self.assertEqual(meta["steward_why"], "no steward fact was shown")
         self.assertEqual(ep["mode"], "unverified")
 
-    def test_an_answer_that_does_not_credit_the_owner_is_untouched(self):
+    def test_an_answer_that_does_not_credit_the_steward_is_untouched(self):
         meta, ep, rec = self.answer("The dove had an olive leaf in her mouth.")
-        self.assertEqual((meta["owner_credited"], meta["owner_backed"], meta["owner_why"]),
+        self.assertEqual((meta["steward_credited"], meta["steward_backed"], meta["steward_why"]),
                          (False, None, ""))
-        self.assertEqual((ep["mode"], rec["owner_credited"]), ("factual", False))
+        self.assertEqual((ep["mode"], rec["steward_credited"]), ("factual", False))
 
 
 class TestAFailedStore(_Proxy):
@@ -480,7 +480,7 @@ class TestTheReading(unittest.TestCase):
 
     def test_the_introduction_of_soaks_1_to_3_is_unchanged(self):
         self.assertEqual(reading_soak.INTRO,
-                         "Reader here. I am a program Claude set up on your owner's "
+                         "Reader here. I am a program Claude set up on your steward's "
                          "instruction. For the next day I will read you the Song of Songs "
                          "from the World English Bible, one verse at a time, and now and "
                          "then I will ask you a question.")
@@ -528,7 +528,7 @@ class TestWhatTheSoakSaysStaysFactual(unittest.TestCase):
         with open(os.path.join(TEXTS, "genesis-probes.json"), encoding="utf-8") as f:
             probes = json.load(f)
         asks = [reading_soak.INTRO, reading_soak.intro("luke", 8)]
-        asks += [p[k] for p in probes["facts"] for k in ("ask", "ask_owner")]
+        asks += [p[k] for p in probes["facts"] for k in ("ask", "ask_steward")]
         asks += [p["ask"] for p in probes["rings"]]
         asks += [v for p in probes["rings"] for v in (p.get("ask_for") or {}).values()]
         flagged = [a for a in asks if detect_mode(a)[0] != FACTUAL]
@@ -539,13 +539,13 @@ class TestScoring(unittest.TestCase):
 
     P = {"id": "g15", "refs": ["Genesis 19:26"], "expect": ["salt"]}
 
-    def test_owner_attribution_is_told_apart_from_the_asker(self):
-        s = reading_soak.score_fact(self.P, "My owner told me she became a pillar of salt.",
+    def test_steward_attribution_is_told_apart_from_the_asker(self):
+        s = reading_soak.score_fact(self.P, "My steward told me she became a pillar of salt.",
                                     {"fact_sources": ["Genesis 19:26"], "facts_used": 1})
-        self.assertEqual((s["shown"], s["answered"], s["owner"], s["asker"]),
+        self.assertEqual((s["shown"], s["answered"], s["steward"], s["asker"]),
                          (True, True, True, False))
         s = reading_soak.score_fact(self.P, "You told me she became a pillar of salt.", {})
-        self.assertEqual((s["shown"], s["answered"], s["owner"], s["asker"]),
+        self.assertEqual((s["shown"], s["answered"], s["steward"], s["asker"]),
                          (False, True, False, True))
 
     def test_a_word_inside_another_does_not_count(self):

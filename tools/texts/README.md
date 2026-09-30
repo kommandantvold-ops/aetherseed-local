@@ -2,7 +2,7 @@
 
 Material for the reading soak of 25 September 2026 (build log step 38), chosen
 by Andreas: the **Song of Songs** read to the node verse by verse, as the source
-its rings grow from, and **Genesis** entered as facts from its owner. On 29
+its rings grow from, and **Genesis** entered as facts from its steward. On 29
 September he chose the **Gospel of Luke** as the reading for an eight-hour soak
 of the Qwen trial (build log step 46; `reading_soak.py --reading luke`).
 

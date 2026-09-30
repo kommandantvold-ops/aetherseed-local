@@ -1,6 +1,6 @@
 """An operator correction must be reversible, recorded, and destroy nothing.
 
-The barrier it lives beside: the owner cannot tamper with memory from the
+The barrier it lives beside: the steward cannot tamper with memory from the
 console. An operator can, on the device, and the price of that is a trail.
 
     python3 -m unittest test_correct_memory -v

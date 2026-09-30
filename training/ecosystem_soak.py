@@ -10,7 +10,7 @@ intermittently." How to run it is in training/README.md; in short:
 
     sudo bash /opt/aetherseed/training/run-ecosystem-soak.sh 1     # one hour
 
-"Training" is the owner's word for it: the model is never trained. What she
+"Training" is the steward's word for it: the model is never trained. What she
 knows about herself is the curriculum, knowledge/companion.en.jsonl, shipped
 with the build. The soak asks whether she answers from it.
 
@@ -25,7 +25,7 @@ WHAT IT DOES
   - starts a second proxy from this build with HOME set to the copy, on a
     spare port, beside hers; both share the one model server, so her own
     answers are slower while it runs;
-  - asks, as her owner, the questions in ecosystem-probes.json round and
+  - asks, as her steward, the questions in ecosystem-probes.json round and
     round until the time is up (or DIR/STOP exists);
   - scores each answer by words, writes every turn to DIR/ecosoak.jsonl, and
     at the end writes DIR/report.txt (also: --report DIR, at any time).
@@ -135,7 +135,7 @@ def get(base, path, timeout=30):
 
 
 def chat(base, text):
-    """One turn as the owner (no speaker), as the console sends it."""
+    """One turn as the steward (no speaker), as the console sends it."""
     body = json.dumps({"stream": True, "messages": [{"role": "user", "content": text}]}).encode()
     req = urllib.request.Request(base + "/api/chat", data=body, method="POST",
                                  headers={"Content-Type": "application/json"})

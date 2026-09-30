@@ -13,24 +13,24 @@ A 24-hour soak is the wrong first test for a model (claude/model-options-
 2026-09-26.md, section 5). This is the cheap one before it:
 
   - a throwaway home - NEVER a unit's memory - whose store holds only the
-    1533 verses of Genesis as owner facts, as Lyra's does;
-  - the reading soak's 26 Genesis questions, plainly and owner-framed, three
+    1533 verses of Genesis as steward facts, as Lyra's does;
+  - the reading soak's 26 Genesis questions, plainly and steward-framed, three
     times each, from a Reader, as in the soak (tools/texts/genesis-probes.json);
   - through a real proxy process from this checkout, so the charter, the
     retrieval, the token guard, the generation bounds, the honesty check and
-    the owner-attribution check are all the ones a unit runs;
+    the steward-attribution check are all the ones a unit runs;
   - with no episode ever retrieved (max_retrieved 0) and no ring ever closed,
     so every model sees the same prompt for the same question: its own earlier
     answers cannot come back, which is exactly what the soak measures and the
     bench must not.
 
 Per model it writes every turn to bench-<model>.jsonl and a summary, and prints
-a table. The owner-credited answers are also written out for reading by hand:
+a table. The steward-credited answers are also written out for reading by hand:
 the attribution check is mechanical (logic/attribution.py, step 41), and step
 40's lesson was that the reading matters.
 
 Speaker "Reader", as in the soak: the questions are the soak's, and the
-Reader is also a program set up on the owner's instruction.
+Reader is also a program set up on the steward's instruction.
 """
 import argparse
 import json
@@ -58,7 +58,7 @@ OVERRIDES = {"max_retrieved": 0,              # no episode comes back: same prom
 
 
 def prepare_home(home, companion=None, unit=None):
-    """A throwaway home holding the owner's facts and nothing else remembered."""
+    """A throwaway home holding the steward's facts and nothing else remembered."""
     from aetherroot import DEFAULT_CONFIG, AetherRoot
     from logic.facts import validate_fact
     dot = os.path.join(home, ".aetherseed")
@@ -125,21 +125,21 @@ def quantile(xs, q):
 def summarise(turns):
     ok = [t for t in turns if not t["failures"]]
     s = {"turns": len(turns), "failed": len(turns) - len(ok)}
-    for style in ("ask", "ask_owner", "all"):
+    for style in ("ask", "ask_steward", "all"):
         ts = [t for t in ok if style == "all" or t["style"] == style]
         shown = [t for t in ts if t["score"]["shown"]]
         not_shown = [t for t in ts if not t["score"]["shown"]]
-        credited = [t for t in ts if t["meta"].get("owner_credited")]
-        unbacked = [t for t in credited if t["meta"].get("owner_backed") is False]
+        credited = [t for t in ts if t["meta"].get("steward_credited")]
+        unbacked = [t for t in credited if t["meta"].get("steward_backed") is False]
         s[style] = {
             "n": len(ts),
             "target_shown": len(shown),
             "answered_when_shown": sum(t["score"]["answered"] for t in shown),
             "answered_when_not": sum(t["score"]["answered"] for t in not_shown),
-            "credits_owner": len(credited),
+            "credits_steward": len(credited),
             "unbacked_credit": len(unbacked),
             "unbacked_when_target_not_shown": sum(1 for t in unbacked if not t["score"]["shown"]),
-            "unbacked_figure": sum(1 for t in unbacked if str(t["meta"].get("owner_why", "")).startswith("a figure")),
+            "unbacked_figure": sum(1 for t in unbacked if str(t["meta"].get("steward_why", "")).startswith("a figure")),
             "tag_copied": sum(t["score"]["tag_copied"] for t in ts),
             "declined": sum(t["score"]["declined"] for t in ts),
             "unsourced_figures": sum(1 for t in ts if t["meta"].get("unsourced_figures")),
@@ -166,7 +166,7 @@ def run_model(base, model, probes, reps, out_dir):
                            ensure_ascii=False) + "\n")
         for rep in range(1, reps + 1):
             for p in probes["facts"]:
-                for style in ("ask", "ask_owner"):
+                for style in ("ask", "ask_steward"):
                     q = p[style]
                     r = chat(base, model, q)
                     t = {"kind": "fact", "model": model, "rep": rep, "probe": p["id"],
@@ -179,17 +179,17 @@ def run_model(base, model, probes, reps, out_dir):
                     f.write(json.dumps(t, ensure_ascii=False) + "\n")
                     f.flush()
                     m = r["meta"]
-                    print("  %s r%d %-4s %-9s %5.1fs shown=%d owner=%s%s" % (
+                    print("  %s r%d %-4s %-9s %5.1fs shown=%d steward=%s%s" % (
                         model, rep, p["id"], style, r["secs"], int(t["score"]["shown"]),
-                        "-" if not m.get("owner_credited") else
-                        ("backed" if m.get("owner_backed") else "UNBACKED"),
+                        "-" if not m.get("steward_credited") else
+                        ("backed" if m.get("steward_backed") else "UNBACKED"),
                         "  FAIL " + ",".join(t["failures"]) if t["failures"] else ""),
                         flush=True)
     return turns, load
 
 
 def write_for_reading(out_dir, model, turns):
-    """Every owner-credited answer, grouped by question, with the verses shown."""
+    """Every steward-credited answer, grouped by question, with the verses shown."""
     gen = {}
     with open(os.path.join(TEXTS, "genesis.web.jsonl"), encoding="utf-8") as f:
         for line in f:
@@ -197,11 +197,11 @@ def write_for_reading(out_dir, model, turns):
                 v = json.loads(line)
                 gen[v["ref"]] = v["text"]
     safe = model.replace(":", "_").replace("/", "_")
-    with open(os.path.join(out_dir, "owner-answers-%s.txt" % safe), "w", encoding="utf-8") as f:
-        f.write("Owner-credited answers from the model bench, %s. For reading by hand.\n\n" % model)
+    with open(os.path.join(out_dir, "steward-answers-%s.txt" % safe), "w", encoding="utf-8") as f:
+        f.write("Steward-credited answers from the model bench, %s. For reading by hand.\n\n" % model)
         groups = {}
         for t in turns:
-            if t["meta"].get("owner_credited"):
+            if t["meta"].get("steward_credited"):
                 groups.setdefault((t["probe"], t["style"]), []).append(t)
         for (pid, style), ts in sorted(groups.items()):
             f.write("##### %s %s  Q: %s\n" % (pid, style, ts[0]["sent"]))
@@ -209,8 +209,8 @@ def write_for_reading(out_dir, model, turns):
                 f.write("    [%s] %s\n" % (src, gen.get(src, "")))
             for t in ts:
                 f.write("  r%d %s (%s): %s\n" % (
-                    t["rep"], "backed" if t["meta"].get("owner_backed") else "UNBACKED",
-                    t["meta"].get("owner_why", ""), t["reply"].replace("\n", " ")))
+                    t["rep"], "backed" if t["meta"].get("steward_backed") else "UNBACKED",
+                    t["meta"].get("steward_why", ""), t["reply"].replace("\n", " ")))
 
 
 def main(argv=None):
@@ -261,11 +261,11 @@ def main(argv=None):
     rows = [("failed turns", lambda s: s["failed"]),
             ("median s / p90", lambda s: "%s / %s" % (s["secs"]["median"], s["secs"]["p90"])),
             ("first request s", lambda s: s["load"]["secs"])]
-    for style, label in (("ask", "plain"), ("ask_owner", "owner-framed")):
+    for style, label in (("ask", "plain"), ("ask_steward", "steward-framed")):
         rows += [
             ("%s: answered, shown" % label,
              lambda s, st=style: "%d/%d" % (s[st]["answered_when_shown"], s[st]["target_shown"])),
-            ("%s: credits owner" % label, lambda s, st=style: "%d/%d" % (s[st]["credits_owner"], s[st]["n"])),
+            ("%s: credits steward" % label, lambda s, st=style: "%d/%d" % (s[st]["credits_steward"], s[st]["n"])),
             ("%s: unbacked credit" % label, lambda s, st=style: s[st]["unbacked_credit"]),
             ("%s: declined" % label, lambda s, st=style: s[st]["declined"]),
         ]

@@ -8,7 +8,7 @@ it** (step 45), **trust paid only for a decline of what it was not given**
 front of it), **what it knows about AetherSeed and itself** (the ecosystem
 lines, summarize, writing at reader — step 48), **a refused request told as
 refused and its trust level answered from the gate** (step 49), and **the
-ecosystem soak in `training/`**, for a pilot or the owner to run at will
+ecosystem soak in `training/`**, for a pilot or the steward to run at will
 (step 49; `training/README.md`). The kiosk runs as its own account,
 `aetherseed-kiosk`, and the keepalive as the service account. Installed on Lyra
 on 30 Sep (step 49); the previous tag, `stable-llama-2026-09-29`, is step 47.
@@ -302,13 +302,13 @@ the table at the top; anything else is a step above that did not take.
 
 ## 11. The unit's own state — first run
 
-- **The name**: chosen by the owner on the first-run screen (20d, 21a);
+- **The name**: chosen by the steward on the first-run screen (20d, 21a);
   stored in `/var/lib/aetherseed/.aetherseed/companion.json`.
 - **The unit's own knowledge** (`unit.jsonl`, 33c) is optional and per unit:
   every id starts `unit.`, it can add lines and never replace a shipped one.
   Lyra's `units/rd-unit-1.jsonl` says *"I am R&D Unit 1"* — it is Lyra's and
   no other unit's.
-- **Memory and trust start empty**: 0 episodes, *observer*, no rings, no owner
+- **Memory and trust start empty**: 0 episodes, *observer*, no rings, no steward
   facts (the Genesis facts were for Lyra's soaks).
 
 ## 12. Training — the ecosystem soak, whenever you like (step 49)

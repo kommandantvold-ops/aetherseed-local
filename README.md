@@ -244,7 +244,7 @@ all of it had arrived — by which time its first pieces had already reached the
 client. `marker_prefix_len()` holds back any tail that could still become a
 marker until the next token decides it. An answer without a `[` is never held.
 
-### First run: the owner names it
+### First run: the steward names it
 
 The console's first screen asks for a name (and first for a language, when
 more than one is offered). Until someone
@@ -475,7 +475,7 @@ aetherseed-local/
 │   ├── serve.py                # The console: static page + allow-list relay, :2077
 │   └── index.html              # One file, zero external references
 ├── logic/
-│   ├── companion.py            # The owner's choices: name and language, validated
+│   ├── companion.py            # The steward's choices: name and language, validated
 │   ├── prompt_builder.py       # The charter, and prompt assembly
 │   ├── provenance.py           # factual / fiction / unverified, and what may be recalled
 │   └── token_budget.py         # 864-token guard, sanitizers, paragraph bound

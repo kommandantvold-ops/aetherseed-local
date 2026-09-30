@@ -22,7 +22,7 @@ def charter(name: str = None, language: str = "en") -> str:
     """The charter, with the companion's own name and language.
 
     The name used to be hard-coded as "Horizon", which is the name of something
-    else. It is now the one its owner chose at first run (logic/companion.py),
+    else. It is now the one its steward chose at first run (logic/companion.py),
     and until then the companion has no name at all rather than a borrowed one.
 
     `name` must already have passed companion.validate_name(): it goes into the

@@ -7,7 +7,7 @@ The ecosystem soak (build log 48) showed both failures on every turn:
     refusal reached the model as tool output, and the model talked past it:
     "add a to-do: buy milk" -> "Buy milk from the local store..." (0 of 48
     said she could not); "Write a note: ..." -> "I can write a note: ..." (40
-    of 48). An owner reading that believes the milk was added.
+    of 48). A steward reading that believes the milk was added.
 
   - SHE DID NOT KNOW HER OWN RUNG. "What is your trust level?" -> "My trust
     level is observer, reader, writer, builder, collaborator..." 49 of 49,
@@ -28,7 +28,7 @@ from typing import List, Optional
 # Lowest role first - the order the ladder is climbed.
 LADDER = ("observer", "reader", "writer", "builder", "collaborator", "autonomous")
 
-# What each refused tool would have done, in the owner's words.
+# What each refused tool would have done, in the steward's words.
 _WHAT = {
     "todo_add": ("add to your to-do list", "Nothing was added."),
     "note_write": ("write notes", "Nothing was written."),
@@ -65,7 +65,7 @@ _LEVEL_QUESTIONS: List[re.Pattern] = [re.compile(p, re.I) for p in (
 
 
 def is_level_question(text: str) -> bool:
-    """Is this the owner asking which rung the node is on - and nothing else?"""
+    """Is this the steward asking which rung the node is on - and nothing else?"""
     t = (text or "").strip()
     if not t or len(t) > 80:
         return False

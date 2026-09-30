@@ -49,9 +49,9 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 # tokens, different final paragraph).
 from logic.prompt_builder import charter
 from logic import companion
-from logic.speaker import validate_speaker, OWNER
+from logic.speaker import validate_speaker, STEWARD
 from logic.facts import FACT_TAG, FACT_NOTE
-from logic.attribution import check as owner_check
+from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
@@ -102,13 +102,13 @@ spark = AetherSpark({
 # can rewrite it, and the node can be asked to recite it - see
 # _answer_from_the_record(). Decided with Andreas 2026-09-19.
 PROVENANCE_LOG = os.path.expanduser("~/.aetherseed/provenance.log")
-# The owner's choices from first run: what the companion is called, and what
+# The steward's choices from first run: what the companion is called, and what
 # it speaks. See logic/companion.py.
 COMPANION_FILE = os.path.expanduser("~/.aetherseed/companion.json")
 
 
 def _settings():
-    """(name, language) - no name, English, until the owner has chosen."""
+    """(name, language) - no name, English, until the steward has chosen."""
     c = companion.load(COMPANION_FILE)
     return (c["name"], c["language"]) if c else (None, companion.DEFAULT_LANGUAGE)
 
@@ -713,10 +713,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # ---- WHO IS SPEAKING ----
         # A caller may declare `"speaker": "<name>"`; the console declares
-        # nothing, and its turns are the owner's. A declaration is untrusted
+        # nothing, and its turns are the steward's. A declaration is untrusted
         # input headed for the prompt, and a refused one is refused LOUDLY -
-        # storing it as the owner instead would put somebody else's words in
-        # the owner's mouth, which is the defect this field exists to end.
+        # storing it as the steward instead would put somebody else's words in
+        # the steward's mouth, which is the defect this field exists to end.
         # Checked before any route, so no answer is given to a turn whose
         # speaker could not be recorded. See logic/speaker.py.
         speaker, speaker_err = validate_speaker(data.get("speaker"), _settings()[0])
@@ -804,11 +804,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if request_mode == FICTION:
             system_prompt += "\n" + FICTION_NOTE
 
-        # Who is speaking, when it is not the owner - so that "you told me"
+        # Who is speaking, when it is not the steward - so that "you told me"
         # can be right, and a teacher is not mistaken for the person the node
         # serves ("I exist solely for Claude's use", build log 35).
-        if speaker != OWNER:
-            system_prompt += "\n" + f"You are talking with {speaker}, not your owner."
+        if speaker != STEWARD:
+            system_prompt += "\n" + f"You are talking with {speaker}, not your steward."
 
         retrieval = {}
         try:
@@ -916,32 +916,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # than showing nothing and looking clean.
             stored_mode = UNVERIFIED
 
-        # ---- WHAT IT SAYS THE OWNER TOLD IT ----
+        # ---- WHAT IT SAYS THE STEWARD TOLD IT ----
         # Andreas, 26 Sep (build log 40i decision 2, step 41): an answer that
-        # credits the owner with no owner fact shown, or with content that is
+        # credits the steward with no steward fact shown, or with content that is
         # not in what was shown, is tagged and kept out of memory. In the
         # reading soak 83 of 254 such answers put something in his mouth he
         # never entered - Methuselah at 195 years among them - and the stored
         # answer then grounded its own repetition (40d). Kept out of memory
         # means stored as unverified: in the record and on the console, never
         # retrieved, never in a ring. See logic/attribution.py.
-        owner = {"credited": False}
+        steward = {"credited": False}
         if ai_content:
             try:
-                owner = owner_check(ai_content, retrieval.get("fact_texts") or [])
+                steward = steward_check(ai_content, retrieval.get("fact_texts") or [])
             except Exception as e:
-                owner = {"credited": None, "why": "the check could not run"}
+                steward = {"credited": None, "why": "the check could not run"}
                 print(f"[attribution] the check could not run: {e!r}", flush=True)
-                if "owner" in ai_content.lower():
+                if re.search(r"\b(?:steward|owner)\b", ai_content, re.I):
                     stored_mode = UNVERIFIED
-        if owner.get("credited") and not owner.get("backed"):
+        if steward.get("credited") and not steward.get("backed"):
             stored_mode = UNVERIFIED
             # The kind of miss only - no figure and no words from the answer
             # go to the journal (37: what was said stays out of it).
-            kind = ("no owner fact shown" if not retrieval.get("fact_texts")
-                    else "a figure not shown" if owner.get("figures")
+            kind = ("no steward fact shown" if not retrieval.get("fact_texts")
+                    else "a figure not shown" if steward.get("figures")
                     else "words not shown")
-            print(f"[attribution] credits the owner: {kind} - kept out of memory",
+            print(f"[attribution] credits the steward: {kind} - kept out of memory",
                   flush=True)
 
         stream(_terminator(raw_response, model, {
@@ -961,12 +961,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # A question about what was read or talked about, which asks the
             # rings first (logic/rings.py, build log 41).
             "recollection": bool(retrieval.get("recollection")),
-            # Credits the owner, and whether what it credits him with was in
-            # what he told it (logic/attribution.py). owner_backed is null
-            # when the owner is not credited.
-            "owner_credited": bool(owner.get("credited")),
-            "owner_backed": owner.get("backed") if owner.get("credited") else None,
-            "owner_why": owner.get("why", "") if owner.get("credited") else "",
+            # Credits the steward, and whether what it credits him with was in
+            # what he told it (logic/attribution.py). steward_backed is null
+            # when the steward is not credited.
+            "steward_credited": bool(steward.get("credited")),
+            "steward_backed": steward.get("backed") if steward.get("credited") else None,
+            "steward_why": steward.get("why", "") if steward.get("credited") else "",
         }))
 
         # Store in AetherRoot
@@ -1007,7 +1007,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 # of step 29: an "I don't know" to an UNRELATED question
                 # ("What is the latest news today?") outranked the statement
                 # that held the answer and took the last slot in the window,
-                # on the turn the node first denied knowing its owner's dog's
+                # on the turn the node first denied knowing its steward's dog's
                 # name. A decline was still the most-promoted memory the node
                 # could hold, on the path where most of its turns happen.
                 #
@@ -1066,8 +1066,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                       "recorded, not remembered", flush=True)
 
             if stored_mode != "factual":
-                because = ("credits the owner with something not shown"
-                           if owner.get("credited") and not owner.get("backed")
+                because = ("credits the steward with something not shown"
+                           if steward.get("credited") and not steward.get("backed")
                            else mode_reason)
                 print(f"[provenance] stored as {stored_mode} ({because})", flush=True)
             record({
@@ -1082,9 +1082,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "checked": not check_failed,
                 "remembered": stored_ok,
                 "facts_used": retrieval.get("facts") or [],
-                "owner_credited": owner.get("credited"),
-                "owner_backed": owner.get("backed") if owner.get("credited") else None,
-                "owner_why": owner.get("why", "") if owner.get("credited") else "",
+                "steward_credited": steward.get("credited"),
+                "steward_backed": steward.get("backed") if steward.get("credited") else None,
+                "steward_why": steward.get("why", "") if steward.get("credited") else "",
                 "prompt": user_msg[:160],
                 "answer": ai_content[:160],
                 "speaker": speaker,
@@ -1093,7 +1093,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
             try:
                 # What was in front of the model this turn decides whether a
-                # clean decline earns (step 46): none of the owner's facts,
+                # clean decline earns (step 46): none of the steward's facts,
                 # no ring, no line it knows (step 49), and a question rather
                 # than a passage. A retrieval that did not report its known
                 # lines passes None, and None earns nothing.
@@ -1191,7 +1191,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(content_length) if content_length > 0 else b""
 
         if self.path == "/aetherseed/setup":
-            # First run: the owner names the companion and picks its language.
+            # First run: the steward names the companion and picks its language.
             # Both go into the charter, so companion.save() validates them;
             # nothing reaches the prompt that did not pass.
             try:

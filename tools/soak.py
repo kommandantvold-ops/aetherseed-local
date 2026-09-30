@@ -19,7 +19,7 @@ one done line or a line after it, an empty answer, a stream ended in error, a
 model answer without a tag, a control token or a scaffold marker - whole, or
 begun at the end - in what the reader saw.
 
-It steps aside for the owner. Before each chat it reads the unit's own status
+It steps aside for the steward. Before each chat it reads the unit's own status
 on 8001 (read only). If the unit has been named or holds an episode, someone
 is using it, and between 07:00 and 22:00 the soak pauses until 22:00 rather
 than slow their answers.
@@ -49,7 +49,7 @@ SMOKE = os.environ.get("SOAK_SMOKE") == "1"
 UNTIL = (datetime.strptime(os.environ["SOAK_UNTIL"], "%Y-%m-%d %H:%M")
          if not SMOKE and os.environ.get("SOAK_UNTIL") else None)
 # SOAK_HOURS counts hours of SOAKING, not hours on the clock. The soak steps
-# aside for the owner during the day (step_aside below), and on a unit that is
+# aside for the steward during the day (step_aside below), and on a unit that is
 # in use that is most of the daylight hours - so "run it for 24 hours" and
 # "stop at this time tomorrow" stopped meaning the same thing the moment Lyra
 # was named. Paused time is subtracted; the run ends when it has actually been
@@ -64,9 +64,9 @@ UNIT_STATE = os.environ.get("SOAK_UNIT_STATE", "/var/lib/aetherseed/.aetherseed"
 DAY_FROM = int(os.environ.get("SOAK_DAY_FROM", "7"))
 RESUME_HOUR = int(os.environ.get("SOAK_RESUME_HOUR", "22"))
 SEED = int(os.environ.get("SOAK_SEED", "20260922"))
-# How long after the owner's last turn the unit still counts as in use.
+# How long after the steward's last turn the unit still counts as in use.
 QUIET_AFTER = float(os.environ.get("SOAK_QUIET_AFTER", "1200"))
-# Stepping aside protects the owner's experience while the soak runs. Set
+# Stepping aside protects the steward's experience while the soak runs. Set
 # SOAK_STEP_ASIDE=0 when nobody will be talking to the unit: the run then never
 # pauses, and `hours` and `soak_hours` in the summary are the same number.
 STEP_ASIDE = os.environ.get("SOAK_STEP_ASIDE", "1") != "0"
@@ -488,7 +488,7 @@ def unit_in_use():
 
 
 def step_aside():
-    """Pause while the owner is talking to the unit, and resume when they stop.
+    """Pause while the steward is talking to the unit, and resume when they stop.
 
     It used to hold off until RESUME_HOUR once it had paused at all. Waiting
     until 22:00 because somebody said good morning to Lyra is the wrong trade

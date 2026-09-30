@@ -2,7 +2,7 @@
 
 Step 36 (25 Sep 2026). Every stored turn used to read "User:" in the memory
 block, whoever typed it. After 66 turns from Claude the node said "I exist
-solely for Claude's use", and an error of Claude's was stored in the owner's
+solely for Claude's use", and an error of Claude's was stored in the steward's
 voice (build log 35). The proxy-level tests are in test_reply.TestWhoIsSpeaking;
 these cover the rules, the store, the migration and the operator tool.
 
@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from aetherroot import AetherRoot
-from logic.speaker import OWNER, UNKNOWN, label_for, validate_speaker
+from logic.speaker import STEWARD, UNKNOWN, label_for, validate_speaker
 
 sys.path.insert(0, str(HERE / "tools"))
 import correct_memory  # noqa: E402
@@ -31,8 +31,8 @@ import correct_memory  # noqa: E402
 
 class TheRules(unittest.TestCase):
 
-    def test_declaring_nothing_is_the_owner(self):
-        self.assertEqual((OWNER, None), validate_speaker(None))
+    def test_declaring_nothing_is_the_steward(self):
+        self.assertEqual((STEWARD, None), validate_speaker(None))
 
     def test_a_clean_name_is_kept_as_given(self):
         self.assertEqual(("Claude", None), validate_speaker("Claude"))
@@ -40,7 +40,7 @@ class TheRules(unittest.TestCase):
         self.assertEqual(("Øystein", None), validate_speaker("Øystein"))
 
     def test_reserved_labels_can_never_be_declared(self):
-        for name in ("Owner", "owner", "OWNER", "User", "AI", "assistant", "system",
+        for name in ("Steward", "steward", "STEWARD", "User", "AI", "assistant", "system",
                      "Known", "Episode", "Pattern", "Fiction", "you", "Unknown"):
             with self.subTest(name=name):
                 self.assertEqual((None, "reserved"), validate_speaker(name))
@@ -60,7 +60,7 @@ class TheRules(unittest.TestCase):
     def test_labels(self):
         self.assertEqual("User", label_for(UNKNOWN))
         self.assertEqual("User", label_for(None))
-        self.assertEqual("Owner", label_for(OWNER))
+        self.assertEqual("Steward", label_for(STEWARD))
         self.assertEqual("Claude", label_for("Claude"))
 
 
@@ -80,11 +80,11 @@ class _Root(unittest.TestCase):
 class TheModelSeesWhoSaidIt(_Root):
 
     def test_each_speaker_is_named_in_the_memory_block(self):
-        self.root.store_interaction("My cat is called Tussi.", "Noted.", speaker=OWNER)
+        self.root.store_interaction("My cat is called Tussi.", "Noted.", speaker=STEWARD)
         self.root.store_interaction("Claude here. Vega is in Lyra.", "Thank you.",
                                     speaker="Claude")
         ctx = self.context("Tussi cat Vega Lyra")
-        self.assertIn("[Episode] Owner: My cat is called Tussi.", ctx)
+        self.assertIn("[Episode] Steward: My cat is called Tussi.", ctx)
         self.assertIn("[Episode] Claude: Claude here. Vega is in Lyra.", ctx)
         self.assertNotIn("User:", ctx)
 
@@ -182,12 +182,12 @@ class TheOperatorTool(_Root):
         self.assertEqual(0, code)
         self.assertEqual({1: "", 2: "Claude", 3: ""}, self.speakers())
 
-    def test_the_operator_may_attribute_to_the_owner(self):
-        code, _ = self.run_tool("--ids", "3", "--speaker", "owner",
+    def test_the_operator_may_attribute_to_the_steward(self):
+        code, _ = self.run_tool("--ids", "3", "--speaker", "steward",
                                 "--reason", "Andreas confirmed", "--apply")
         self.assertEqual(0, code)
-        self.assertEqual(OWNER, self.speakers()[3])
-        self.assertIn("[Episode] Owner: old turn 2", self.context("old turn 2"))
+        self.assertEqual(STEWARD, self.speakers()[3])
+        self.assertIn("[Episode] Steward: old turn 2", self.context("old turn 2"))
 
     def test_a_bad_name_is_refused_here_too(self):
         for bad in ("AI", "Claude: hi", "Known"):

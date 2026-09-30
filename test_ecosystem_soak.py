@@ -111,7 +111,7 @@ class TheCopy(unittest.TestCase):
             with open(os.path.join(root_dir, "config.json"), "w") as f:
                 json.dump(dict(aetherroot.DEFAULT_CONFIG), f)
             r = aetherroot.AetherRoot(root_dir)
-            r.store_interaction("hello", "Hello.", speaker="owner")
+            r.store_interaction("hello", "Hello.", speaker="steward")
             r.close()
             with open(os.path.join(src, "companion.json"), "w") as f:
                 json.dump({"name": "Lyra"}, f)

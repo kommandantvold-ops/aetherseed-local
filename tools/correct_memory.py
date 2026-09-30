@@ -4,7 +4,7 @@ correct_memory.py — an operator marks a stored answer as not to be used again.
 
 WHY THIS EXISTS
 ---------------
-The owner must not be able to tamper with the node's memory from the console.
+The steward must not be able to tamper with the node's memory from the console.
 That is a security barrier and a design decision (Andreas, 23 Sep), and it
 holds. But a wrong answer, once stored `factual`, is retrieved as context and
 becomes grounding for its own repetition - measured on this unit the same day
@@ -41,10 +41,10 @@ WHO SAID IT (step 36)
 `--speaker NAME` sets who said an episode instead of its mode - for rows from
 before the speaker field existed, which are stored as unknown. The same rules:
 dry run by default, a reason to apply, a line in `corrections.log`
-(`action: set_speaker`), and `--restore-speaker` to put it back. `owner` is
+(`action: set_speaker`), and `--restore-speaker` to put it back. `steward` is
 accepted here, although a caller of the API can never declare it: attributing
-a past turn to the owner is exactly the operator decision this tool records.
-Only with the owner's say-so.
+a past turn to the steward is exactly the operator decision this tool records.
+Only with the steward's say-so.
 
 USAGE
 -----
@@ -149,7 +149,7 @@ def main(argv=None):
     ap.add_argument("--restore", action="store_true",
                     help="put the modes back, from the corrections log")
     ap.add_argument("--speaker", default=None,
-                    help="set who said it instead of the mode ('owner' or a name)")
+                    help="set who said it instead of the mode ('steward' or a name)")
     ap.add_argument("--restore-speaker", action="store_true",
                     help="put the speakers back, from the corrections log")
     ap.add_argument("--apply", action="store_true", help="actually write")
@@ -223,7 +223,7 @@ def main(argv=None):
 
 def speakers(a):
     """--speaker / --restore-speaker: the same discipline as a mode change."""
-    from logic.speaker import validate_speaker, OWNER
+    from logic.speaker import validate_speaker, STEWARD
 
     if not has_speaker_column(a.db):
         print("this store has no speaker column yet - it is added when the proxy "
@@ -247,8 +247,8 @@ def speakers(a):
         if unknown:
             print("no recorded previous speaker for: %s" % unknown, file=sys.stderr)
             return 2
-    elif a.speaker.strip().casefold() == OWNER:
-        targets = {i: OWNER for i in ids}
+    elif a.speaker.strip().casefold() == STEWARD:
+        targets = {i: STEWARD for i in ids}
     else:
         name, err = validate_speaker(a.speaker)
         if err:

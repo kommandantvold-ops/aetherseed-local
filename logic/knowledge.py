@@ -51,7 +51,7 @@ same probe set:
 
 Honest caveat, because the number flatters us: the probes and the curriculum
 were written by the same hand on the same day. 37/42 is a self-graded exam. The
-real figure is what the soak and the owner produce.
+real figure is what the soak and the steward produce.
 
 HOW A LINE IS CHOSEN
 --------------------
@@ -73,7 +73,7 @@ you" and "who made you" have no content words, and are the two questions a
 companion in a living room is asked most.
 
 At most two lines per turn, and at most half the memory budget, because the
-other half is what its owner actually said to it.
+other half is what its steward actually said to it.
 """
 
 from __future__ import annotations

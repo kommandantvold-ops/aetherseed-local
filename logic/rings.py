@@ -46,7 +46,7 @@ upon unto thee thou thy thine hath doth ye shalt wilt art
 here there where when what which who whom whose why how
 his him her hers himself herself mine yours ours theirs themselves
 among until unto while within without into onto upon also than
-claude reader owner lyra user
+claude reader steward owner lyra user
 """.split())
 
 
@@ -146,7 +146,8 @@ def clean_own_words(text):
     if not text:
         return ""
     t = " ".join(text.split())
-    for tag in (RING_TAG, "[Known]", "[Episode]", "[Pattern]", "[Owner told you]"):
+    for tag in (RING_TAG, "[Known]", "[Episode]", "[Pattern]", "[Steward told you]",
+                "[Owner told you]"):   # the tag before build log 50
         t = t.replace(tag, "")
     t = t.strip(" \"“”'")
     m = re.search(r"^(.+?[.!?])(\s|$)", t)

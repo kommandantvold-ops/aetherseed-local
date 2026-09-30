@@ -1,5 +1,5 @@
 """
-The companion's own settings, chosen by its owner on first run.
+The companion's own settings, chosen by its steward on first run.
 
 Decided 2026-09-21 by Andreas: "The user should have a first time choice to
 name its own companion, should be a onboarding thing. Companion name, language
@@ -77,7 +77,7 @@ NAME_MAX = 24
 _NAME_OK = re.compile(r"^[\w .'’-]+$", re.UNICODE)
 
 
-# Error codes, so the console can say them in the owner's language; the text
+# Error codes, so the console can say them in the steward's language; the text
 # here is what the API and the logs carry.
 ERRORS = {
     "required": "a name is required",
