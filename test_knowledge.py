@@ -93,6 +93,11 @@ ON_TOPIC = [
     ("what is aetherspark", "eco.spark"),
     ("what are your rings", "eco.rings"),
     ("what has your steward told you as facts", "eco.facts"),
+    # the role itself (Andreas approved the line, 30 Sep; build log 50)
+    ("who is your steward", "eco.steward"),
+    ("who owns you", "eco.steward"),
+    ("do you have an owner", "eco.steward"),
+    ("what is a steward", "eco.steward"),
     # e06 of the ecosystem soak: eco.facts lost a three-way tie on file order
     # and was never shown, 49 of 49 (48c); a trigger phrase since 49
     ("what happens to the facts i tell you", "eco.facts"),
@@ -134,6 +139,13 @@ class TheShippedCurriculum(unittest.TestCase):
             self.assertLessEqual(len(e["text"]), MAX_TEXT_CHARS, e["id"])
             self.assertNotIn(e["id"], seen)
             seen.add(e["id"])
+
+    def test_somebody_elses_owner_is_not_her_steward(self):
+        # eco.steward answers "who owns you", not every sentence about owning
+        for q in ("who owns the car", "who is the owner of this house",
+                  "the dog's owner came by", "can you look after the dog"):
+            with self.subTest(q=q):
+                self.assertNotIn("eco.steward", ids_for(self.k, q))
 
     def test_household_sentences_pull_nothing(self):
         noisy = [(q, ids_for(self.k, q)) for q in HOUSEHOLD
