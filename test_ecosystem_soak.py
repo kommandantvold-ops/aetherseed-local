@@ -1,4 +1,5 @@
-"""The ecosystem soak (build log 48): its questions, its scoring, its copy.
+"""The ecosystem soak (build log 48), in training/ since 49: its questions,
+its scoring, its copy, its report.
 
     python3 -m unittest test_ecosystem_soak -v
 """
@@ -12,11 +13,13 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(HERE, "tools"))
+sys.path.insert(0, os.path.join(HERE, "training"))
 
 import ecosystem_soak as es                               # noqa: E402
 from intent_detection import detect_intent                 # noqa: E402
 from logic.provenance import detect_mode, FACTUAL          # noqa: E402
+from logic.gate_answers import is_level_question, refusal_text  # noqa: E402
+from aetherspark import TRUST_PERMISSIONS                  # noqa: E402
 
 TOOL_PROBES = {"e13": "trust_status", "e15": "trust_status", "e17": "todo_read", "e18": "note_list", "e19": "summarize",
                "e20": "file_list", "e21": "todo_add", "e22": "note_write"}
@@ -51,6 +54,34 @@ class TheQuestions(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(ws, "todo.txt")))
         self.assertTrue(os.path.exists(os.path.join(ws, "visit.md")))
         self.assertTrue(os.listdir(os.path.join(ws, "notes")))
+
+
+class TheGateAnswersScore(unittest.TestCase):
+    """e15, e21 and e22 are answered by the unit itself since 49; the words
+    they expect are the words it says."""
+
+    def setUp(self):
+        self.p = {p["id"]: p for p in es.load_probes()}
+
+    def test_the_level_question_is_the_one_the_gate_answers(self):
+        self.assertTrue(is_level_question(self.p["e15"]["ask"]))
+        self.assertTrue(es.score(self.p["e15"], "My trust level is observer.", {})["answered"])
+        s = es.score(self.p["e15"], "My trust level is observer, reader, writer, builder.", {})
+        self.assertTrue(s["wrong_words"])
+        for pid in self.p:
+            if pid != "e15":
+                self.assertFalse(is_level_question(self.p[pid]["ask"]), pid)
+
+    def test_the_refusals_score_as_answered_and_nothing_wrong(self):
+        for pid, tool in (("e21", "todo_add"), ("e22", "note_write")):
+            said = refusal_text(tool, 2, "observer", TRUST_PERMISSIONS)
+            s = es.score(self.p[pid], said, {})
+            self.assertTrue(s["answered"], pid)
+            self.assertEqual(s["wrong_words"], [], pid)
+        # what the model said in 48
+        self.assertTrue(es.score(self.p["e22"], "I can write a note: the soak started today.",
+                                 {})["wrong_words"])
+        self.assertTrue(es.score(self.p["e21"], "Buy milk from the local store.", {})["wrong_words"])
 
 
 class TheScore(unittest.TestCase):
@@ -104,6 +135,44 @@ class TheCopy(unittest.TestCase):
         finally:
             shutil.rmtree(src, ignore_errors=True)
             shutil.rmtree(dst, ignore_errors=True)
+
+
+class TheReport(unittest.TestCase):
+
+    def test_a_report_from_turns(self):
+        d = tempfile.mkdtemp(prefix="eco-")
+        try:
+            self.assertIn("no soak", es.report(d))
+            probes = es.load_probes()
+            with open(os.path.join(d, "ecosoak.jsonl"), "w") as f:
+                f.write(json.dumps({"kind": "status", "label": "start", "at": "t0",
+                                    "copied_episodes": 7, "build": "abcd1234"}) + "\n")
+                for i, p in enumerate(probes * 2):
+                    reply = "My trust level is observer." if p["id"] == "e15" else "No idea."
+                    f.write(json.dumps({"turn": i + 1, "kind": "probe", "probe": p["id"],
+                                        "group": p["group"], "reply": reply, "secs": 20.0,
+                                        "failures": [], "score": es.score(p, reply, {})}) + "\n")
+            text = es.report(d)
+            self.assertIn("turns 44, failed 0", text)
+            self.assertIn("STILL RUNNING", text)
+            self.assertIn("e15 What is your trust level?", text)
+            self.assertIn("<- CHECK", text)
+            line15 = [l for l in text.splitlines() if l.strip().startswith("e15")][0]
+            self.assertNotIn("CHECK", line15)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class TheRunScript(unittest.TestCase):
+
+    def test_it_parses_and_never_deletes(self):
+        import subprocess
+        sh = os.path.join(HERE, "training", "run-ecosystem-soak.sh")
+        self.assertEqual(subprocess.run(["bash", "-n", sh]).returncode, 0)
+        text = open(sh).read()
+        self.assertNotIn("rm ", text)
+        self.assertIn("--uid=aetherseed", text)
+        self.assertIn("/var/lib/aetherseed/.aetherseed", text)
 
 
 if __name__ == "__main__":
