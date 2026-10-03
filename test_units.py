@@ -67,6 +67,11 @@ class TestNoPersonInTheBuild(unittest.TestCase):
         self.assertIn("--retry-connrefused", wait)
         self.assertIn("--fail", wait)
         self.assertIn("--app=http://127.0.0.1:2077/", text)   # the same page
+        # and for the network to settle first: a load cut off by the address
+        # arriving left the blank page, 3 boots of 3. Failing must not stop
+        # the screen ("-"), and it waits for start-up, not for a connection.
+        net = text.index("ExecStartPre=-/usr/bin/nm-online -s -q")
+        self.assertLess(net, pre)
         self.assertIn("Restart=always", d)
 
     def test_the_screen_is_restarted_when_the_console_is_not_on_it(self):

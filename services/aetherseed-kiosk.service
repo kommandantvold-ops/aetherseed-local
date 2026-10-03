@@ -106,11 +106,19 @@ RuntimeDirectoryMode=0700
 # may not be listening yet, and a kiosk browser that gets no page does not ask
 # again. So the browser is not started until the page itself answers; if it
 # never does, this fails and Restart= tries again.
-# THIS ALONE DID NOT CURE THE BLANK WHITE PAGE seen on a pilot unit on 3 Oct
-# 2026: with this in place the page answered and the screen was white again -
-# the browser's own load was cut off as the Ethernet address arrived in the
-# same second. aetherseed-kiosk-watch.service is what catches that, and any
-# other reason the console is not on the screen.
+# THE BLANK WHITE PAGE (build log 53). A pilot unit (Stella) came up on a
+# blank page on 3 of 3 boots on 3 Oct 2026, the console answering all the
+# while. The browser was starting as the Ethernet address arrived - 16:40:44
+# and 16:40:46.48 - and Chromium cuts off a page load when the network changes
+# under it ("Network service crashed or was terminated" in its log); a kiosk
+# browser does not try again. With the browser held back until NetworkManager
+# has finished bringing its devices up: 2 of 2 boots straight to the console,
+# no such line. `nm-online -s` waits for that start-up, not for a connection:
+# a unit with no cable is not held up for long, and the leading "-" means a
+# unit where it fails or times out starts its screen anyway. This is the
+# cause as far as five boots show; aetherseed-kiosk-watch.service is there
+# for whatever else leaves the console off the screen.
+ExecStartPre=-/usr/bin/nm-online -s -q -t 30
 ExecStartPre=/usr/bin/curl --silent --fail --output /dev/null \
     --retry 60 --retry-delay 1 --retry-connrefused --max-time 5 \
     http://127.0.0.1:2077/
