@@ -1,23 +1,24 @@
 # AetherSeed Companion — cartridge manifest
-# DERIVED, NOT CAPTURED (build log step 51, 30 Sep 2026).
-# Lyra's capture of this build (367dc40c, main ad4df1f's application, verify
+# DERIVED, NOT CAPTURED (build log step 53, 3 Oct 2026).
+# Lyra's capture of this build (2d9a73c6, the tag's application, verify
 # MATCH) with the unserved second model's three lines removed, as in step 47.
-# Against 8d570d79 only app.digest differs (the to-do list shown from the
-# file). Not tagged yet.
+# Against 28aa404c: app.digest, app.files, the kiosk unit, and two new lines
+# for the kiosk watch (its unit file, and that it is enabled).
 # Verify with: ./cartridge.sh verify cartridge.manifest
 #
 # cartridge-id is a hash over every line below it. Quote that one
 # value to name a build; the lines are there to say what differs.
-cartridge-id	28aa404c8c88b52fa1097480ceb9db2bf2063c960779432f1c3a4f82eb25e157
-app.digest	e7880e78ab148993b30a316861c447c1aede61c4da0eb88275c694cab9533b30
-app.files	36
+cartridge-id	211f3310d9625f06f4edf8b89e9f3ec3dd483064d8a2bde7c762e898b8f3ccea
+app.digest	db2902f0fdd717af0ebca5a150367a11e0c5b05166d33d1ae547d3b739d5497d
+app.files	37
 app.numpy	2.2.4
 app.tokenizers	0.23.2
 device.node_mode	660 root:hailo
 file./etc/nftables.conf	3eee0ef33e802a35fe3d25d2a95ad9d5ecdeb1c7a4b46381dbdefa46aef1d8b9
 file./etc/systemd/system/aetherseed-gui.service	3563c80c5c318d659970b9ff979c44e75e56cb503012ed109e38c438101c8b56
 file./etc/systemd/system/aetherseed-keepalive.service	be5c68474cd568110bb30f5323123811084a2c90bde6d8e243fe8184c2c8938b
-file./etc/systemd/system/aetherseed-kiosk.service	eda248bdcb23518c8a9638d17d071cd50a5fe2cd55655b74a6c9078c802c15ef
+file./etc/systemd/system/aetherseed-kiosk-watch.service	5f640a3aacf0ab375985f84a8ae2528c637be5d3abfe9173efc90568b6f2679f
+file./etc/systemd/system/aetherseed-kiosk.service	dcb354dac13e3278435001e33568dad3ec7b8c31434043d4749176fd0934b9a7
 file./etc/systemd/system/aetherseed-proxy.service	ebd47ba98497e3488f4fa75624c80960566fb20f6320a85cad2888e55895ba29
 file./etc/systemd/system/aetherseed-shutdown.path	129dce474a7502dc8a932160530fae934b1e1b01f107330102428276b59711d4
 file./etc/systemd/system/aetherseed-shutdown.service	9081c570687a5236ae880ab1ac9d4db1297f0ca487b9f14a725f1b3f44c381c7
@@ -45,6 +46,7 @@ service.gui.enabled	enabled
 service.hailo_ollama.enabled	enabled
 service.keepalive.enabled	enabled
 service.kiosk.enabled	enabled
+service.kiosk_watch.enabled	enabled
 service.nftables.enabled	enabled
 service.proxy.enabled	enabled
 service.warmup.enabled	enabled

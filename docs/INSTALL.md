@@ -1,6 +1,6 @@
 # Installing the stable Companion build
 
-**Build:** git tag `stable-llama-2026-09-30b` — Llama 3.2 3B on HailoRT 5.1.1,
+**Build:** git tag `stable-llama-2026-10-03` — Llama 3.2 3B on HailoRT 5.1.1,
 the one fixed build (Andreas, 29 Sep): the build that ran Lyra through soak 2
 (tag `stable-llama-2026-09-27`, build log step 43) **with no person's account in
 it** (step 45), **trust paid only for a decline of what it was not given**
@@ -13,16 +13,20 @@ ecosystem soak in `training/`**, for a pilot or the steward to run at will
 prompt, the console (*forvalter* in Norwegian) and its own knowledge — and
 **guided correction** on the console: the steward marks a turn or a ring as
 right, or corrects it, and can undo (step 50), and **the to-do list shown from
-the file** (step 51). The kiosk runs as its own account, `aetherseed-kiosk`,
-and the keepalive as the service account. Installed on Lyra on 30 Sep (step
-51); the previous tags: `stable-llama-2026-09-30` (step 49),
+the file** (step 51), and **a screen that waits for the network and is
+restarted if the console is not on it** (step 53 — a pilot unit had come up on
+a blank page). The kiosk runs as its own account, `aetherseed-kiosk`, and the
+keepalive as the service account. Installed on Lyra on 3 Oct (step 53); the
+previous tags: `stable-llama-2026-09-30b` (step 51, the build the two pilot
+units were first installed from), `stable-llama-2026-09-30` (step 49),
 `stable-llama-2026-09-29` (step 47).
-**Cartridge:** `28aa404c8c88b52fa1097480ceb9db2bf2063c960779432f1c3a4f82eb25e157`
-— Lyra's capture of this build (`367dc40c`, MATCH) with the three lines of the
+**Cartridge:** `211f3310d9625f06f4edf8b89e9f3ec3dd483064d8a2bde7c762e898b8f3ccea`
+— Lyra's capture of this build (`2d9a73c6`, MATCH) with the three lines of the
 unserved second model she still holds removed (`tools/cartridge.manifest` says
 which). **Two units have been built from this guide** (30 Sep and 3 Oct 2026,
-build log 52): both verify with exactly the two expected lines differing, and
-carry the same cartridge id as each other, `5ab3c8e7…`.
+build log 52), at `stable-llama-2026-09-30b`: both verified with exactly the
+two expected lines differing, and carried the same cartridge id as each other
+(`5ab3c8e7…` at that tag).
 
 Written 27 Sep 2026 from the build log, the repository at the tag, and a
 read-only snapshot of Lyra running this build
@@ -200,7 +204,7 @@ sudo useradd --create-home --shell /usr/sbin/nologin \
 Copy the tag to the unit, from the repository on the PC:
 
 ```bash
-git archive --prefix=aetherseed-stable/ stable-llama-2026-09-30b | ssh admin@<unit> "tar -x -C ~"
+git archive --prefix=aetherseed-stable/ stable-llama-2026-10-03 | ssh admin@<unit> "tar -x -C ~"
 ```
 
 On the unit, install the 37 files the build runs from — no more, no fewer —
@@ -241,7 +245,7 @@ sudo install -o aetherseed -g aetherseed -m 644 /tmp/tokenizer.json /var/lib/aet
 ```
 
 Check the application against the cartridge — this must print
-`e7880e78ab148993b30a316861c447c1aede61c4da0eb88275c694cab9533b30`:
+`db2902f0fdd717af0ebca5a150367a11e0c5b05166d33d1ae547d3b739d5497d`:
 
 ```bash
 cd /opt/aetherseed && find . -path ./venv -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum | sha256sum
