@@ -27,10 +27,10 @@ carry the same cartridge id as each other, `5ab3c8e7…`.
 Written 27 Sep 2026 from the build log, the repository at the tag, and a
 read-only snapshot of Lyra running this build
 (`.scratch/step44/stable-reference-2026-09-27/`). Every file and value below was
-checked against Lyra. **No new device has been built from this guide yet** —
-the first one is the test (build log, open item 14). Commands marked *(log)*
-are the build log's own; the rest were written for this guide, from Lyra's
-state, and have not been run on a fresh device.
+checked against Lyra. Commands marked *(log)* are the build log's own; the rest
+were written for this guide from Lyra's state. **Every command here has now
+been run on two fresh devices** (build log 52), and where they showed the
+guide wrong it has been corrected in place.
 
 `docs/SETUP.md` and the README's quick start describe an earlier device
 (`hailo-h10-all`, hailo-ollama built from source, a Qwen3 model pulled over
