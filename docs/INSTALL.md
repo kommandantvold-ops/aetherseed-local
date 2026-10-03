@@ -20,7 +20,9 @@ and the keepalive as the service account. Installed on Lyra on 30 Sep (step
 **Cartridge:** `28aa404c8c88b52fa1097480ceb9db2bf2063c960779432f1c3a4f82eb25e157`
 — Lyra's capture of this build (`367dc40c`, MATCH) with the three lines of the
 unserved second model she still holds removed (`tools/cartridge.manifest` says
-which). The first unit built from this guide captures its own.
+which). **Two units have been built from this guide** (30 Sep and 3 Oct 2026,
+build log 52): both verify with exactly the two expected lines differing, and
+carry the same cartridge id as each other, `5ab3c8e7…`.
 
 Written 27 Sep 2026 from the build log, the repository at the tag, and a
 read-only snapshot of Lyra running this build
@@ -72,7 +74,9 @@ kernel `6.18.50+rpt-rpi-2712` and 1645 packages before anything was installed.
   chromium 152.0.7977.82-1~deb13u1+rpt2).
 - In the Imager's settings: an admin user (any name — the build runs as its
   own two accounts, created in step 6); a **hostname of its own** (Lyra is
-  `aetherseed`); SSH on; Wi-Fi country NO.
+  `aetherseed`); SSH on; Wi-Fi country NO. If SSH was left off: on the unit,
+  `sudo systemctl enable --now ssh`. The Imager's admin account asks for its
+  password on `sudo` (Lyra's did not); nothing in the build depends on either.
 - First boot, then check: `uname -r` should print `6.18.50+rpt-rpi-2712`. If it
   does not, the kernel and package lines will differ — decide before going on.
 - **Never run `apt upgrade` or `full-upgrade`.** `apt-get update` only reads
@@ -109,7 +113,8 @@ sudo reboot
 ```
 
 Check: `hailortcli fw-control identify` shows `HAILO10H` and
-`Firmware Version: 5.1.1 (release,app)`; `dkms status` lists `hailo1x_pci/5.1.1`.
+`Firmware Version: 5.1.1 (release,app)`; `sudo dkms status` lists
+`hailo1x_pci/5.1.1` (`dkms` is in `/usr/sbin`, not on an ordinary account's path).
 Versions must read h10-hailort 5.1.1, h10-hailort-pcie-driver 5.1.1,
 python3-h10-hailort 5.1.1-1, dkms 3.2.2-1~deb13u1.
 
@@ -143,10 +148,12 @@ sha256sum /etc/xdg/hailo-ollama/hailo-ollama.json   # b350ac9ecb75e2376293c281c3
 
 ## 5. The model — steps 5, 42b
 
-**Not with `/api/pull`**: a failed pull kills hailo-ollama (42b). Copy it from
-Lyra, or download it from Hailo's 5.1.1 table
-(`https://dev-public.hailo.ai/v5.1.1/blob/Llama-3_2-3B-Instruct.hef` — the
-table's link; we have not fetched it ourselves), then check the hash:
+**Not with `/api/pull`**: a failed pull kills hailo-ollama (42b). **Copy it
+from Lyra** (or from a copy of hers whose hash you have checked), then check the
+hash. **Not from Hailo's 5.1.1 table**: its link
+(`https://dev-public.hailo.ai/v5.1.1/blob/Llama-3_2-3B-Instruct.hef`) serves a
+file of the same size, 3,370,416,230 bytes, with a **different** hash —
+`7fc9c772…`, fetched 30 Sep (build log 52). It is not this build's model.
 
 ```bash
 B=/usr/share/hailo-ollama/models/blob
