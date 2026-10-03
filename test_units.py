@@ -55,6 +55,20 @@ class TestNoPersonInTheBuild(unittest.TestCase):
                 self.assertNotRegex(line, r"/run/user/\d", "%s: %s" % (name, line))
                 self.assertNotRegex(line, r"\bandreas\b", "%s: %s" % (name, line))
 
+    def test_the_browser_waits_for_the_page_it_shows(self):
+        # build log 53: started in the same second as the console server, the
+        # browser asked too early and stayed on a blank page.
+        d = unit("aetherseed-kiosk.service")
+        text = " ".join(d)
+        pre = text.index("ExecStartPre=/usr/bin/curl")
+        self.assertLess(pre, text.index("ExecStart=/usr/bin/labwc"))
+        wait = text[pre:text.index("ExecStart=/usr/bin/labwc")]
+        self.assertIn("http://127.0.0.1:2077/", wait)
+        self.assertIn("--retry-connrefused", wait)
+        self.assertIn("--fail", wait)
+        self.assertIn("--app=http://127.0.0.1:2077/", text)   # the same page
+        self.assertIn("Restart=always", d)
+
     def test_the_kiosk_runs_as_its_own_account_with_its_own_profile(self):
         d = unit("aetherseed-kiosk.service")
         self.assertIn("User=aetherseed-kiosk", d)

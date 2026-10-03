@@ -101,6 +101,17 @@ RuntimeDirectoryMode=0700
 # as a 317 mm ribbon down the middle of a 1600 mm screen. The right number
 # depends on where the viewer actually stands and is a judgement to be made in
 # front of it, not from here.
+# WAIT FOR THE CONSOLE BEFORE OPENING THE BROWSER (build log 53). After=
+# aetherseed-gui.service only means "after that unit was started" - its server
+# may not be listening yet. On 3 Oct 2026 a pilot unit booted with both started
+# in the same second (14:36:45): the browser asked for the page before the
+# server could answer, a kiosk browser does not ask again, and the screen stayed
+# a blank white page with every service active. So the browser is not started
+# until the page itself answers. If it never does, this fails and Restart=
+# tries again - the screen is never left on a page that did not load.
+ExecStartPre=/usr/bin/curl --silent --fail --output /dev/null \
+    --retry 60 --retry-delay 1 --retry-connrefused --max-time 5 \
+    http://127.0.0.1:2077/
 # -C: the kiosk's own config (kiosk/labwc/rc.xml says why). Without it labwc
 # read /etc/xdg/labwc and started the Pi desktop behind the console.
 ExecStart=/usr/bin/labwc -C /opt/aetherseed/kiosk/labwc -s "/usr/bin/chromium \
