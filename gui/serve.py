@@ -54,6 +54,27 @@ SHUTDOWN_PATH = "/aetherseed/shutdown"
 SHUTDOWN_REQUEST = os.environ.get("AETHERSEED_SHUTDOWN_REQUEST",
                                   "/run/aetherseed-gui/shutdown-request")
 SHUTDOWN_CONFIRM = "shut down"
+# THE CONSOLE WAS SEEN. The page asks for /aetherseed/status every 15 seconds
+# for as long as it is loaded, so "the browser is showing the console" has a
+# cheap witness: this file's modification time, touched on every status poll.
+# services/aetherseed-kiosk-watch.service reads it and restarts the screen when
+# the browser has been up for a while and the page is not asking (build log
+# 53): on 3 Oct 2026 a pilot unit showed a blank white page twice - the page
+# load was cut off as the network came up under it, and a kiosk browser does
+# not try again. tmpfs, in this server's own runtime directory, beside the
+# shutdown request; it holds nothing but its timestamp.
+CONSOLE_SEEN = os.environ.get("AETHERSEED_CONSOLE_SEEN",
+                              "/run/aetherseed-gui/console-seen")
+
+
+def _console_seen():
+    try:
+        with open(CONSOLE_SEEN, "a"):
+            os.utime(CONSOLE_SEEN, None)
+    except OSError:
+        pass                        # a witness that cannot be written is not worth a crash
+
+
 # /aetherseed/rings: the ring tree (step 37) - read-only, like the record.
 # /aetherseed/memories: the turns, for guided correction (50); it takes a query
 # string (?before=&q=&limit=), so it is matched on its path alone.
@@ -211,6 +232,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
             self._relay("GET")
             return
         if self.path in PROXIED_GET:
+            if self.path == "/aetherseed/status":
+                _console_seen()
             _tally("status" if self.path.endswith("/status")
                    else "record" if self.path.endswith("/record")
                    else "rings" if self.path.endswith("/rings") else "page")

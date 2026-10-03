@@ -103,12 +103,14 @@ RuntimeDirectoryMode=0700
 # front of it, not from here.
 # WAIT FOR THE CONSOLE BEFORE OPENING THE BROWSER (build log 53). After=
 # aetherseed-gui.service only means "after that unit was started" - its server
-# may not be listening yet. On 3 Oct 2026 a pilot unit booted with both started
-# in the same second (14:36:45): the browser asked for the page before the
-# server could answer, a kiosk browser does not ask again, and the screen stayed
-# a blank white page with every service active. So the browser is not started
-# until the page itself answers. If it never does, this fails and Restart=
-# tries again - the screen is never left on a page that did not load.
+# may not be listening yet, and a kiosk browser that gets no page does not ask
+# again. So the browser is not started until the page itself answers; if it
+# never does, this fails and Restart= tries again.
+# THIS ALONE DID NOT CURE THE BLANK WHITE PAGE seen on a pilot unit on 3 Oct
+# 2026: with this in place the page answered and the screen was white again -
+# the browser's own load was cut off as the Ethernet address arrived in the
+# same second. aetherseed-kiosk-watch.service is what catches that, and any
+# other reason the console is not on the screen.
 ExecStartPre=/usr/bin/curl --silent --fail --output /dev/null \
     --retry 60 --retry-delay 1 --retry-connrefused --max-time 5 \
     http://127.0.0.1:2077/

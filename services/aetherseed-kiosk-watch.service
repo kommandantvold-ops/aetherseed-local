@@ -1,0 +1,28 @@
+# aetherseed-kiosk-watch.service - if the screen is not showing the console, restart it.
+#
+# The console page polls the console server every 15 seconds; the server
+# touches /run/aetherseed-gui/console-seen on each poll. This unit restarts
+# the kiosk when neither it nor the console server has just started and that
+# file is 90 seconds old or missing. tools/kiosk_watch.sh says why (build log 53: a pilot unit on a
+# blank white page, twice, with every service active).
+#
+# Root, because restarting a system unit needs it; it runs one root-owned
+# script from /opt/aetherseed, reads two timestamps and nothing else.
+
+[Unit]
+Description=AetherSeed Companion - keeps the console on the screen
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=aetherseed-kiosk.service aetherseed-gui.service
+Wants=aetherseed-kiosk.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/aetherseed/tools/kiosk_watch.sh
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

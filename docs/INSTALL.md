@@ -203,7 +203,7 @@ Copy the tag to the unit, from the repository on the PC:
 git archive --prefix=aetherseed-stable/ stable-llama-2026-09-30b | ssh admin@<unit> "tar -x -C ~"
 ```
 
-On the unit, install the 36 files the build runs from — no more, no fewer —
+On the unit, install the 37 files the build runs from — no more, no fewer —
 root-owned and read-only:
 
 ```bash
@@ -215,7 +215,7 @@ tar --exclude=__pycache__ -cf - proxy.py aetherroot.py aetherspark.py trust_evol
   kiosk/labwc/autostart kiosk/labwc/environment kiosk/labwc/rc.xml \
   logic/__init__.py logic/attribution.py logic/companion.py logic/facts.py logic/gate_answers.py \
   logic/knowledge.py logic/prompt_builder.py logic/provenance.py logic/rings.py logic/speaker.py \
-  logic/steward.py logic/token_budget.py tools/keepalive.py tools/power.py \
+  logic/steward.py logic/token_budget.py tools/keepalive.py tools/kiosk_watch.sh tools/power.py \
   training/README.md training/run-ecosystem-soak.sh training/ecosystem_soak.py \
   training/ecosystem-probes.json training/ecosystem-workspace \
   | sudo tar -x -C /opt/aetherseed --no-same-owner
@@ -252,7 +252,8 @@ cd /opt/aetherseed && find . -path ./venv -prune -o -type f -print | LC_ALL=C so
 ```bash
 cd ~/aetherseed-stable
 for u in hailo-ollama.service aetherseed-proxy.service aetherseed-warmup.service \
-         aetherseed-gui.service aetherseed-kiosk.service aetherseed-keepalive.service \
+         aetherseed-gui.service aetherseed-kiosk.service aetherseed-kiosk-watch.service \
+         aetherseed-keepalive.service \
          aetherseed-shutdown.path aetherseed-shutdown.service; do
   sudo install -o root -g root -m 644 services/$u /etc/systemd/system/$u
 done
@@ -260,7 +261,7 @@ sudo install -o root -g root -m 644 services/nftables.conf /etc/nftables.conf
 sudo systemctl daemon-reload
 sudo systemctl enable getty@tty2          # the way out of the kiosk, first (18)
 sudo systemctl enable hailo-ollama aetherseed-proxy aetherseed-warmup aetherseed-gui \
-  aetherseed-shutdown.path aetherseed-keepalive aetherseed-kiosk
+  aetherseed-shutdown.path aetherseed-keepalive aetherseed-kiosk aetherseed-kiosk-watch
 ```
 
 The firewall, loaded the way 13d did it — with a dead-man's switch, because a

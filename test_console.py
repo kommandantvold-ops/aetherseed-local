@@ -147,6 +147,28 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self.assertEqual(self._req("GET", "/aetherseed/memoriesX?q=1")[0], 404)
         self.assertEqual(self._req("GET", "/aetherseed/status?x=1")[0], 404)
 
+    def test_a_status_poll_is_the_witness_that_the_console_is_on_the_screen(self):
+        # build log 53: services/aetherseed-kiosk-watch.service reads this file's time
+        import tempfile
+        d = tempfile.mkdtemp(prefix="seen-")
+        saved, serve.CONSOLE_SEEN = serve.CONSOLE_SEEN, os.path.join(d, "console-seen")
+        try:
+            self._req("GET", "/aetherseed/rings")
+            self._req("GET", "/")
+            self.assertFalse(os.path.exists(serve.CONSOLE_SEEN))
+            self._req("GET", "/aetherseed/status")
+            self.assertTrue(os.path.exists(serve.CONSOLE_SEEN))
+            self.assertEqual(os.path.getsize(serve.CONSOLE_SEEN), 0)
+            os.utime(serve.CONSOLE_SEEN, (1, 1))
+            self._req("GET", "/aetherseed/status")
+            self.assertGreater(os.path.getmtime(serve.CONSOLE_SEEN), 1)
+            serve.CONSOLE_SEEN = os.path.join(d, "no", "such", "dir", "x")
+            self.assertEqual(self._req("GET", "/aetherseed/status")[0], 502)   # still relayed
+        finally:
+            serve.CONSOLE_SEEN = saved
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_the_model_cannot_be_reached_around_the_guards(self):
         # /api/generate goes to the model with none of the proxy's guards.
         for path in ("/api/generate", "/api/pull", "/api/delete", "/api/chat/"):

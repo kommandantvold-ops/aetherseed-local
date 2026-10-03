@@ -34,6 +34,7 @@ IDENTITY_FILES=(
   /etc/systemd/system/aetherseed-warmup.service
   /etc/systemd/system/aetherseed-gui.service
   /etc/systemd/system/aetherseed-kiosk.service
+  /etc/systemd/system/aetherseed-kiosk-watch.service
   /etc/systemd/system/aetherseed-keepalive.service
   /etc/systemd/system/aetherseed-shutdown.path
   /etc/systemd/system/aetherseed-shutdown.service
@@ -157,6 +158,8 @@ collect() {
   # unit without it is a different and worse device.
   emit service.gui.enabled          "$(systemctl is-enabled aetherseed-gui 2>/dev/null || echo unknown)"
   emit service.kiosk.enabled        "$(systemctl is-enabled aetherseed-kiosk 2>/dev/null || echo unknown)"
+  # What restarts the screen when the console is not on it (build log 53).
+  emit service.kiosk_watch.enabled  "$(systemctl is-enabled aetherseed-kiosk-watch 2>/dev/null || echo unknown)"
   emit service.getty_tty2.enabled   "$(systemctl is-enabled getty@tty2 2>/dev/null || echo unknown)"
   # The keepalive is an R&D instrument, not product: it holds the model
   # resident and logs one identical request every three minutes. A unit

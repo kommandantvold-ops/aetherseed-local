@@ -69,6 +69,34 @@ class TestNoPersonInTheBuild(unittest.TestCase):
         self.assertIn("--app=http://127.0.0.1:2077/", text)   # the same page
         self.assertIn("Restart=always", d)
 
+    def test_the_screen_is_restarted_when_the_console_is_not_on_it(self):
+        # build log 53: now, kiosk since, console server since, last poll -> restart?
+        import subprocess
+        sh = os.path.join(os.path.dirname(SERVICES), "tools", "kiosk_watch.sh")
+        self.assertEqual(subprocess.run(["bash", "-n", sh]).returncode, 0)
+        cases = (((1000, 0, 900, 0), 0),       # the screen is not running
+                 ((1000, 950, 0, 0), 0),       # no console server to show
+                 ((1000, 950, 900, 0), 0),     # the browser has only just started
+                 ((1000, 800, 800, 0), 1),     # up 200 s and never polled: the blank page
+                 ((1000, 800, 800, 995), 0),   # polling
+                 ((1000, 800, 800, 905), 1),   # stopped polling 95 s ago
+                 ((1000, 100, 990, 50), 0),    # the console server was just restarted
+                 ((1000, 100, 100, 911), 0))   # 89 s: not yet
+        for args, want in cases:
+            with self.subTest(args=args):
+                r = subprocess.run(["bash", sh, "--decide"] + [str(a) for a in args])
+                self.assertEqual(r.returncode, want)
+        text = open(sh).read()
+        self.assertEqual(text.count("systemctl restart"), 1)
+        self.assertNotIn("rm ", text)
+
+    def test_the_watch_unit_runs_the_installed_script_and_nothing_else(self):
+        d = unit("aetherseed-kiosk-watch.service")
+        self.assertIn("ExecStart=/bin/bash /opt/aetherseed/tools/kiosk_watch.sh", d)
+        self.assertIn("Restart=always", d)
+        self.assertIn("WantedBy=multi-user.target", d)
+        self.assertFalse(any(l.startswith("User=") for l in d))   # root: it restarts a unit
+
     def test_the_kiosk_runs_as_its_own_account_with_its_own_profile(self):
         d = unit("aetherseed-kiosk.service")
         self.assertIn("User=aetherseed-kiosk", d)
