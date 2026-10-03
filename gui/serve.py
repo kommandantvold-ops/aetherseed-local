@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The Companion's GUI server.
 
-Serves the console on 127.0.0.1:2077 and reverse-proxies the node's API to the
+Serves the console on port 2077 and reverse-proxies the node's API to the
 proxy on 8001, so the browser only ever speaks to ONE origin. That is not
 decoration: a page on :2077 calling :8001 is cross-origin, which would mean
 either CORS headers on the guard layer or a browser that has to be told to
@@ -232,7 +232,11 @@ class Console(http.server.SimpleHTTPRequestHandler):
             self._relay("GET")
             return
         if self.path in PROXIED_GET:
-            if self.path == "/aetherseed/status":
+            # Only the unit's own screen is the witness: a phone on the
+            # unit's Wi-Fi polls too (build log 54), and its polls must not
+            # hide a blank page on the screen from the kiosk watch.
+            if (self.path == "/aetherseed/status"
+                    and self.client_address[0] in ("127.0.0.1", "::1")):
                 _console_seen()
             _tally("status" if self.path.endswith("/status")
                    else "record" if self.path.endswith("/record")
@@ -257,8 +261,9 @@ class Console(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _shutdown(self):
-        # From the device itself only. The server binds to 127.0.0.1 already;
-        # this holds even if someone rebinds it.
+        # From the device itself only: quantum rest is asked for at the unit,
+        # not from a phone on its Wi-Fi (build log 54 - the server no longer
+        # binds to loopback alone, so this check is the whole of that rule).
         if self.client_address[0] not in ("127.0.0.1", "::1"):
             _tally("refused")
             self._json(403, {"error": "shutdown is only possible on the device"})

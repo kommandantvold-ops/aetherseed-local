@@ -258,5 +258,56 @@ class TheStewardCreditTag(unittest.TestCase):
         self.assertIn("tag(s.stewardUnbacked, 'flagged')", self.HTML)
 
 
+class OnlyTheUnitsOwnScreenIsTheWitness(unittest.TestCase):
+    """Build log 54: the console listens beyond loopback, for a phone on the
+    unit's own Wi-Fi. Its polls must not stand in for the screen's, and quantum
+    rest is still asked for at the unit."""
+
+    @staticmethod
+    def _own_address():
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("10.255.255.255", 9))        # nothing is sent
+            a = s.getsockname()[0]
+        except OSError:
+            a = None
+        finally:
+            s.close()
+        return a if a and not a.startswith("127.") else None
+
+    def test_a_poll_from_elsewhere_is_relayed_but_is_not_the_witness(self):
+        import shutil
+        import tempfile
+        addr = self._own_address()
+        if not addr:
+            self.skipTest("this machine has no address but loopback")
+        serve.CSP = serve.build_csp(HTML)
+        serve.BACKEND = "http://127.0.0.1:9"
+        srv = serve.Threaded(("0.0.0.0", 0), serve.Console)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        d = tempfile.mkdtemp(prefix="seen-")
+        saved, serve.CONSOLE_SEEN = serve.CONSOLE_SEEN, os.path.join(d, "console-seen")
+
+        def req(host, method, path):
+            c = http.client.HTTPConnection(host, port, timeout=10)
+            c.request(method, path, body=b"{}" if method == "POST" else None,
+                      headers={"Content-Type": "application/json"})
+            r = c.getresponse(); r.read(); c.close()
+            return r.status
+        try:
+            self.assertEqual(req(addr, "GET", "/"), 200)                    # the page
+            self.assertEqual(req(addr, "GET", "/aetherseed/status"), 502)   # relayed
+            self.assertFalse(os.path.exists(serve.CONSOLE_SEEN))
+            self.assertEqual(req(addr, "POST", "/aetherseed/shutdown"), 403)
+            self.assertEqual(req("127.0.0.1", "GET", "/aetherseed/status"), 502)
+            self.assertTrue(os.path.exists(serve.CONSOLE_SEEN))
+        finally:
+            serve.CONSOLE_SEEN = saved
+            srv.shutdown(); srv.server_close()
+            shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

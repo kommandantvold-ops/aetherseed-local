@@ -122,5 +122,82 @@ class TestNoPersonInTheBuild(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(HERE, "tools", "power.py")))
 
 
+class TheUnitsOwnWifi(unittest.TestCase):
+    """Build log 54: a phone on the unit's own Wi-Fi is a second screen.
+
+    The console unit and the firewall are two halves of one line: the console
+    listens on every address, and the firewall names who reaches it.
+    """
+
+    def setUp(self):
+        with open(os.path.join(SERVICES, "nftables.conf"), encoding="utf-8") as f:
+            self.rules = directives(f.read())
+
+    def test_the_console_listens_beyond_loopback(self):
+        d = unit("aetherseed-gui.service")
+        self.assertIn("Environment=AETHERSEED_GUI_BIND=0.0.0.0", d)
+        self.assertIn("Environment=AETHERSEED_BACKEND=http://127.0.0.1:8001", d)
+        # the proxy and the model stay where they were
+        self.assertFalse(any("0.0.0.0" in l for l in unit("aetherseed-proxy.service")))
+        self.assertFalse(any("0.0.0.0" in l for l in unit("hailo-ollama.service")))
+
+    def test_the_console_is_admitted_from_the_units_wifi_and_nowhere_else(self):
+        port = [l for l in self.rules if "2077" in l]
+        self.assertEqual(port, ['iifname "wlan0" tcp dport 2077 accept'])
+        dhcp = [l for l in self.rules if "dport 67" in l]
+        self.assertEqual(dhcp, ['iifname "wlan0" udp dport 67 accept'])
+        # everything admitted, line by line: a new one is added here on purpose
+        accepts = [l for l in self.rules if l.endswith("accept") and "policy" not in l]
+        self.assertEqual(accepts, [
+            'iif "lo" accept',
+            "ct state established,related accept",
+            "meta l4proto icmpv6 accept",
+            "meta l4proto icmp accept",
+            "udp dport 68 accept",
+            "tcp dport 22 ip saddr @lan4 accept",
+            "tcp dport 22 ip6 saddr @lan6 accept",
+            'iifname "wlan0" udp dport 67 accept',
+            'iifname "wlan0" tcp dport 2077 accept',
+        ])
+        self.assertFalse(any("dport 53" in l for l in self.rules))   # no name service
+
+    def test_nothing_passes_through_the_unit(self):
+        # NetworkManager's shared mode switches forwarding on; this is what
+        # keeps a phone on the unit's Wi-Fi out of the cable network.
+        i = self.rules.index("chain forward {")
+        self.assertEqual(self.rules[i + 1],
+                         "type filter hook forward priority filter; policy drop;")
+        self.assertEqual(self.rules[i + 2], "}")
+        self.assertIn("type filter hook input priority filter; policy drop;", self.rules)
+
+    def test_the_hotspot_tool_checks_what_it_is_given(self):
+        import subprocess
+        sh = os.path.join(os.path.dirname(SERVICES), "tools", "hotspot.sh")
+        self.assertEqual(subprocess.run(["bash", "-n", sh]).returncode, 0)
+
+        def check(name, key):
+            return subprocess.run(["bash", sh, "--check", name], input=key + "\n",
+                                  text=True, capture_output=True).returncode
+        self.assertEqual(check("Stella", "eight888"), 0)
+        self.assertEqual(check("My Companion", "x" * 63), 0)
+        for name, key in (("", "eight888"), ("x" * 33, "eight888"),
+                          ("Stella", "seven77"), ("Stella", "x" * 64),
+                          ('St"ella', "eight888"), ("St\\ella", "eight888"),
+                          (" Stella", "eight888"), ("Stélla", "eight888"),
+                          ("Stella", "eight88\u00e9"), ("Stella", "")):
+            with self.subTest(name=name, key=len(key)):
+                self.assertEqual(check(name, key), 2)
+
+    def test_the_passkey_is_nowhere_but_the_profile(self):
+        sh = os.path.join(os.path.dirname(SERVICES), "tools", "hotspot.sh")
+        text = open(sh, encoding="utf-8").read()
+        self.assertEqual(text.count('wifi-sec.psk "$key"'), 1)
+        self.assertNotIn("echo \"$key", text)
+        self.assertNotIn("tee", text)
+        # wlan0 only, WPA2 only, and it does not touch the firewall itself
+        self.assertIn("wifi-sec.proto rsn", text)
+        self.assertNotIn("nft ", text)
+
+
 if __name__ == "__main__":
     unittest.main()

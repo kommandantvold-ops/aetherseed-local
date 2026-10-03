@@ -345,6 +345,48 @@ Her answers are slower while it runs (it shares the model): run it when she is
 not in use. `training/README.md` says what it touches, what it does not, and how
 to read the report. First run on Lyra: 30 Sep, build log 49.
 
+## 13. The unit's own Wi-Fi — a phone as a second screen (step 54, after the tag)
+
+**Not in tag `stable-llama-2026-10-03`.** On `main` since build log 54, and on
+the pilot unit Stella since 4 Oct; Lyra is still at the tag (Andreas: *"Lyra
+should stay as is for now"*), so **no cartridge has been derived for it**. A
+unit with this step differs from the tag's manifest on `app.digest`,
+`app.files` (38), the firewall and the console unit — and nothing else.
+
+What it is: the unit puts up a Wi-Fi network named after the companion, with a
+passkey the steward chooses. A phone or laptop that joins it opens the console
+at **`http://10.42.0.1:2077`** — the same page as the unit's own screen.
+The phone will say the network has no internet; that is right, it leads to the
+console and nowhere else. The console is **not** reachable on the cable
+network, and quantum rest is still asked for at the unit.
+
+Four files, from a checkout of `main` (`~/aetherseed-main` here):
+
+```bash
+cd ~/aetherseed-main
+sudo install -o root -g root -m 644 gui/serve.py     /opt/aetherseed/gui/serve.py
+sudo install -o root -g root -m 755 tools/hotspot.sh /opt/aetherseed/tools/hotspot.sh
+sudo install -o root -g root -m 644 services/aetherseed-gui.service /etc/systemd/system/
+sudo install -o root -g root -m 644 services/nftables.conf /etc/nftables.conf
+sudo nft -c -f /etc/nftables.conf && sudo nft -f /etc/nftables.conf
+sudo systemctl daemon-reload && sudo systemctl restart aetherseed-gui
+```
+
+Then, once the companion has its name, set the network up. The passkey is
+typed at the prompt (8–63 plain characters) and is kept nowhere but in the
+unit's own network profile:
+
+```bash
+sudo /opt/aetherseed/tools/hotspot.sh on        # named after the companion
+/opt/aetherseed/tools/hotspot.sh status
+sudo /opt/aetherseed/tools/hotspot.sh off       # takes it down and removes it
+```
+
+It comes up again at every start, cable or no cable. It undoes one line of
+step 2: `wpa_supplicant` is enabled again (the access point needs it).
+Whoever holds the passkey is at the console — it is the steward's, like the
+screen.
+
 ## Decisions this build carries, not steps
 
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds

@@ -22,7 +22,9 @@ This repository is the working prototype and the **AetherSeed Companion** — a
 Raspberry Pi 5 + Hailo-10H appliance that ships as a fixed artifact.
 
 No cloud. No subscription. Nothing leaves the device: every hop is loopback, and
-the only port reachable from the network is SSH.
+the only port reachable from the network is SSH. (On `main` since build log 54,
+not yet in a tag: the unit can put up its own Wi-Fi, with the steward's
+passkey, so a phone can be a second screen — `docs/INSTALL.md` §13.)
 
 ## Status, and what has actually been measured
 
@@ -70,7 +72,8 @@ draw is on top of that and this project has not measured total system power)
 ```
 
 Every hop is loopback. `nftables` drops all inbound traffic except SSH from
-RFC1918 / link-local / ULA addresses.
+RFC1918 / link-local / ULA addresses — and, on `main` since build log 54, the
+console port from the unit's own Wi-Fi (`wlan0`) only.
 
 ## The device ships as a cartridge, not a service
 
