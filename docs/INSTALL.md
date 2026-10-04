@@ -471,13 +471,15 @@ twice):
 | collection | source ZIM (sha256) | collection file (sha256) |
 |---|---|---|
 | NHS Medicines A to Z, 2025-12 — 1996 pages, 12712 passages | `nhs.uk_en_medicines_2025-12.zim` `7dfa9bff…ef3dae28` | `9002055c…1fe1eff28` |
-| Water Treatment Library, 2024-08 — 7 documents, 921 passages | `zimgit-water_en_2024-08.zim` `392c7bc9…75cb56b6` | `6e98e9d8…56680c15` |
+| Water Treatment Library, 2024-08 — 7 documents, 921 passages | `zimgit-water_en_2024-08.zim` `392c7bc9…75cb56b6` | `184c6fe9…b466d3bd` |
 | Ready.gov, 2024-12 — 166 pages, 849 passages (`library/ready-gov.json`) | `www.ready.gov_en_2024-12.zim` `5bb4cf0d…faec0439` | `88025f1c…5eb4dd4b6` |
-| US military field manuals — 8 documents, 3738 passages (`library/us-field-manuals.json`) | `zimgit-post-disaster_en_2024-05.zim` `0ba9bb35…cce174f8`, `armypubs_en_all_2024-12.zim` `f34f1bcb…b2d11f04` | `c36ee6bc…5baa672b` |
+| US military field manuals — 8 documents, 3733 passages (`library/us-field-manuals.json`) | `zimgit-post-disaster_en_2024-05.zim` `0ba9bb35…cce174f8`, `armypubs_en_all_2024-12.zim` `f34f1bcb…b2d11f04` | `8b9d3a3a…5ecd2eea` |
 
 The first two were rebuilt in step 58 with the same converter as the others
 (a row that is only a link is left out; a PDF's headings are found on every
-line), so their files differ from step 57's (`ce12e33b…`, `a8af85fe…`).
+line), so their files differ from step 57's (`ce12e33b…`, `a8af85fe…`). The two made
+from PDFs were built once more in step 59 (a bullet on a line of its own is
+left out), so they differ from step 58's (`c36ee6bc…`, `6e98e9d8…`).
 
 **What the field-manuals collection holds**, and under what statement:
 *How To Find Your Way* (GTA 05-02-013), *First Aid* (TC 4-02.1, 2016),

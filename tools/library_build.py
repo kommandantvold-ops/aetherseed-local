@@ -304,8 +304,10 @@ def page_blocks(text, running=()):
     """
     out = []
     for block in re.split(r"\n\s*\n", text.replace("\r", "")):
-        lines = [BULLET.sub("- ", squeeze(l)) for l in block.split("\n")]
-        lines = [l for l in lines if l and l not in running]
+        lines = [BULLET.sub("- ", squeeze(l)).strip() for l in block.split("\n")]
+        # a bullet on a line of its own (TC 21-3 sets its bullets in a column
+        # beside the text) says nothing: "- / - / - / -" stood before each list
+        lines = [l for l in lines if l and l != "-" and l not in running]
         if sum(1 for l in lines if LEADER.search(l)) >= 2:
             continue
         lines = [l for l in lines if not LEADER.search(l)]

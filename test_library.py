@@ -454,6 +454,11 @@ class TheConverter(unittest.TestCase):
             ("m", "Snow Cave"), ("p", "c. Snow Cave. A snow cave shelters")])
         self.assertIn("b. Angry outbursts.", lb.page_blocks(text)[-1][1])   # a row, not a heading
 
+    def test_a_bullet_on_a_line_of_its_own_says_nothing(self):
+        text = "The following helps prevent trench foot:\n\uf0b7\n\uf0b7\nChange to dry socks twice daily.\n• Keep the feet dry.\n"
+        self.assertEqual(lb.page_paragraphs(text), [
+            "The following helps prevent trench foot: Change to dry socks twice daily.\n- Keep the feet dry."])
+
     def test_a_table_of_contents_answers_nothing(self):
         text = ("CONTENTS\n\nHEAT STROKE .................................... 11-1\n"
                 "FROSTBITE ...................................... 12-4\n\nThe body follows here.\n")
