@@ -439,6 +439,57 @@ told the date from this clock.
 **To let the unit out for maintenance**, until the next reboot or firewall
 reload: `sudo nft insert rule inet filter output accept`.
 
+## 15. The library — passages shown word for word (step 57, after the tag)
+
+**Not in tag `stable-llama-2026-10-03`.** On `main` since build log 57, and on
+Lyra since 4 Oct. Andreas, pointing at Project NOMAD: *"A library she answers
+from with a knowledge base like that of nomad (content) so it can be a
+disaster relief and offgrid rural survival aid."*
+
+A **collection** is one file, made from a Kiwix ZIM with
+`tools/library_build.py` **off the unit** (the unit can fetch nothing, step
+55; the converter needs `libzim` and `pdftotext`, the unit needs neither):
+
+```bash
+pip install libzim                                    # where the collection is built
+python3 tools/library_build.py nhs.uk_en_medicines_2025-12.zim nhs.uk_en_medicines_2025-12.lib.sqlite
+python3 tools/library_build.py zimgit-water_en_2024-08.zim     zimgit-water_en_2024-08.lib.sqlite
+```
+
+The two on Lyra, built 4 Oct from `download.kiwix.org` (the build is
+repeatable — the same source gives the same file):
+
+| collection | source ZIM (sha256) | collection file (sha256) |
+|---|---|---|
+| NHS Medicines A to Z, 2025-12 — 1996 pages, 12998 passages | `7dfa9bff…ef3dae28` | `ce12e33b…2444403d` |
+| Water Treatment Library, 2024-08 — 7 documents, 897 passages | `392c7bc9…75cb56b6` | `a8af85fe…cf49cdf5` |
+
+On the unit (from a checkout of `main`, the collection files carried to it):
+
+```bash
+sudo install -o root -g root -m 644 logic/library.py /opt/aetherseed/logic/library.py
+sudo install -o root -g root -m 644 proxy.py /opt/aetherseed/proxy.py
+sudo install -o root -g root -m 644 gui/index.html /opt/aetherseed/gui/index.html
+sudo install -o root -g root -m 644 training/library_check.py training/library-probes.json /opt/aetherseed/training/
+sudo install -d -o root -g root -m 755 /var/lib/aetherseed/library
+sudo install -o root -g root -m 644 *.lib.sqlite /var/lib/aetherseed/library/
+sudo systemctl restart aetherseed-proxy aetherseed-gui aetherseed-kiosk
+/opt/aetherseed/venv/bin/python3 /opt/aetherseed/training/library_check.py
+```
+
+What she does with it: asked to (*"look up paracetamol for adults"*, *"what
+does the library say about …"*) she shows the best passage, word for word,
+with its source — or says the library has nothing. Unasked, she shows a
+passage only when the library is sure the question is its own
+(`logic/library.py` says how), and never for a question about her or about
+what she was told. *"more"* shows what follows. *"What is in the library?"*
+lists it. The model is not called for any of this, and none of it is stored
+as something she said. A unit with no collection behaves as before.
+
+**Licences.** Neither source file states one. For a unit that leaves, each
+collection's licence has to be checked and passed to the converter
+(`--licence`); it is kept in the file.
+
 ## Decisions this build carries, not steps
 
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds

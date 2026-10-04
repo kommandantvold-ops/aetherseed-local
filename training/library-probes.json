@@ -1,0 +1,566 @@
+{
+ "about": "Questions for the library (build log 57). expect: the collection id that should answer, or null when nothing should be shown. title: words the document's title must contain. text: the passage shown must contain one of these. Checked by training/library_check.py with no model involved. unasked and asked were used while the rules were being written; held_out was written before it was ever run and the rules were not changed for it.",
+ "unasked": [
+  {
+   "ask": "How much paracetamol can an adult take?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "paracetamol",
+   "text": [
+    "500mg"
+   ]
+  },
+  {
+   "ask": "What is the maximum dose of paracetamol in 24 hours?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "paracetamol",
+   "text": [
+    "in 24 hours"
+   ]
+  },
+  {
+   "ask": "Can I take ibuprofen and paracetamol together?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "",
+   "text": [
+    "paracetamol"
+   ]
+  },
+  {
+   "ask": "What are the side effects of amoxicillin?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "amoxicillin",
+   "text": [
+    "side effects"
+   ]
+  },
+  {
+   "ask": "Is it safe to drink alcohol with metronidazole?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "metronidazole",
+   "text": [
+    "alcohol"
+   ]
+  },
+  {
+   "ask": "Who should not take aspirin?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "aspirin",
+   "text": [
+    "not suitable",
+    "cannot",
+    "do not take",
+    "Do not"
+   ]
+  },
+  {
+   "ask": "What is loperamide used for?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "loperamide",
+   "text": [
+    "diarrhoea"
+   ]
+  },
+  {
+   "ask": "How long does ibuprofen take to work?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "ibuprofen",
+   "text": [
+    "minutes",
+    "hour"
+   ]
+  },
+  {
+   "ask": "Paracetamol dose for children",
+   "expect": "nhs.uk_en_medicines",
+   "title": "paracetamol",
+   "text": [
+    "dose"
+   ]
+  },
+  {
+   "ask": "What if I forget to take doxycycline?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "doxycycline",
+   "text": [
+    "as soon as you remember"
+   ]
+  },
+  {
+   "ask": "How do I make water safe to drink?",
+   "expect": "zimgit-water_en",
+   "title": "",
+   "text": [
+    "boil",
+    "Boil",
+    "chlor",
+    "disinfect"
+   ]
+  },
+  {
+   "ask": "How much bleach do I add to a gallon of water?",
+   "expect": "zimgit-water_en",
+   "title": "",
+   "text": [
+    "1/4 teaspoon",
+    "8 drops",
+    "drops"
+   ]
+  },
+  {
+   "ask": "How long should I boil water to purify it?",
+   "expect": "zimgit-water_en",
+   "title": "",
+   "text": [
+    "minute"
+   ]
+  },
+  {
+   "ask": "How do I store water for an emergency?",
+   "expect": "zimgit-water_en",
+   "title": "",
+   "text": [
+    "gallon"
+   ]
+  },
+  {
+   "ask": "What is giardia?",
+   "expect": "zimgit-water_en",
+   "title": "giardia",
+   "text": [
+    "parasite"
+   ]
+  },
+  {
+   "ask": "How does water distillation work?",
+   "expect": "zimgit-water_en",
+   "title": "",
+   "text": [
+    "evaporat",
+    "steam",
+    "condens"
+   ]
+  },
+  {
+   "ask": "Which plants indicate ground water?",
+   "expect": "zimgit-water_en",
+   "title": "plants",
+   "text": [
+    "plant",
+    "PLANT"
+   ]
+  },
+  {
+   "ask": "How do I filter cloudy water?",
+   "expect": "zimgit-water_en",
+   "title": "",
+   "text": [
+    "filter",
+    "Filter"
+   ]
+  },
+  {
+   "ask": "What is AetherSeed?",
+   "expect": null
+  },
+  {
+   "ask": "What is Mustardseed?",
+   "expect": null
+  },
+  {
+   "ask": "What is AetherRoot?",
+   "expect": null
+  },
+  {
+   "ask": "What is AetherSpark?",
+   "expect": null
+  },
+  {
+   "ask": "What are your rings?",
+   "expect": null
+  },
+  {
+   "ask": "What happens to the facts I tell you?",
+   "expect": null
+  },
+  {
+   "ask": "Where is your workspace?",
+   "expect": null
+  },
+  {
+   "ask": "Where is your to-do list?",
+   "expect": null
+  },
+  {
+   "ask": "Where do you keep your notes?",
+   "expect": null
+  },
+  {
+   "ask": "What can you do at observer?",
+   "expect": null
+  },
+  {
+   "ask": "What does the reader level unlock?",
+   "expect": null
+  },
+  {
+   "ask": "How do you earn trust?",
+   "expect": null
+  },
+  {
+   "ask": "When does a new trust level take effect?",
+   "expect": null
+  },
+  {
+   "ask": "Can you go on the internet?",
+   "expect": null
+  },
+  {
+   "ask": "Can you summarize a file?",
+   "expect": null
+  },
+  {
+   "ask": "Show my to-do list",
+   "expect": null
+  },
+  {
+   "ask": "show my notes",
+   "expect": null
+  },
+  {
+   "ask": "Summarize the file visit.md",
+   "expect": null
+  },
+  {
+   "ask": "list my files",
+   "expect": null
+  },
+  {
+   "ask": "add a to-do: buy milk",
+   "expect": null
+  },
+  {
+   "ask": "Write a note: the soak started today",
+   "expect": null
+  },
+  {
+   "ask": "What is your trust level?",
+   "expect": null
+  },
+  {
+   "ask": "hello",
+   "expect": null
+  },
+  {
+   "ask": "How are you today?",
+   "expect": null
+  },
+  {
+   "ask": "What happened in the beginning?",
+   "expect": null
+  },
+  {
+   "ask": "What did God call the light?",
+   "expect": null
+  },
+  {
+   "ask": "Where did God plant a garden?",
+   "expect": null
+  },
+  {
+   "ask": "What have I told you about Babel?",
+   "expect": null
+  },
+  {
+   "ask": "What have we been reading?",
+   "expect": null
+  },
+  {
+   "ask": "Tell me a story about a dragon",
+   "expect": null
+  },
+  {
+   "ask": "What is the capital of France?",
+   "expect": null
+  },
+  {
+   "ask": "How do I tie a bowline?",
+   "expect": null
+  },
+  {
+   "ask": "How do I start a fire without matches?",
+   "expect": null
+  },
+  {
+   "ask": "How do I treat a snake bite?",
+   "expect": null
+  },
+  {
+   "ask": "What is the weather like?",
+   "expect": null
+  },
+  {
+   "ask": "What time is it?",
+   "expect": null
+  },
+  {
+   "ask": "Good morning Lyra",
+   "expect": null
+  },
+  {
+   "ask": "I am going for a walk, back in an hour",
+   "expect": null
+  },
+  {
+   "ask": "My dog is called Rex",
+   "expect": null
+  },
+  {
+   "ask": "What is two plus two?",
+   "expect": null
+  },
+  {
+   "ask": "Who wrote Hamlet?",
+   "expect": null
+  },
+  {
+   "ask": "I drink a lot of water every day",
+   "expect": null
+  }
+ ],
+ "asked": [
+  {
+   "ask": "look up paracetamol for adults",
+   "expect": "nhs.uk_en_medicines",
+   "title": "paracetamol",
+   "text": [
+    "aracetamol"
+   ]
+  },
+  {
+   "ask": "Look up boiling water",
+   "expect": "zimgit-water_en",
+   "title": "",
+   "text": [
+    "oil"
+   ]
+  },
+  {
+   "ask": "what does the library say about ibuprofen and pregnancy",
+   "expect": "nhs.uk_en_medicines",
+   "title": "ibuprofen",
+   "text": [
+    "pregnan"
+   ]
+  },
+  {
+   "ask": "search the library for bleach",
+   "expect": "zimgit-water_en",
+   "title": "",
+   "text": [
+    "bleach"
+   ]
+  },
+  {
+   "ask": "library: giardia",
+   "expect": "zimgit-water_en",
+   "title": "giardia",
+   "text": [
+    "iardia"
+   ]
+  },
+  {
+   "ask": "look up how to tie a bowline",
+   "expect": null
+  },
+  {
+   "ask": "look up snake bite",
+   "expect": null
+  },
+  {
+   "ask": "look up the capital of France",
+   "expect": null
+  },
+  {
+   "ask": "what does the library say about Mustardseed",
+   "expect": null
+  }
+ ],
+ "held_out": [
+  {
+   "ask": "What is amoxicillin used for?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "amoxicillin"
+  },
+  {
+   "ask": "Can I drink alcohol with amoxicillin?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "amoxicillin"
+  },
+  {
+   "ask": "Side effects of ibuprofen",
+   "expect": "nhs.uk_en_medicines",
+   "title": "ibuprofen"
+  },
+  {
+   "ask": "Can I take paracetamol while pregnant?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "paracetamol"
+  },
+  {
+   "ask": "How do I take omeprazole?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "omeprazole"
+  },
+  {
+   "ask": "Who can take codeine?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "codeine"
+  },
+  {
+   "ask": "What is metformin?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "metformin"
+  },
+  {
+   "ask": "Can children take aspirin?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "aspirin"
+  },
+  {
+   "ask": "How long does amoxicillin take to work?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "amoxicillin"
+  },
+  {
+   "ask": "What should I do if I take too much ibuprofen?",
+   "expect": "nhs.uk_en_medicines",
+   "title": "ibuprofen"
+  },
+  {
+   "ask": "How do I disinfect water with chlorine?",
+   "expect": "zimgit-water_en",
+   "title": ""
+  },
+  {
+   "ask": "How do I purify water in an emergency?",
+   "expect": "zimgit-water_en",
+   "title": ""
+  },
+  {
+   "ask": "Is rainwater safe to drink?",
+   "expect": "zimgit-water_en",
+   "title": ""
+  },
+  {
+   "ask": "How does solar water disinfection work?",
+   "expect": "zimgit-water_en",
+   "title": ""
+  },
+  {
+   "ask": "What are the symptoms of giardia?",
+   "expect": "zimgit-water_en",
+   "title": "giardia"
+  },
+  {
+   "ask": "How much water should I store per person?",
+   "expect": "zimgit-water_en",
+   "title": ""
+  },
+  {
+   "ask": "What is your name?",
+   "expect": null
+  },
+  {
+   "ask": "Who made you?",
+   "expect": null
+  },
+  {
+   "ask": "Tell me about yourself",
+   "expect": null
+  },
+  {
+   "ask": "What do you remember about yesterday?",
+   "expect": null
+  },
+  {
+   "ask": "Read me Genesis chapter one",
+   "expect": null
+  },
+  {
+   "ask": "What is the meaning of life?",
+   "expect": null
+  },
+  {
+   "ask": "How far is the moon?",
+   "expect": null
+  },
+  {
+   "ask": "Write a poem about autumn",
+   "expect": null
+  },
+  {
+   "ask": "What is 17 times 23?",
+   "expect": null
+  },
+  {
+   "ask": "Who is the president of France?",
+   "expect": null
+  },
+  {
+   "ask": "How do I bake bread?",
+   "expect": null
+  },
+  {
+   "ask": "How do I change a tyre?",
+   "expect": null
+  },
+  {
+   "ask": "What should I plant in spring?",
+   "expect": null
+  },
+  {
+   "ask": "How do I splint a broken arm?",
+   "expect": null
+  },
+  {
+   "ask": "My back hurts today",
+   "expect": null
+  },
+  {
+   "ask": "I took a paracetamol this morning",
+   "expect": null
+  },
+  {
+   "ask": "Thank you",
+   "expect": null
+  },
+  {
+   "ask": "Good night",
+   "expect": null
+  },
+  {
+   "ask": "Can you set a timer?",
+   "expect": null
+  },
+  {
+   "ask": "What's on my to-do list?",
+   "expect": null
+  },
+  {
+   "ask": "What did I tell you about my dog?",
+   "expect": null
+  },
+  {
+   "ask": "Is it going to rain tomorrow?",
+   "expect": null
+  },
+  {
+   "ask": "How do I get to Oslo?",
+   "expect": null
+  },
+  {
+   "ask": "Translate hello to Norwegian",
+   "expect": null
+  }
+ ]
+}

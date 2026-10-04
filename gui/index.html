@@ -316,6 +316,7 @@ const T = {
     fromRecord: 'from the record, not the model',
     fromKnown: 'from what it was built knowing, not the model',
     fromUnit: 'from the unit itself, not the model',
+    fromLibrary: 'from the library, word for word, not the model',
     off: 'Quantum rest', offTitle: (n) => `Put ${n || 'the companion'} into quantum rest?`,
     offHelp: 'Everything is saved and the unit powers down, so it can be moved or unplugged safely. Nothing is erased. Wait until the screen has gone dark before you unplug the power.',
     offGo: 'Quantum rest', offCancel: 'Cancel',
@@ -398,6 +399,7 @@ const T = {
     fromRecord: 'fra loggen, ikke fra modellen',
     fromKnown: 'fra det den ble bygget med, ikke fra modellen',
     fromUnit: 'fra enheten selv, ikke fra modellen',
+    fromLibrary: 'fra biblioteket, ord for ord, ikke fra modellen',
     off: 'Kvantehvile', offTitle: (n) => `Legge ${n || 'følgesvennen'} i kvantehvile?`,
     offHelp: 'Alt er lagret, og enheten slår seg av, så den trygt kan flyttes eller kobles fra. Ingenting slettes. Vent til skjermen er mørk før du trekker ut strømmen.',
     offGo: 'Kvantehvile', offCancel: 'Avbryt',
@@ -488,6 +490,10 @@ function provenance(turnEl, p) {
     // Answered by the unit itself - a refusal, its trust level, the to-do
     // list as it is in the file (build logs 49, 51) - model not called.
     tag(s.fromUnit, 'quiet');
+  } else if (p.mode === 'library') {
+    // A passage from the unit's library, word for word, model not called
+    // (build log 57). The source is named under the passage itself.
+    tag(s.fromLibrary, 'quiet');
   } else if (p.mode === 'known') {
     // Served verbatim from the curriculum, model not called. The one answer
     // that has to be exact: a 3B model retyping an address gets it wrong.

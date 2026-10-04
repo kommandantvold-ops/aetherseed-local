@@ -173,6 +173,13 @@ collect() {
   emit service.avahi.enabled        "$(systemctl is-enabled avahi-daemon 2>/dev/null || echo unknown)"
   emit timer.apt_daily.enabled      "$(systemctl is-enabled apt-daily.timer 2>/dev/null || echo unknown)"
   emit timer.apt_daily_upgrade.enabled "$(systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null || echo unknown)"
+  # The library she shows passages from (build log 57): which collections,
+  # and exactly which bytes. A unit with another library is another device.
+  local lib
+  for lib in /var/lib/aetherseed/library/*.lib.sqlite; do
+    [ -e "$lib" ] || continue
+    emit "library.$(basename "$lib")" "$(hash_file "$lib")"
+  done
 }
 
 fingerprint() {  # one hash over the whole sorted body

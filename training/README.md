@@ -116,3 +116,27 @@ failed, and no packet sent on any interface. It says nothing about voice
 (this build has none) or about longer than the run. The program changes
 nothing on the unit - it does not pull links down or block radios itself.
 `training/offline_proof.py` carries the protocol in full.
+
+## The library check (build log 57)
+
+Does the library show the right passage — and nothing when it has nothing?
+
+```bash
+/opt/aetherseed/venv/bin/python3 /opt/aetherseed/training/library_check.py        # -v for every question
+```
+
+No model is involved and nothing is written. It asks `logic/library.py` the
+questions in `library-probes.json` and counts: of the questions a collection
+should answer, how many got a passage from the right document (and whether it
+was the passage that answers); of the questions it should leave alone — about
+her, about what she was told, greetings, things the library does not hold —
+how many it left alone. `held_out` in that file was written before it was ever
+run, and the rules were not changed for it.
+
+Measured 4 Oct 2026 on the two collections (NHS Medicines A to Z, the Water
+Treatment Library): the questions used while writing the rules — 15 of 18 the
+passage that answers, all 18 the right document, 42 of 42 left alone; held
+out — 15 of 16 answered from the right collection, 23 of 24 left alone
+(*"What should I plant in spring?"* found *"Plants as Indicator of Ground
+Water"*). The right document is found far more surely than the right passage
+in it: it is words that are matched, not meaning.

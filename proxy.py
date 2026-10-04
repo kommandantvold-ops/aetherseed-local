@@ -52,6 +52,7 @@ from logic.prompt_builder import charter
 from logic import companion
 from logic.speaker import validate_speaker, STEWARD, is_steward
 from logic import steward
+from logic import library as lib
 from logic.facts import FACT_TAG, FACT_NOTE
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
@@ -685,6 +686,74 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    # ---- THE LIBRARY (build log 57) --------------------------------------
+    # The last passage shown, so that "more" can walk on. In memory only; one
+    # steward at one screen.
+    _library_last = {"hit": None, "at": 0.0}
+    _LIBRARY_MORE = re.compile(r"^\s*(?:more|go on|next|continue|and then)\s*[.!?]*\s*$", re.I)
+
+    def _answer_from_the_library(self, model: str, user_msg: str) -> bool:
+        """Show a passage word for word, model not called. True if handled.
+
+        Andreas, 4 Oct 2026: "A library she answers from ... so it can be a
+        disaster relief and offgrid rural survival aid" - and the passage
+        shown word for word, not retold: "Yes! Perfect!". With a verse in
+        front of it the model once answered "the second day" for "the first"
+        (38d); for a dose that is the failure to design out.
+
+        Asked to look something up, she shows the best passage there is or
+        says the library has nothing. Unasked, only when the library is sure
+        (logic/library.py), and never over what the build knows about her or
+        what her steward told her. Anything unexpected falls through to the
+        model, as before there was a library.
+        """
+        try:
+            library = lib.library()
+            if not library:
+                return False
+            last = ProxyHandler._library_last
+
+            def serve(text, hit=None, why=""):
+                last["hit"], last["at"] = hit, time.time()
+                print(f"[library] {why} (model not called)", flush=True)
+                self._serve_plain(model, text, source="library", mode="library")
+                return True
+
+            if lib.asks_contents(user_msg):
+                return serve(lib.contents(library), None, "what it holds")
+            asked = lib.lookup_query(user_msg)
+            if asked is not None:
+                hit = library.look_up(asked)
+                if hit is None:
+                    return serve(lib.nothing(asked, library.holds()), None, "asked; nothing to show")
+                return serve(lib.shown(hit), hit,
+                             f"asked; {hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\"")
+            if self._LIBRARY_MORE.match(user_msg or ""):
+                hit = last["hit"]
+                if hit is None or time.time() - last["at"] > 900:
+                    return False                  # "more" of something else: hers to answer
+                nxt = library.after(hit)
+                if nxt is None:
+                    return serve("That is the end of that document.", None, "more; end of document")
+                return serve(lib.shown(nxt), nxt, f"more; {nxt['collection_id']} #{nxt['id']}")
+            # Unasked. What the build knows about her, and what her steward
+            # told her, come first.
+            if root.knowledge is not None and root.knowledge.lines_for(user_msg, max_chars=400):
+                return False
+            if root._fact_lines(user_msg, {}):
+                return False
+            hit = library.find(user_msg)
+            if hit is None:
+                return False
+            return serve(lib.shown(hit), hit,
+                         f"unasked, sure; {hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\"")
+        except Exception as e:
+            print(f"[library] stood down: {e!r}", flush=True)
+            return False
+        # Not stored as an episode and not scored, like every answer the unit
+        # gives without the model: the source's words are not something she
+        # said, and must not come back into a later prompt as if they were.
+
     def _proxy_chat_augmented(self, body: bytes):
         try:
             data = json.loads(body)
@@ -807,6 +876,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     return
             if result:
                 workspace_data = result
+
+        # ---- THE LIBRARY ----
+        # A passage shown word for word, model not called (build log 57).
+        # Not for a tool turn, a reading, or a story.
+        if not intent and not reading and request_mode != FICTION:
+            if self._answer_from_the_library(model, user_msg):
+                return
 
         # ---- BUILD SYSTEM PROMPT ----
         c_name, c_lang = _settings()
