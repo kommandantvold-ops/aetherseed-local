@@ -102,6 +102,11 @@ class TheWordsOfAQuestion(unittest.TestCase):
         self.assertEqual(L.terms("Good night"), ["night"])
         self.assertEqual(L.terms("hello"), [])
 
+    def test_a_word_that_carries_nothing_in_any_form(self):
+        # build log 58, from her real traffic: the index reads "thats" as "that"
+        self.assertEqual(L.terms("thats great, tell me more"), ["great"])
+        self.assertEqual(L.terms("What are the things I needed?"), [])
+
     def test_every_word_chooses_the_passage(self):
         self.assertEqual(L.all_words("How long does ibuprofen take to work?"),
                          ["long", "ibuprofen", "take", "work"])
@@ -253,6 +258,7 @@ class DisasterPagesAndManuals(unittest.TestCase):
         for q in ("What is the weather like?",       # a word of a long title is not its subject
                   "list my files",                   # a word in a heading that is a sentence
                   "Let's play a game",               # a proposal to her, not a question
+                  "thats great, tell me more",       # "thats" is "that"; "FROSTBITE" is not "great"
                   "Where is the north pole?",        # two headings, one word each
                   "How do I treat a burn?"):         # a word it lacks
             with self.subTest(q=q):

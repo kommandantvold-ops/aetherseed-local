@@ -86,13 +86,29 @@ CONTENTS = re.compile(r"^\s*(?:what(?:'s|’s|\s+is)\s+in\s+(?:the|your)\s+libra
                       r"(?:show|list)\s+(?:me\s+)?the\s+library)\s*[?.!]*\s*$", re.I)
 
 
+_STEMS_OF: Dict[int, set] = {}
+
+
+def _carries_nothing(word: str, among: set) -> bool:
+    """Is `word` one of `among`, in any form the index would take for it?
+    The index reads "thats" as "that": Andreas's own "thats great, tell me
+    more" (found among the 203 messages ever said to Lyra) became the two
+    words "thats" and "great", every passage said the first, and a wind-chill
+    table headed "GREAT DANGER" was shown for it."""
+    if word in among:
+        return True
+    if id(among) not in _STEMS_OF:
+        _STEMS_OF[id(among)] = {stem(w) for w in among}
+    return stem(word) in _STEMS_OF[id(among)]
+
+
 def terms(question: str) -> List[str]:
     """The words that carry the question, in order, once each."""
     out = []
     for w in re.findall(r"[A-Za-z][A-Za-z0-9'’-]*|\d+", (question or "").lower()):
         w = w.strip("'’-").replace("’", "'")
         w = re.sub(r"'s$", "", w)
-        if len(w) < 2 or w in STOP or w in out:
+        if len(w) < 2 or w in out or _carries_nothing(w, STOP):
             continue
         out.append(w)
     return out[:8]
@@ -113,7 +129,7 @@ def all_words(question: str) -> List[str]:
     out = []
     for w in re.findall(r"[A-Za-z][A-Za-z0-9'’-]*|\d+", (question or "").lower()):
         w = re.sub(r"'s$", "", w.strip("'’-").replace("’", "'"))
-        if len(w) < 2 or w in FUNCTION or w in out:
+        if len(w) < 2 or w in out or _carries_nothing(w, FUNCTION):
             continue
         out.append(w)
     return out[:12]
