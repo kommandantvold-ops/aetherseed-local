@@ -35,6 +35,7 @@ IDENTITY_FILES=(
   /etc/systemd/system/aetherseed-gui.service
   /etc/systemd/system/aetherseed-kiosk.service
   /etc/systemd/system/aetherseed-kiosk-watch.service
+  /etc/systemd/system/aetherseed-hotspot.service
   /etc/systemd/system/aetherseed-keepalive.service
   /etc/systemd/system/aetherseed-shutdown.path
   /etc/systemd/system/aetherseed-shutdown.service
@@ -171,6 +172,10 @@ collect() {
   # that runs it is a different device from one that does not, so the id
   # says which.
   emit service.keepalive.enabled    "$(systemctl is-enabled aetherseed-keepalive 2>/dev/null || echo unknown)"
+  # Its own Wi-Fi only while no cable is linked (build log 60). Not the
+  # network's name and never its passkey: those are the steward's, and two
+  # units of one build differ in them.
+  emit service.hotspot.enabled      "$(systemctl is-enabled aetherseed-hotspot 2>/dev/null || echo unknown)"
   # Nothing the unit starts leaves it (build log 55): what would call out is
   # off, and the cartridge says so.
   emit service.avahi.enabled        "$(systemctl is-enabled avahi-daemon 2>/dev/null || echo unknown)"

@@ -203,6 +203,136 @@ class TheUnitsOwnWifi(unittest.TestCase):
         self.assertNotIn("nft ", text)
 
 
+class ItsWifiOnlyWhileNoCableIsLinked(unittest.TestCase):
+    """Build log 60. Andreas, 4 Oct 2026: "I want the wifi update, but with
+    only transmission when lan is disconnected."
+
+    tools/hotspot.sh is run here with a NetworkManager made of files: what it
+    would switch is recorded, and nothing is switched.
+    """
+
+    FAKE_NMCLI = r'''#!/bin/bash
+echo "nmcli $*" >> "$LOG"
+case "$*" in
+  "-t -f NAME connection show") [ -e "$STATE/profile" ] && echo aetherseed-hotspot ;;
+  "-t -f NAME connection show --active") [ -e "$STATE/up" ] && echo aetherseed-hotspot ;;
+  "radio wifi") [ -e "$STATE/radio" ] && echo enabled || echo disabled ;;
+  "radio wifi on") touch "$STATE/radio" ;;
+  "radio wifi off") rm -f "$STATE/radio" ;;
+  "connection up aetherseed-hotspot") [ -e "$STATE/radio" ] && touch "$STATE/up" || exit 4 ;;
+  "connection down aetherseed-hotspot") rm -f "$STATE/up" ;;
+esac
+exit 0
+'''
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="hotspot-")
+        self.bin = os.path.join(self.tmp, "bin")
+        self.state = os.path.join(self.tmp, "state")
+        self.net = os.path.join(self.tmp, "net")
+        for d in (self.bin, self.state):
+            os.makedirs(d)
+        for name, body in (("nmcli", self.FAKE_NMCLI), ("id", "#!/bin/bash\necho 0\n"),
+                           ("sleep", "#!/bin/bash\nexit 0\n")):
+            path = os.path.join(self.bin, name)
+            with open(path, "w") as f:
+                f.write(body)
+            os.chmod(path, 0o755)
+        # a wired port, the radio, the loopback - as the kernel shows them
+        self._port("eth0", kind="1", carrier="1", device=True)
+        self._port("wlan0", kind="1", carrier="1", device=True, wireless=True)
+        self._port("lo", kind="772", carrier="1", device=False)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _port(self, name, kind, carrier, device, wireless=False):
+        d = os.path.join(self.net, name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "type"), "w") as f:
+            f.write(kind + "\n")
+        if carrier is not None:
+            with open(os.path.join(d, "carrier"), "w") as f:
+                f.write(carrier + "\n")
+        elif os.path.exists(os.path.join(d, "carrier")):
+            os.remove(os.path.join(d, "carrier"))
+        if device:
+            os.makedirs(os.path.join(d, "device"), exist_ok=True)
+        if wireless:
+            os.makedirs(os.path.join(d, "wireless"), exist_ok=True)
+
+    def _have(self, *names):
+        for n in names:
+            open(os.path.join(self.state, n), "w").close()
+
+    def _sync(self):
+        import subprocess
+        sh = os.path.join(os.path.dirname(SERVICES), "tools", "hotspot.sh")
+        log = os.path.join(self.tmp, "log")
+        open(log, "w").close()
+        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], LOG=log,
+                   STATE=self.state, AETHERSEED_NET_DIR=self.net)
+        r = subprocess.run(["bash", sh, "sync"], env=env, text=True, capture_output=True)
+        with open(log) as f:
+            did = [l.strip()[6:] for l in f if not l.startswith("nmcli -t") and l.strip() != "nmcli radio wifi"]
+        return r, did, sorted(os.listdir(self.state))
+
+    def test_a_cable_with_a_link_switches_the_radio_off(self):
+        self._have("profile", "radio", "up")
+        r, did, state = self._sync()
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(did, ["connection down aetherseed-hotspot", "radio wifi off"])
+        self.assertEqual(state, ["profile"])
+        self.assertIn("the radio is off", r.stdout)
+        # ... and once it is off, nothing more is switched or said
+        r, did, _ = self._sync()
+        self.assertEqual((did, r.stdout), ([], ""))
+
+    def test_no_cable_with_a_link_brings_it_up(self):
+        self._have("profile")
+        self._port("eth0", kind="1", carrier="0", device=True)
+        r, did, state = self._sync()
+        self.assertEqual(did, ["radio wifi on", "connection up aetherseed-hotspot"])
+        self.assertEqual(state, ["profile", "radio", "up"])
+        self.assertIn("Wi-Fi is up", r.stdout)
+        r, did, _ = self._sync()                       # already up: left alone
+        self.assertEqual((did, r.stdout), ([], ""))
+
+    def test_a_port_that_cannot_be_read_is_no_link(self):
+        self._have("profile")
+        self._port("eth0", kind="1", carrier=None, device=True)    # the port is switched off
+        _, did, state = self._sync()
+        self.assertIn("up", state)
+
+    def test_the_radio_is_not_a_cable(self):
+        # wlan0 has a carrier while the access point is up; it must not count
+        self._have("profile", "radio", "up")
+        self._port("eth0", kind="1", carrier="0", device=True)
+        _, did, state = self._sync()
+        self.assertEqual((did, state), ([], ["profile", "radio", "up"]))
+
+    def test_a_unit_with_no_wifi_of_its_own_is_left_alone(self):
+        self._have("radio")                             # no profile
+        self._port("eth0", kind="1", carrier="0", device=True)
+        r, did, state = self._sync()
+        self.assertEqual((r.returncode, did, state), (0, [], ["radio"]))
+
+    def test_networkmanager_never_raises_it_by_itself(self):
+        sh = os.path.join(os.path.dirname(SERVICES), "tools", "hotspot.sh")
+        text = open(sh, encoding="utf-8").read()
+        self.assertIn("connection.autoconnect no", text)
+        self.assertNotIn("connection.autoconnect yes", text)
+
+    def test_the_unit_that_applies_it(self):
+        d = unit("aetherseed-hotspot.service")
+        self.assertIn("ExecStart=/bin/bash /opt/aetherseed/tools/hotspot.sh watch", d)
+        self.assertIn("After=NetworkManager.service", d)
+        self.assertIn("Restart=always", d)
+        self.assertIn("WantedBy=multi-user.target", d)
+
+
 class NothingTheUnitStartsLeavesIt(unittest.TestCase):
     """Build log 55. Andreas, 4 Oct 2026: "nothing at all should go out".
 

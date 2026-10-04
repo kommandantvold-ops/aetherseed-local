@@ -28,6 +28,18 @@ if systemctl list-units --no-legend --state=active 'aetherseed-training-*' | gre
   exit 1
 fi
 [ -f /var/lib/aetherseed/.aetherseed/aetherroot/memory.db ] || { echo "no memory on this unit" >&2; exit 1; }
+# A unit with its own Wi-Fi puts it up when the cable is pulled (build log
+# 60) - and the proof waits for every radio to be off. Say so, rather than
+# wait twenty minutes for it.
+if systemctl is-active --quiet aetherseed-hotspot 2>/dev/null \
+   && nmcli -t -f NAME connection show 2>/dev/null | grep -qx aetherseed-hotspot; then
+  echo "this unit puts up its own Wi-Fi when the cable is pulled, and the proof needs" >&2
+  echo "every radio off. For the proof:" >&2
+  echo "  sudo systemctl stop aetherseed-hotspot && sudo nmcli radio wifi off" >&2
+  echo "and afterwards:" >&2
+  echo "  sudo systemctl start aetherseed-hotspot" >&2
+  exit 1
+fi
 
 install -d -o aetherseed -g aetherseed -m 750 "$BASE"
 systemd-run --quiet --unit="$UNIT" --setenv=PYTHONDONTWRITEBYTECODE=1 \

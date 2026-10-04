@@ -1,0 +1,31 @@
+# aetherseed-hotspot.service - the unit's own Wi-Fi only while no cable is linked.
+#
+# Andreas, 4 Oct 2026: "I want the wifi update, but with only transmission
+# when lan is disconnected." tools/hotspot.sh says what the rule is (build
+# log 60). This unit applies it at start and again whenever the kernel reports
+# a change of a cable's link: a cable with a link - the radio is switched
+# off; no cable with a link - the unit's Wi-Fi comes up.
+#
+# Enabled by `hotspot.sh on`, disabled by `hotspot.sh off`. On a unit with no
+# Wi-Fi of its own set up it does nothing, and need not be enabled.
+#
+# Root, because switching the radio and raising a connection need it; it runs
+# one root-owned script from /opt/aetherseed.
+
+[Unit]
+Description=AetherSeed Companion - its own Wi-Fi only while no cable is linked
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/aetherseed/tools/hotspot.sh watch
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
