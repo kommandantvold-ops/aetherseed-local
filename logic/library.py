@@ -23,6 +23,9 @@ WHEN SHE ANSWERS FROM IT.
   - Asked to ("look up ...", "what does the library say about ...", "search
     the library for ..."): the best passage, or plainly that the library has
     nothing on it, and what it holds.
+  - "look it up", after an answer of her own: the same, for the question
+    just asked. When one passage says every word of a question she answered
+    herself, a line under her answer says so (says_it_all, build log 59).
   - Unasked, only when she is sure (find): the passage is ABOUT the
     question by its own title or heading - a rare word of the question that
     a title or heading says, or a title or heading that the question itself
@@ -203,6 +206,20 @@ def lookup_query(text: str) -> Optional[str]:
         if m and terms(m.group("q")):
             return m.group("q")
     return None
+
+
+# "look it up" - after an answer of her own, search the library for the
+# question just asked (build log 59).
+LOOK_IT_UP = re.compile(
+    r"^\s*(?:yes[,.!]?\s+)?(?:please\s+)?(?:look\s+it\s+up|sl[åa]\s+det\s+opp)"
+    r"(?:\s+in\s+the\s+library|\s+i\s+biblioteket)?(?:\s*,?\s*please)?\s*[?.!]*\s*$", re.I)
+# Something asked, by its form: it ends in a question mark or opens as one.
+ASKED = re.compile(r"\?\s*$|^\s*(?:how|what|which|when|where|why|who|is|are|can|could|should|"
+                   r"do|does)\b", re.I)
+
+
+def says_look_it_up(text: str) -> bool:
+    return bool(LOOK_IT_UP.match(text or ""))
 
 
 def asks_contents(text: str) -> bool:
@@ -643,6 +660,36 @@ class Library:
             return None
         words = all_words(question)
         return self._pick([c.sure(ts, words) for c in self.collections])
+
+    def says_it_all(self, question: str) -> bool:
+        """Not sure the question is the library's - but does one passage say
+        every word that carries it? Then her own answer gets one line under
+        it: not from the library, say "look it up". The line claims nothing
+        about what the library holds.
+
+        Andreas, 4 Oct 2026, asked whether she should point to the library
+        when she answers from the model: "She should be able to yes". Naming
+        the section was tried first and measured: right for 2 of the 10
+        survival questions find() misses, and as often wrong ("How do I treat
+        shock?" - "TREAT THE BITE OR STING"). This rule: the line under 7 of
+        those 10, and under 30 of 211 everyday messages. His choice of the
+        three measured: "When a passage says it all".
+
+        Left alone as in find(): a question about her, or about what she was
+        told, or something told and not asked. And it must be asked.
+        """
+        q = question or ""
+        if not self.collections or PERSONAL.search(q) or not ASKED.search(q):
+            return False
+        if TOLD.match(q) and "?" not in q:
+            return False
+        ts = terms(q)
+        if not ts:
+            return False
+        for c in self.collections:
+            if all(c.df(t) for t in ts) and c.rows(" AND ".join(_q(t) for t in ts), 1):
+                return True
+        return False
 
     def look_up(self, query: str) -> Optional[dict]:
         """Asked. The best passage there is, or None when there is nothing."""

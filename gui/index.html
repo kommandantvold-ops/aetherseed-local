@@ -317,6 +317,7 @@ const T = {
     fromKnown: 'from what it was built knowing, not the model',
     fromUnit: 'from the unit itself, not the model',
     fromLibrary: 'from the library, word for word, not the model',
+    notLibrary: 'not from the library — say “look it up” to search it',
     off: 'Quantum rest', offTitle: (n) => `Put ${n || 'the companion'} into quantum rest?`,
     offHelp: 'Everything is saved and the unit powers down, so it can be moved or unplugged safely. Nothing is erased. Wait until the screen has gone dark before you unplug the power.',
     offGo: 'Quantum rest', offCancel: 'Cancel',
@@ -400,6 +401,7 @@ const T = {
     fromKnown: 'fra det den ble bygget med, ikke fra modellen',
     fromUnit: 'fra enheten selv, ikke fra modellen',
     fromLibrary: 'fra biblioteket, ord for ord, ikke fra modellen',
+    notLibrary: 'ikke fra biblioteket — si «slå det opp» for å søke der',
     off: 'Kvantehvile', offTitle: (n) => `Legge ${n || 'følgesvennen'} i kvantehvile?`,
     offHelp: 'Alt er lagret, og enheten slår seg av, så den trygt kan flyttes eller kobles fra. Ingenting slettes. Vent til skjermen er mørk før du trekker ut strømmen.',
     offGo: 'Kvantehvile', offCancel: 'Avbryt',
@@ -504,6 +506,9 @@ function provenance(turnEl, p) {
   if (p.why && p.mode === 'fiction') {
     const w = document.createElement('span'); w.className = 'why'; w.textContent = p.why; row.append(w);
   }
+  // Her own answer, though a passage of the library says every word of the
+  // question (build log 59). "look it up" asks the library the same thing.
+  if (p.library_line) tag(s.notLibrary, 'quiet');
   if (p.memory_used) tag(s.usedMemory, 'quiet');
   if (p.facts_used > 0) tag(s.usedFacts, 'quiet');
   if (p.rings_used > 0) tag(s.usedRing, 'quiet');

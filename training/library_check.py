@@ -9,7 +9,7 @@ how many of the questions a collection should answer got a passage from it
 (and from the right document), and how many of the questions it should leave
 alone it left alone. The second is the one that must be whole: a passage shown
 for a question it does not answer takes the question away from her.
-Build log 57.
+Build logs 57-59.
 """
 import argparse
 import json
@@ -22,7 +22,8 @@ from logic import library as L  # noqa: E402
 
 
 def check(lib, probes, verbose=False, out=print):
-    keys = ("right", "wrong_passage", "wrong_doc", "missed", "left_alone", "intruded")
+    keys = ("right", "wrong_passage", "wrong_doc", "missed", "left_alone", "intruded",
+            "missed_line", "alone_line", "unanswered")
     kinds = [k for k in ("unasked", "asked", "held_out", "unasked2", "held_out2", "held_out3", "everyday") if probes.get(k)]
     res = {k: dict.fromkeys(keys, 0) for k in kinds}
     for kind in kinds:
@@ -46,6 +47,16 @@ def check(lib, probes, verbose=False, out=print):
             else:
                 key = "right"
             res[kind][key] += 1
+            # She answers this one herself. Does it get the line "not from the
+            # library - say 'look it up'" (build log 59)? Wanted where the
+            # library holds it, not elsewhere.
+            if hit is None and kind != "asked":
+                wanted = p["expect"] is not None and not p.get("any")
+                res[kind]["unanswered"] += wanted
+                if lib.says_it_all(p["ask"]):
+                    res[kind]["missed_line" if wanted else "alone_line"] += 1
+                    if verbose:
+                        out("%-8s %-10s %s" % (kind, "line", p["ask"]))
             if verbose or key in ("intruded", "wrong_doc", "wrong_passage", "missed"):
                 out("%-8s %-10s %s" % (kind, key.upper() if key != "right" and key != "left_alone" else key,
                                        p["ask"]))
@@ -78,6 +89,10 @@ def main(argv=None):
               "(%d intruded)"
               % (kind, r["right"], should, r["wrong_passage"], r["wrong_doc"], r["missed"],
                  r["left_alone"], alone, r["intruded"]))
+        if kind != "asked":
+            print("%-9s   the line under her own answer: %d of the %d she should have answered "
+                  "from it and did not; %d of the %d left alone"
+                  % ("", r["missed_line"], r["unanswered"], r["alone_line"], r["left_alone"]))
     return 0 if not any(r["intruded"] for r in res.values()) else 2
 
 

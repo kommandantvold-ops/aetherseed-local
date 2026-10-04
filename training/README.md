@@ -117,7 +117,7 @@ failed, and no packet sent on any interface. It says nothing about voice
 nothing on the unit - it does not pull links down or block radios itself.
 `training/offline_proof.py` carries the protocol in full.
 
-## The library check (build logs 57, 58)
+## The library check (build logs 57 to 59)
 
 Does the library show the right passage — and nothing when it has nothing?
 
@@ -146,6 +146,12 @@ to Z, Water Treatment Library, Ready.gov, US military field manuals):
 | `held_out2` (blind, survival) | 15 of 20; 1 more answered from another collection | 20 of 20 |
 | `held_out3` (blind, survival) | 18 of 20 | 29 of 30 |
 | `everyday` (blind, 100 everyday messages) | — | 98 of 100 |
+
+**The line under her own answer** (build log 59: *"not from the library — say
+'look it up'"*, when one passage says every word of a question she answered
+herself): under 7 of the 10 questions above that she should have answered
+from the library and did not, and under 30 of the 211 she rightly left alone.
+Naming the section instead was measured first: right for 2 of the 10.
 
 Read with care. The blind sets were blind once: `held_out2` gave 6 of 20 on
 its first run (pages titled in the plural were not found), `held_out3` 17 of

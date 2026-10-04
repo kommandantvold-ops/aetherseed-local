@@ -1,4 +1,4 @@
-"""Build logs 57 and 58: the library - a passage word for word, or nothing.
+"""Build logs 57 to 59: the library - a passage word for word, or nothing.
 
 Andreas, 4 Oct 2026: "A library she answers from with a knowledge base like
 that of nomad (content) so it can be a disaster relief and offgrid rural
@@ -125,6 +125,15 @@ class TheWordsOfAQuestion(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(L.lookup_query(text))
 
+    def test_look_it_up_is_said_after_an_answer(self):
+        for t in ("look it up", "Look it up!", "yes, look it up please", "slå det opp"):
+            with self.subTest(t=t):
+                self.assertTrue(L.says_look_it_up(t))
+        for t in ("look up bleach", "look it up in the dictionary for me", "look", "it"):
+            with self.subTest(t=t):
+                self.assertFalse(L.says_look_it_up(t))
+        self.assertIsNone(L.lookup_query("look it up"))          # not "look up <it>"
+
     def test_asked_what_it_holds(self):
         self.assertTrue(L.asks_contents("What is in the library?"))
         self.assertTrue(L.asks_contents("what does your library hold"))
@@ -164,6 +173,18 @@ class UnaskedOnlyWhenSure(Lib):
                   "hello", ""):
             with self.subTest(q=q):
                 self.assertIsNone(self.lib.find(q))
+
+    def test_not_sure_but_one_passage_says_it_all(self):
+        # build log 59: the line under her own answer, "not from the library"
+        q = "Where is a cool dry place?"
+        self.assertIsNone(self.lib.find(q))
+        self.assertTrue(self.lib.says_it_all(q))
+        for q in ("A cool dry place",                          # not asked
+                  "Is your place cool and dry?",                # about her
+                  "Is the capital of France dry?",              # no passage says it all
+                  "I keep it in a cool dry place"):             # told, not asked
+            with self.subTest(q=q):
+                self.assertFalse(self.lib.says_it_all(q))
 
     def test_no_library_no_answer(self):
         empty = tempfile.mkdtemp(prefix="nolib-")
@@ -477,6 +498,7 @@ class AtTheProxy(_Proxy):
         self.saved = L._LIB
         L._LIB = Lib.lib
         proxy.ProxyHandler._library_last.update(hit=None, at=0.0)
+        proxy.ProxyHandler._library_asked.update(q=None, at=0.0)
 
     def tearDown(self):
         L._LIB = self.saved
@@ -544,6 +566,40 @@ class AtTheProxy(_Proxy):
             self.assertIn(BLEACH, self._served("How much bleach do I add to a gallon of water?"))
         finally:
             proxy.root._fact_lines = saved
+
+    def test_her_own_answer_says_it_is_not_from_the_library(self):
+        # build log 59: one passage says every word of the question, the
+        # library is not sure - she answers, and the tag says where from
+        n = len(SCRIPT["requests"])
+        before = len(proxy.root.store.get_all_episodes())
+        _, reply, meta = self.ask("Where is a cool dry place?")
+        self.assertGreater(len(SCRIPT["requests"]), n, "the model answers")
+        self.assertTrue(meta["library_line"])
+        self.assertNotIn("library", reply.lower())               # the line is not in her words
+        after = proxy.root.store.get_all_episodes()
+        self.assertEqual(len(after), before + 1)
+        self.assertFalse(any("look it up" in str(e) for e in after))   # nor in her memory
+        # ... and "look it up" asks the library the same question
+        shown = self._served("look it up")
+        self.assertIn("From the library, word for word:", shown)
+        self.assertIn("cool dry place", shown)
+        # once shown, nothing is waiting: the next "look it up" is hers
+        n = len(SCRIPT["requests"])
+        self.ask("look it up")
+        self.assertGreater(len(SCRIPT["requests"]), n)
+
+    def test_no_line_where_no_passage_says_it(self):
+        for q in ("hello", "What is Mustardseed?", "Good night"):
+            with self.subTest(q=q):
+                _, _, meta = self.ask(q)
+                self.assertFalse(meta.get("library_line"))
+
+    def test_look_it_up_with_nothing_asked_finds_nothing_or_is_hers(self):
+        n = len(SCRIPT["requests"])
+        self.ask("look it up")                                   # nothing waiting: hers
+        self.assertGreater(len(SCRIPT["requests"]), n)
+        self.ask("hello")                                        # she answers; no passage on it
+        self.assertIn("The library has nothing I can show for that.", self._served("look it up"))
 
     def test_a_unit_without_a_library_is_as_it_was(self):
         L._LIB = L.Library(os.path.join(Lib.dir, "no-such-dir"))

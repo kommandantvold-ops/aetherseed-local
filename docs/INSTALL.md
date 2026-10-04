@@ -439,7 +439,7 @@ told the date from this clock.
 **To let the unit out for maintenance**, until the next reboot or firewall
 reload: `sudo nft insert rule inet filter output accept`.
 
-## 15. The library — passages shown word for word (steps 57 and 58, after the tag)
+## 15. The library — passages shown word for word (steps 57 to 59, after the tag)
 
 **Not in tag `stable-llama-2026-10-03`.** On `main` since build log 57, and on
 Lyra since 4 Oct. Andreas, pointing at Project NOMAD: *"A library she answers
@@ -512,7 +512,10 @@ with its source — or says the library has nothing. Unasked, she shows a
 passage only when the library is sure the question is its own
 (`logic/library.py` says how), and never for a question about her or about
 what she was told. *"more"* shows what follows. *"What is in the library?"*
-lists it. The model is not called for any of this, and none of it is stored
+lists it. When she answers a question herself and one passage of the library
+says every word of it, the console adds under her answer: *"not from the
+library — say 'look it up' to search it"*; and *"look it up"*, after any
+answer of her own, asks the library the question just asked (step 59). The model is not called for any of this, and none of it is stored
 as something she said. A unit with no collection behaves as before.
 
 **What it cannot do.** It matches words, not meaning. Unasked it misses a

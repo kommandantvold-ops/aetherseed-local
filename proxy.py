@@ -691,6 +691,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # steward at one screen.
     _library_last = {"hit": None, "at": 0.0}
     _LIBRARY_MORE = re.compile(r"^\s*(?:more|go on|next|continue|and then)\s*[.!?]*\s*$", re.I)
+    # The last question she answered herself, so that "look it up" can ask
+    # the library the same thing (build log 59). In memory only.
+    _library_asked = {"q": None, "at": 0.0}
 
     def _answer_from_the_library(self, model: str, user_msg: str) -> bool:
         """Show a passage word for word, model not called. True if handled.
@@ -713,8 +716,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 return False
             last = ProxyHandler._library_last
 
+            pending = ProxyHandler._library_asked
+
             def serve(text, hit=None, why=""):
                 last["hit"], last["at"] = hit, time.time()
+                pending["q"] = None               # the library has spoken; nothing is waiting
                 print(f"[library] {why} (model not called)", flush=True)
                 self._serve_plain(model, text, source="library", mode="library")
                 return True
@@ -728,6 +734,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     return serve(lib.nothing(asked, library.holds()), None, "asked; nothing to show")
                 return serve(lib.shown(hit), hit,
                              f"asked; {hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\"")
+            if lib.says_look_it_up(user_msg):
+                # After an answer of her own: the library, asked the same
+                # question. With nothing waiting, "look it up" is hers.
+                q = pending["q"]
+                if not q or time.time() - pending["at"] > 900:
+                    return False
+                hit = library.look_up(q)
+                if hit is None:
+                    return serve(lib.nothing(q, library.holds()), None,
+                                 "look it up; nothing to show")
+                return serve(lib.shown(hit), hit,
+                             f"look it up; {hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\"")
             if self._LIBRARY_MORE.match(user_msg or ""):
                 hit = last["hit"]
                 if hit is None or time.time() - last["at"] > 900:
@@ -885,9 +903,23 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # does not keep the library out (tried 4 Oct 2026: that turn went to
         # the model as fiction, and it wrote "doxicyclene").
         a_story = request_mode == FICTION and not mode_reason.startswith("asks a what-if")
+        library_line = False
         if not intent and not reading and not a_story:
             if self._answer_from_the_library(model, user_msg):
                 return
+            # She answers this one herself. It is remembered as the question
+            # "look it up" would ask the library; and when one passage of the
+            # library says every word of it, a line under her answer says the
+            # answer is not from the library (build log 59). The line is the
+            # console's, on the tag - never in her words, never stored.
+            try:
+                if lib.library():
+                    ProxyHandler._library_asked.update(q=user_msg, at=time.time())
+                    library_line = lib.library().says_it_all(user_msg)
+            except Exception as e:
+                print(f"[library] no line: {e!r}", flush=True)
+        else:
+            ProxyHandler._library_asked["q"] = None
 
         # ---- BUILD SYSTEM PROMPT ----
         c_name, c_lang = _settings()
@@ -1060,6 +1092,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             "steward_credited": bool(credit.get("credited")),
             "steward_backed": credit.get("backed") if credit.get("credited") else None,
             "steward_why": credit.get("why", "") if credit.get("credited") else "",
+            # Not from the library, though a passage of it says every word of
+            # the question: the console says so, and "look it up" shows it.
+            "library_line": bool(library_line and ai_content),
         }))
 
         # Store in AetherRoot
