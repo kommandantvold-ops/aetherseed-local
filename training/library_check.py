@@ -23,7 +23,7 @@ from logic import library as L  # noqa: E402
 
 def check(lib, probes, verbose=False, out=print):
     keys = ("right", "wrong_passage", "wrong_doc", "missed", "left_alone", "intruded")
-    kinds = [k for k in ("unasked", "asked", "held_out") if probes.get(k)]
+    kinds = [k for k in ("unasked", "asked", "held_out", "unasked2", "held_out2", "held_out3", "everyday") if probes.get(k)]
     res = {k: dict.fromkeys(keys, 0) for k in kinds}
     for kind in kinds:
         for p in probes[kind]:
@@ -33,9 +33,11 @@ def check(lib, probes, verbose=False, out=print):
             else:
                 hit = lib.find(p["ask"])
             got = hit["collection_id"] if hit else None
-            if p["expect"] is None:
+            if p.get("any"):
+                key = "right" if hit else "left_alone"
+            elif p["expect"] is None:
                 key = "left_alone" if hit is None else "intruded"
-            elif got != p["expect"]:
+            elif got not in (p["expect"] if isinstance(p["expect"], list) else [p["expect"]]):
                 key = "missed"
             elif (p.get("title") or "").lower() not in hit["title"].lower():
                 key = "wrong_doc"
@@ -71,7 +73,7 @@ def main(argv=None):
         r = res[kind]
         should = r["right"] + r["wrong_passage"] + r["wrong_doc"] + r["missed"]
         alone = r["left_alone"] + r["intruded"]
-        print("%-8s should answer: %d of %d right (%d right document but another passage, "
+        print("%-9s should answer: %d of %d right (%d right document but another passage, "
               "%d wrong document, %d missed); should leave alone: %d of %d left alone "
               "(%d intruded)"
               % (kind, r["right"], should, r["wrong_passage"], r["wrong_doc"], r["missed"],

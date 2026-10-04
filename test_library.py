@@ -1,4 +1,4 @@
-"""Build log 57: the library - a passage word for word, or nothing.
+"""Build logs 57 and 58: the library - a passage word for word, or nothing.
 
 Andreas, 4 Oct 2026: "A library she answers from with a knowledge base like
 that of nomad (content) so it can be a disaster relief and offgrid rural
@@ -171,6 +171,94 @@ class UnaskedOnlyWhenSure(Lib):
             shutil.rmtree(empty, ignore_errors=True)
 
 
+class DisasterPagesAndManuals(unittest.TestCase):
+    """Build log 58: pages named in the plural, and manuals of hundreds of
+    pages under their own headings."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="library58-")
+        make(os.path.join(cls.dir, "ready.lib.sqlite"), "site", "Ready", "2024-12-03", [
+            ("Hurricanes", "", [
+                ("Hurricanes", "", "Hurricanes are dangerous and can cause major damage."),
+                ("Prepare for Hurricanes", "", "Know your evacuation zone. Prepare a kit."),
+                ("Stay Safe During a Hurricane", "", "Stay away from windows.")]),
+            ("Earthquakes", "", [
+                ("Earthquakes", "", "An earthquake is a sudden shaking of the ground."),
+                ("Stay Safe During", "", "Drop, cover and hold on during an earthquake.")]),
+            ("Games", "", [("Games", "", "These games test what children know. Play them at school.")]),
+            ("Recovering from Disaster", "", [
+                ("If you have insurance, contact your insurance agent to file a claim.", "",
+                 "Take photos and make a list of the damage before you clean up.")]),
+            ("How and when to use fusidic acid", "", [
+                ("Important: Fire warning", "", "The cream can build up on clothes and bedding "
+                 "and make them more likely to catch fire.")]),
+        ] + filler(120, "disaster"))
+        cold = [("", "page %d" % i, "Keep moving and keep dry on the march, lesson %d. Build "
+                 "nothing where the wind can reach it." % i) for i in range(1, 150)]
+        cold[20] = ("FROSTBITE", "page 21", "Treat frostbite by warming the part against the body. "
+                    "Do not rub it.")
+        cold[40] = ("SNOW CAVE", "page 41", "Dig into a drift at least eight feet deep. Keep the "
+                    "entrance lower than the sleeping bench.")
+        cold[60] = ("LOCATING THE NORTH STAR", "page 61", "Follow the two pointer stars of the "
+                    "Big Dipper.")
+        cold[80] = ("SPRING POLE", "page 81", "A bent sapling lifts the snare when it is tripped.")
+        cold[100] = ("FIRES: Building the Fire", "page 101", "Lay tinder, then kindling, then fuel.")
+        cold[110] = ("3-6. BUILDING ARCTIC TENTS", "page 111", "Pitch the tent with its door away "
+                     "from the wind, in the shelter of the trees, and bank snow on the skirt.")
+        cold[120] = ("COOKING OF MEATS", "page 121", "Store jerky wrapped in dry clothes or cloth.")
+        make(os.path.join(cls.dir, "manuals.lib.sqlite"), "documents", "Field manuals", "2026-10-04", [
+            ("Soldier's Handbook for Operations in Cold-Weather Areas (1986)", "US Army", cold)])
+        cls.lib = L.Library(cls.dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def test_a_word_is_the_word_the_index_keeps(self):
+        for a, b in (("hurricanes", "hurricane"), ("earthquakes", "earthquake"),
+                     ("floods", "flood"), ("preparing", "prepare"), ("FILES", "file")):
+            self.assertEqual(L.stem(a), L.stem(b))
+
+    def test_a_page_named_in_the_plural(self):
+        hit = self.lib.find("How do I prepare for a hurricane?")
+        self.assertEqual((hit["title"], hit["heading"]), ("Hurricanes", "Prepare for Hurricanes"))
+        hit = self.lib.find("What should I do during an earthquake?")
+        self.assertEqual((hit["title"], hit["heading"]), ("Earthquakes", "Stay Safe During"))
+
+    def test_a_heading_the_question_says(self):
+        # nothing under "SNOW CAVE" says "build"; the manual does
+        hit = self.lib.find("How do I build a snow cave?")
+        self.assertEqual((hit["heading"], hit["place"]), ("SNOW CAVE", "page 41"))
+
+    def test_a_rare_word_over_a_section(self):
+        hit = self.lib.find("How do I treat frostbite?")
+        self.assertEqual(hit["heading"], "FROSTBITE")
+        self.assertTrue(hit["text"].startswith("Treat frostbite by warming"))
+
+    def test_a_lesser_heading_is_a_heading_of_its_own(self):
+        hit = self.lib.find("How do I build a fire?")
+        # two words of "Building the Fire", against one of a medicine's "Fire warning"
+        self.assertEqual((hit["heading"], hit["place"]), ("FIRES: Building the Fire", "page 101"))
+
+    def test_a_word_among_several_in_a_heading_is_not_its_subject(self):
+        # "3-6. BUILDING ARCTIC TENTS" says "build", and its text "snow" and "shelter"
+        self.assertIsNone(self.lib.find("How do I build a snow shelter?"))
+
+    def test_a_handbook_is_not_about_its_title_on_every_page(self):
+        # "store" and "clothes" stand together on page 121 of a cold-weather handbook
+        self.assertIsNone(self.lib.find("How do I store my cold-weather clothes?"))
+
+    def test_what_it_leaves_alone(self):
+        for q in ("What is the weather like?",       # a word of a long title is not its subject
+                  "list my files",                   # a word in a heading that is a sentence
+                  "Let's play a game",               # a proposal to her, not a question
+                  "Where is the north pole?",        # two headings, one word each
+                  "How do I treat a burn?"):         # a word it lacks
+            with self.subTest(q=q):
+                self.assertIsNone(self.lib.find(q))
+
+
 class AskedTheBestThereIs(Lib):
 
     def test_the_best_passage(self):
@@ -256,9 +344,102 @@ class TheConverter(unittest.TestCase):
                 "method to kill\norganisms.\n\n12\n\nBring the water to a rolling boil for at "
                 "least\none full minute.\n")
         self.assertEqual(lb.page_paragraphs(text), [
-            "Purifying by boiling If your tap water is unsafe, boiling is the best method to "
+            "Purifying by boiling\nIf your tap water is unsafe, boiling is the best method to "
             "kill organisms.",
             "Bring the water to a rolling boil for at least one full minute."])
+
+    def test_the_rows_of_a_list_stay_rows(self):
+        # joined into one sentence, "1 gallon" loses its "1/4 teaspoon"
+        text = ("The following is a list of the tent group for an infantry squad, which is\n"
+                "carried on the sled:\n1 Ten-man tent with liner\n1 Yukon stove\n"
+                "2 Five-gallon gasoline cans (one with white gasoline per platoon)\n1 Hatchet\n")
+        self.assertEqual(lb.page_paragraphs(text), [
+            "The following is a list of the tent group for an infantry squad, which is "
+            "carried on the sled:\n1 Ten-man tent with liner\n1 Yukon stove\n"
+            "2 Five-gallon gasoline cans (one with white gasoline per platoon)\n1 Hatchet"])
+
+    def test_headings_in_a_pdf(self):
+        for line in ("DETERMINING THE DISTANCE", "3-2. TENT GROUP EQUIPMENT", "CHAPTER 3",
+                     "Chapter 18", "SNOW TRENCH", "APPENDIX B"):
+            with self.subTest(line=line):
+                self.assertTrue(lb.heading_line(line))
+        for line in ("Figure 19-7. Body Signals", "WSVX.02.04", "TC 21-3", "12",
+                     "NOTE: Always check the scale on your map", "You can use your map.",
+                     "DO NOT WALK, SWIM OR DRIVE THROUGH FLOOD WATERS.", "Graphic (Bar) Scale Method"):
+            with self.subTest(line=line):
+                self.assertFalse(lb.heading_line(line))
+
+    def test_a_document_under_its_headings_without_its_running_heads(self):
+        pages = [(n, "TC 21-3\n\n%s\n\nBody of page %d, long enough to be worth keeping here.\n\n%d\n"
+                  % ("CHAPTER 3\n\nTents and Heating Equipment\n\n3-1. GENERAL" if n == 2 else "", n, n))
+                 for n in range(1, 9)]
+        out = lb.document_passages(pages)
+        self.assertEqual(out[0], ("", "page 1", "Body of page 1, long enough to be worth keeping here."))
+        self.assertEqual(out[1], ("3-1. GENERAL", "page 2",
+                                  "Body of page 2, long enough to be worth keeping here."))
+        self.assertEqual(out[2][0], "3-1. GENERAL")               # the heading carries on
+        self.assertFalse(any("TC 21-3" in t for _, _, t in out))  # the running head is gone
+
+    def test_a_row_that_is_only_a_link_is_the_sites_way_around_itself(self):
+        # build log 58: "look up flooding" was shown the language menu
+        page = """<html lang="en"><head><title>Floods</title></head><body><main><h1>Floods</h1>
+        <ul><li><span><a href="fr/floods">Français</a></span></li>
+        <li><span><a href="ht/floods">Kreyòl</a></span></li></ul>
+        <a href="#during"><p>During a flood</p></a>
+        <p>Flooding is common. <a href="more">Read more</a></p>
+        <h2><a href="#during">During</a></h2><ul><li>Move to higher ground.</li></ul>
+        </main></body></html>"""
+        self.assertEqual(lb.page_sections(page)[1], [
+            ("Floods", ["Flooding is common. Read more"]),
+            ("During", ["- Move to higher ground."])])         # a heading may be a link
+
+    def test_a_handbook_typed_without_blank_lines(self):
+        # build log 58: "UNITED STATES MARINE CORPS" headed 532 passages
+        text = ("UNITED STATES MARINE CORPS\nMountain Warfare Training Center\nSTUDENT HANDOUT\n"
+                "SURVIVAL SHELTERS\nOUTLINE\n"
+                "1. REQUIREMENTS. Any shelter must keep out the wind and the wet, whatever it is made of.\n"
+                "c. Snow Cave. A snow cave shelters one to sixteen men for long periods of time.\n"
+                "(a) Dig down into the snow until the tunnel entrance has been reached.\n"
+                "b. Angry outbursts.\n")
+        kinds = [(k, t.split("\n")[0][:34]) for k, t in lb.page_blocks(text)]
+        self.assertEqual(kinds, [
+            ("h", "UNITED STATES MARINE CORPS"), ("p", "Mountain Warfare Training Center"),
+            ("h", "STUDENT HANDOUT"), ("h", "SURVIVAL SHELTERS"), ("h", "OUTLINE"),
+            ("h", "REQUIREMENTS"), ("p", "1. REQUIREMENTS. Any shelter must "),
+            ("m", "Snow Cave"), ("p", "c. Snow Cave. A snow cave shelters")])
+        self.assertIn("b. Angry outbursts.", lb.page_blocks(text)[-1][1])   # a row, not a heading
+
+    def test_a_table_of_contents_answers_nothing(self):
+        text = ("CONTENTS\n\nHEAT STROKE .................................... 11-1\n"
+                "FROSTBITE ...................................... 12-4\n\nThe body follows here.\n")
+        self.assertEqual(lb.page_blocks(text), [("h", "CONTENTS"), ("p", "The body follows here.")])
+        self.assertFalse(lb.heading_line("HEAT STROKE ............ 11-1"))
+
+    def test_a_lesson_under_its_own_headings(self):
+        head = "UNITED STATES MARINE CORPS\nMountain Warfare Training Center\n"
+        foot = "\nWSVX 02.04\n"
+        body = {
+            1: "STUDENT HANDOUT\nSURVIVAL SHELTERS\nENABLING LEARNING OBJECTIVES\n"
+               "(1) Without the aid of references, construct a snow cave, in accordance with the references.\n"
+               "OUTLINE\n1. MAN-MADE SHELTERS. Many configurations of man-made shelters may be used.\n"
+               "b. Snow Cave. A snow cave is used to shelter one to sixteen men for long periods.\n",
+            2: "(a) Dig down into the snow until the desired tunnel entrance has been reached.\n"
+               "SNOW CAVE\n"
+               "c. Tree-pit Snow Shelter. A tree-pit snow shelter is designed for one to three men.\n",
+        }
+        pages = [(n, head + body.get(n, "More of the lesson stands on page %d of the handbook.\n" % n) + foot)
+                 for n in range(1, 8)]
+        out = lb.document_passages(pages, skip_under=["ENABLING LEARNING OBJECTIVE"],
+                                   not_headings=["OUTLINE", "STUDENT HANDOUT"])
+        headings = [h for h, _, _ in out]
+        self.assertEqual(headings[:4], ["MAN-MADE SHELTERS", "MAN-MADE SHELTERS: Snow Cave",
+                                        "MAN-MADE SHELTERS: Snow Cave",          # carried to page 2
+                                        "MAN-MADE SHELTERS: Tree-pit Snow Shelter"])
+        text = "\n".join(t for _, _, t in out)
+        self.assertNotIn("MARINE CORPS", text)                    # the running head
+        self.assertNotIn("WSVX 02.04", text)                      # the running foot
+        self.assertNotIn("Without the aid of references", text)   # the objectives
+        self.assertNotIn("SNOW CAVE: Tree-pit", " ".join(headings))   # a caption is not a heading
 
     def test_the_unit_needs_nothing_but_sqlite(self):
         with open(os.path.join(HERE, "logic", "library.py"), encoding="utf-8") as f:

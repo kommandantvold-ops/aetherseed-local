@@ -117,7 +117,7 @@ failed, and no packet sent on any interface. It says nothing about voice
 nothing on the unit - it does not pull links down or block radios itself.
 `training/offline_proof.py` carries the protocol in full.
 
-## The library check (build log 57)
+## The library check (build logs 57, 58)
 
 Does the library show the right passage — and nothing when it has nothing?
 
@@ -130,13 +130,30 @@ questions in `library-probes.json` and counts: of the questions a collection
 should answer, how many got a passage from the right document (and whether it
 was the passage that answers); of the questions it should leave alone — about
 her, about what she was told, greetings, things the library does not hold —
-how many it left alone. `held_out` in that file was written before it was ever
-run, and the rules were not changed for it.
+how many it left alone. `unasked`, `asked` and `unasked2` were worked on while
+the rules were made. `held_out`, `held_out2`, `held_out3` and `everyday` were
+each written before they were first run, and their labels stand as written.
 
-Measured 4 Oct 2026 on the two collections (NHS Medicines A to Z, the Water
-Treatment Library): the questions used while writing the rules — 15 of 18 the
-passage that answers, all 18 the right document, 42 of 42 left alone; held
-out — 15 of 16 answered from the right collection, 23 of 24 left alone
-(*"What should I plant in spring?"* found *"Plants as Indicator of Ground
-Water"*). The right document is found far more surely than the right passage
-in it: it is words that are matched, not meaning.
+Measured 4 Oct 2026 on the four collections of build log 58 (NHS Medicines A
+to Z, Water Treatment Library, Ready.gov, US military field manuals):
+
+| set | should answer | should leave alone |
+|---|---|---|
+| `unasked` (worked on) | 21 of 21 from a collection that holds it (14 the passage marked as the answer) | 39 of 39 |
+| `asked` (worked on) | 7 of 7 | 3 of 4 (*"look up the population of Norway"* → Norway rats) |
+| `unasked2` (worked on, survival) | 17 of 22 | 1 of 1 |
+| `held_out` (blind, step 57) | 13 of 16; 2 more answered from another collection | 24 of 24 |
+| `held_out2` (blind, survival) | 15 of 20; 1 more answered from another collection | 20 of 20 |
+| `held_out3` (blind, survival) | 18 of 20 | 29 of 30 |
+| `everyday` (blind, 100 everyday messages) | — | 98 of 100 |
+
+Read with care. The blind sets were blind once: `held_out2` gave 6 of 20 on
+its first run (pages titled in the plural were not found), `held_out3` 17 of
+20 and 28 of 30, `everyday` 96 of 100; rules and converter were then changed
+for reasons the build log gives, and these are the numbers after. What still
+goes wrong, by name: *"Where is the north pole?"* is shown "True North";
+*"What time does the sun set today?"* a page on navigating by the sun;
+*"Should I get a flu vaccine?"* one medicine's page on vaccinations; and
+*"How do I stop bleeding?"* a medicine's side effects, not first aid. The
+right document is found far more surely than the right passage in it: it is
+words that are matched, not meaning.

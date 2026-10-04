@@ -1,5 +1,5 @@
 {
- "about": "Questions for the library (build log 57). expect: the collection id that should answer, or null when nothing should be shown. title: words the document's title must contain. text: the passage shown must contain one of these. Checked by training/library_check.py with no model involved. unasked and asked were used while the rules were being written; held_out was written before it was ever run and the rules were not changed for it.",
+ "about": "What the library should show and what it should leave alone (training/library_check.py). unasked, asked: worked on while the rules were made (build log 57); unasked2: the same for the survival collections (build log 58). held_out (57), held_out2, held_out3 and everyday (58) were each written before they were first run; their labels stand as written, and a first run and a last run are both in the build log. Where 'expect' is a list, any of those collections answers it: since build log 58 more than one holds water treatment.",
  "unasked": [
   {
    "ask": "How much paracetamol can an adult take?",
@@ -87,7 +87,11 @@
   },
   {
    "ask": "How do I make water safe to drink?",
-   "expect": "zimgit-water_en",
+   "expect": [
+    "zimgit-water_en",
+    "us-field-manuals",
+    "www.ready.gov_en"
+   ],
    "title": "",
    "text": [
     "boil",
@@ -98,7 +102,10 @@
   },
   {
    "ask": "How much bleach do I add to a gallon of water?",
-   "expect": "zimgit-water_en",
+   "expect": [
+    "zimgit-water_en",
+    "www.ready.gov_en"
+   ],
    "title": "",
    "text": [
     "1/4 teaspoon",
@@ -151,7 +158,10 @@
   },
   {
    "ask": "How do I filter cloudy water?",
-   "expect": "zimgit-water_en",
+   "expect": [
+    "zimgit-water_en",
+    "us-field-manuals"
+   ],
    "title": "",
    "text": [
     "filter",
@@ -284,15 +294,29 @@
   },
   {
    "ask": "How do I tie a bowline?",
-   "expect": null
+   "expect": "us-field-manuals",
+   "text": [
+    "owline"
+   ],
+   "title": ""
   },
   {
    "ask": "How do I start a fire without matches?",
-   "expect": null
+   "expect": "us-field-manuals",
+   "text": [
+    "fire",
+    "Fire",
+    "FIRE"
+   ],
+   "title": ""
   },
   {
    "ask": "How do I treat a snake bite?",
-   "expect": null
+   "expect": "us-field-manuals",
+   "text": [
+    "nake"
+   ],
+   "title": ""
   },
   {
    "ask": "What is the weather like?",
@@ -338,7 +362,10 @@
   },
   {
    "ask": "Look up boiling water",
-   "expect": "zimgit-water_en",
+   "expect": [
+    "zimgit-water_en",
+    "www.ready.gov_en"
+   ],
    "title": "",
    "text": [
     "oil"
@@ -370,11 +397,19 @@
   },
   {
    "ask": "look up how to tie a bowline",
-   "expect": null
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "owline"
+   ]
   },
   {
    "ask": "look up snake bite",
-   "expect": null
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "nake"
+   ]
   },
   {
    "ask": "look up the capital of France",
@@ -382,6 +417,14 @@
   },
   {
    "ask": "what does the library say about Mustardseed",
+   "expect": null
+  },
+  {
+   "ask": "look up how to play chess",
+   "expect": null
+  },
+  {
+   "ask": "look up the population of Norway",
    "expect": null
   }
  ],
@@ -560,6 +603,1045 @@
   },
   {
    "ask": "Translate hello to Norwegian",
+   "expect": null
+  }
+ ],
+ "unasked2": [
+  {
+   "ask": "What should I do during a flood?",
+   "expect": "www.ready.gov_en",
+   "title": "flood",
+   "text": [
+    "flood",
+    "Flood"
+   ]
+  },
+  {
+   "ask": "How do I prepare for a hurricane?",
+   "expect": "www.ready.gov_en",
+   "title": "hurricane",
+   "text": [
+    "urricane"
+   ]
+  },
+  {
+   "ask": "What should I do in a tornado?",
+   "expect": "www.ready.gov_en",
+   "title": "tornado",
+   "text": [
+    "ornado",
+    "shelter"
+   ]
+  },
+  {
+   "ask": "How do I stay safe in extreme heat?",
+   "expect": "www.ready.gov_en",
+   "title": "heat",
+   "text": [
+    "heat",
+    "Heat"
+   ]
+  },
+  {
+   "ask": "What should I do during an earthquake?",
+   "expect": "www.ready.gov_en",
+   "title": "earthquake",
+   "text": [
+    "Drop",
+    "arthquake"
+   ]
+  },
+  {
+   "ask": "How do I prepare for a winter storm?",
+   "expect": "www.ready.gov_en",
+   "title": "winter",
+   "text": [
+    "inter"
+   ]
+  },
+  {
+   "ask": "What do I do in a thunderstorm with lightning?",
+   "expect": "www.ready.gov_en",
+   "title": "",
+   "text": [
+    "ightning",
+    "hunder"
+   ]
+  },
+  {
+   "ask": "What goes in an emergency kit?",
+   "expect": "www.ready.gov_en",
+   "title": "kit",
+   "text": [
+    "ater",
+    "kit"
+   ]
+  },
+  {
+   "ask": "What should I do during a drought?",
+   "expect": "www.ready.gov_en",
+   "title": "drought",
+   "text": [
+    "ater",
+    "rought"
+   ]
+  },
+  {
+   "ask": "How do I survive a wildfire?",
+   "expect": "www.ready.gov_en",
+   "title": "wildfire",
+   "text": [
+    "ildfire",
+    "vacuat"
+   ]
+  },
+  {
+   "ask": "What do I do in a power outage?",
+   "expect": "www.ready.gov_en",
+   "title": "power",
+   "text": [
+    "ower",
+    "enerator"
+   ]
+  },
+  {
+   "ask": "What should I do in a tsunami?",
+   "expect": "www.ready.gov_en",
+   "title": "tsunami",
+   "text": [
+    "sunami"
+   ]
+  },
+  {
+   "ask": "How do I find north without a compass?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "north",
+    "North",
+    "shadow",
+    "NORTH"
+   ]
+  },
+  {
+   "ask": "How do I build a snow shelter?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "snow",
+    "Snow",
+    "SNOW"
+   ]
+  },
+  {
+   "ask": "How do I treat frostbite?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "rostbite",
+    "FROSTBITE"
+   ]
+  },
+  {
+   "ask": "How do I treat hypothermia?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "ypothermia",
+    "HYPOTHERMIA"
+   ]
+  },
+  {
+   "ask": "How do I make a solar still?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "still",
+    "STILL"
+   ]
+  },
+  {
+   "ask": "How do I read grid coordinates on a map?",
+   "expect": "us-field-manuals",
+   "title": "map",
+   "text": [
+    "grid",
+    "coordinate"
+   ]
+  },
+  {
+   "ask": "How do I treat heat stroke?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "eat",
+    "HEAT"
+   ]
+  },
+  {
+   "ask": "How do I stop bleeding?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "leeding",
+    "BLEEDING",
+    "tourniquet",
+    "pressure"
+   ]
+  },
+  {
+   "ask": "How do I signal for rescue?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "ignal",
+    "SIGNAL"
+   ]
+  },
+  {
+   "ask": "How do I build a lean-to shelter?",
+   "expect": "us-field-manuals",
+   "title": "",
+   "text": [
+    "ean-to",
+    "LEAN-TO"
+   ]
+  },
+  {
+   "ask": "How do I purify water in the field?",
+   "expect": null,
+   "any": true
+  }
+ ],
+ "held_out2": [
+  {
+   "ask": "What should I do after a flood?",
+   "expect": "www.ready.gov_en",
+   "title": "flood"
+  },
+  {
+   "ask": "How do I prepare for an earthquake?",
+   "expect": "www.ready.gov_en",
+   "title": "earthquake"
+  },
+  {
+   "ask": "What do I do if I am caught in an avalanche?",
+   "expect": "www.ready.gov_en",
+   "title": "avalanche"
+  },
+  {
+   "ask": "How can I stay safe during a heat wave?",
+   "expect": "www.ready.gov_en",
+   "title": "heat"
+  },
+  {
+   "ask": "What should I do in a landslide?",
+   "expect": "www.ready.gov_en",
+   "title": "landslide"
+  },
+  {
+   "ask": "How do I prepare my home for a hurricane?",
+   "expect": "www.ready.gov_en",
+   "title": "hurricane"
+  },
+  {
+   "ask": "What should I do during a volcanic eruption?",
+   "expect": "www.ready.gov_en",
+   "title": "volcan"
+  },
+  {
+   "ask": "How do I prepare for a blizzard?",
+   "expect": "www.ready.gov_en",
+   "title": "winter"
+  },
+  {
+   "ask": "How do I make a fire in the snow?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I use a shadow stick to find direction?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I find the North Star?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I prevent trench foot?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "What are the signs of dehydration?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I treat a burn?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I splint a broken arm?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I build a snow cave?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I measure distance on a map?",
+   "expect": "us-field-manuals",
+   "title": "map"
+  },
+  {
+   "ask": "How do I treat snow blindness?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I avoid carbon monoxide poisoning in a tent?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "How do I catch food with a snare?",
+   "expect": "us-field-manuals",
+   "title": ""
+  },
+  {
+   "ask": "What did we talk about yesterday?",
+   "expect": null
+  },
+  {
+   "ask": "Do you like music?",
+   "expect": null
+  },
+  {
+   "ask": "Tell me a joke",
+   "expect": null
+  },
+  {
+   "ask": "What is your favourite colour?",
+   "expect": null
+  },
+  {
+   "ask": "How was your day?",
+   "expect": null
+  },
+  {
+   "ask": "Remind me what I told you about my sister",
+   "expect": null
+  },
+  {
+   "ask": "What is the population of Norway?",
+   "expect": null
+  },
+  {
+   "ask": "Who painted the Mona Lisa?",
+   "expect": null
+  },
+  {
+   "ask": "How do I fix a flat bicycle tyre?",
+   "expect": null
+  },
+  {
+   "ask": "What is the best way to learn Spanish?",
+   "expect": null
+  },
+  {
+   "ask": "How do I bake a cake?",
+   "expect": null
+  },
+  {
+   "ask": "I am cold",
+   "expect": null
+  },
+  {
+   "ask": "It is raining outside",
+   "expect": null
+  },
+  {
+   "ask": "The power is out",
+   "expect": null
+  },
+  {
+   "ask": "Let's play a game",
+   "expect": null
+  },
+  {
+   "ask": "Sing me a song",
+   "expect": null
+  },
+  {
+   "ask": "What is love?",
+   "expect": null
+  },
+  {
+   "ask": "Are you alive?",
+   "expect": null
+  },
+  {
+   "ask": "Can you hear me?",
+   "expect": null
+  },
+  {
+   "ask": "What is in my workspace?",
+   "expect": null
+  }
+ ],
+ "held_out3": [
+  {
+   "ask": "What should I do before a flood?",
+   "expect": [
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "How do I stay safe during a thunderstorm?",
+   "expect": [
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "What do I do after an earthquake?",
+   "expect": [
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "How do I prepare for a tornado?",
+   "expect": [
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "What should I do during a wildfire?",
+   "expect": [
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "How do I prepare for a power outage?",
+   "expect": [
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "What should I do in a drought?",
+   "expect": [
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "How do I prepare for a tsunami?",
+   "expect": [
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "What are the signs of hypothermia?",
+   "expect": [
+    "us-field-manuals",
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "What is the first aid for frostbite?",
+   "expect": [
+    "us-field-manuals",
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "How do I treat heat exhaustion?",
+   "expect": [
+    "us-field-manuals",
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "How do I use a compass?",
+   "expect": [
+    "us-field-manuals"
+   ]
+  },
+  {
+   "ask": "How do I orient a map?",
+   "expect": [
+    "us-field-manuals"
+   ]
+  },
+  {
+   "ask": "How do I build a fire?",
+   "expect": [
+    "us-field-manuals"
+   ]
+  },
+  {
+   "ask": "How do I find water in the desert?",
+   "expect": [
+    "us-field-manuals",
+    "zimgit-water_en"
+   ]
+  },
+  {
+   "ask": "What are the symptoms of heat stroke?",
+   "expect": [
+    "us-field-manuals",
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "How do I apply a tourniquet?",
+   "expect": [
+    "us-field-manuals"
+   ]
+  },
+  {
+   "ask": "How do I treat shock?",
+   "expect": [
+    "us-field-manuals"
+   ]
+  },
+  {
+   "ask": "How do I dress for cold weather?",
+   "expect": [
+    "us-field-manuals"
+   ]
+  },
+  {
+   "ask": "How do I prevent frostbite?",
+   "expect": [
+    "us-field-manuals",
+    "www.ready.gov_en"
+   ]
+  },
+  {
+   "ask": "What is the capital of Norway?",
+   "expect": null
+  },
+  {
+   "ask": "Play some music",
+   "expect": null
+  },
+  {
+   "ask": "What day is it today?",
+   "expect": null
+  },
+  {
+   "ask": "How old is the universe?",
+   "expect": null
+  },
+  {
+   "ask": "Who won the war?",
+   "expect": null
+  },
+  {
+   "ask": "Tell me about the stars",
+   "expect": null
+  },
+  {
+   "ask": "I went for a walk in the snow today",
+   "expect": null
+  },
+  {
+   "ask": "The fire is nice and warm",
+   "expect": null
+  },
+  {
+   "ask": "What is a good name for a cat?",
+   "expect": null
+  },
+  {
+   "ask": "How do I cook rice?",
+   "expect": null
+  },
+  {
+   "ask": "What is the tallest mountain in the world?",
+   "expect": null
+  },
+  {
+   "ask": "My kit arrived in the post",
+   "expect": null
+  },
+  {
+   "ask": "Why is the sky blue?",
+   "expect": null
+  },
+  {
+   "ask": "How do I write a letter to my mother?",
+   "expect": null
+  },
+  {
+   "ask": "What does compass mean in Latin?",
+   "expect": null
+  },
+  {
+   "ask": "Is it cold in Tromsø in winter?",
+   "expect": null
+  },
+  {
+   "ask": "When was the last flood in Norway?",
+   "expect": null
+  },
+  {
+   "ask": "How many people live in the desert?",
+   "expect": null
+  },
+  {
+   "ask": "Shall we read some more?",
+   "expect": null
+  },
+  {
+   "ask": "What is a good book about survival?",
+   "expect": null
+  },
+  {
+   "ask": "Do you know any knots?",
+   "expect": null
+  },
+  {
+   "ask": "I think a storm is coming",
+   "expect": null
+  },
+  {
+   "ask": "How do I clean my keyboard?",
+   "expect": null
+  },
+  {
+   "ask": "What is the plan for tomorrow?",
+   "expect": null
+  },
+  {
+   "ask": "Where is the north pole?",
+   "expect": null
+  },
+  {
+   "ask": "How long is a marathon?",
+   "expect": null
+  },
+  {
+   "ask": "What is snow made of?",
+   "expect": null
+  },
+  {
+   "ask": "Can dogs eat chocolate?",
+   "expect": null
+  },
+  {
+   "ask": "How do I learn to swim?",
+   "expect": null
+  },
+  {
+   "ask": "Remember that the shelter key is under the mat",
+   "expect": null
+  }
+ ],
+ "everyday": [
+  {
+   "ask": "What did Noah build?",
+   "expect": null
+  },
+  {
+   "ask": "Why did Cain kill Abel?",
+   "expect": null
+  },
+  {
+   "ask": "Who was Abraham's wife?",
+   "expect": null
+  },
+  {
+   "ask": "How long did the flood last in Genesis?",
+   "expect": null
+  },
+  {
+   "ask": "What did the dove bring back?",
+   "expect": null
+  },
+  {
+   "ask": "Tell me about the tower of Babel",
+   "expect": null
+  },
+  {
+   "ask": "What is the first verse of Genesis?",
+   "expect": null
+  },
+  {
+   "ask": "Who was the first man?",
+   "expect": null
+  },
+  {
+   "ask": "What did Jesus say about the storm?",
+   "expect": null
+  },
+  {
+   "ask": "Why do we read the Bible?",
+   "expect": null
+  },
+  {
+   "ask": "What is the weather forecast for Bergen?",
+   "expect": null
+  },
+  {
+   "ask": "How cold is it outside?",
+   "expect": null
+  },
+  {
+   "ask": "Is there a storm coming tonight?",
+   "expect": null
+  },
+  {
+   "ask": "What time does the sun set today?",
+   "expect": null
+  },
+  {
+   "ask": "Can we go for a walk later?",
+   "expect": null
+  },
+  {
+   "ask": "I need to buy bread and milk",
+   "expect": null
+  },
+  {
+   "ask": "Remind me to call the doctor on Monday",
+   "expect": null
+  },
+  {
+   "ask": "What should I cook for dinner?",
+   "expect": null
+  },
+  {
+   "ask": "How do I make pancakes?",
+   "expect": null
+  },
+  {
+   "ask": "What is a good recipe for fish soup?",
+   "expect": null
+  },
+  {
+   "ask": "How much water should a houseplant get?",
+   "expect": null
+  },
+  {
+   "ask": "Why is my tomato plant wilting?",
+   "expect": null
+  },
+  {
+   "ask": "How do I fix a leaking tap?",
+   "expect": null
+  },
+  {
+   "ask": "My phone battery is dead",
+   "expect": null
+  },
+  {
+   "ask": "The heating is not working in the kitchen",
+   "expect": null
+  },
+  {
+   "ask": "How do I change a light bulb?",
+   "expect": null
+  },
+  {
+   "ask": "What is the fastest way to Oslo by train?",
+   "expect": null
+  },
+  {
+   "ask": "How far is it to Trondheim?",
+   "expect": null
+  },
+  {
+   "ask": "Where can I find a map of Norway?",
+   "expect": null
+  },
+  {
+   "ask": "What is the highest mountain in Norway?",
+   "expect": null
+  },
+  {
+   "ask": "How many fjords are there?",
+   "expect": null
+  },
+  {
+   "ask": "Who is the king of Norway?",
+   "expect": null
+  },
+  {
+   "ask": "When is Constitution Day?",
+   "expect": null
+  },
+  {
+   "ask": "What language do they speak in Finland?",
+   "expect": null
+  },
+  {
+   "ask": "How do I say thank you in Spanish?",
+   "expect": null
+  },
+  {
+   "ask": "What is the square root of 144?",
+   "expect": null
+  },
+  {
+   "ask": "How many days are there in February?",
+   "expect": null
+  },
+  {
+   "ask": "What is 15 percent of 200?",
+   "expect": null
+  },
+  {
+   "ask": "Who discovered penicillin?",
+   "expect": null
+  },
+  {
+   "ask": "When did the second world war end?",
+   "expect": null
+  },
+  {
+   "ask": "Who was Florence Nightingale?",
+   "expect": null
+  },
+  {
+   "ask": "What is photosynthesis?",
+   "expect": null
+  },
+  {
+   "ask": "Why is the sea salty?",
+   "expect": null
+  },
+  {
+   "ask": "How do birds find their way south?",
+   "expect": null
+  },
+  {
+   "ask": "What do bears eat in winter?",
+   "expect": null
+  },
+  {
+   "ask": "How long does a cat live?",
+   "expect": null
+  },
+  {
+   "ask": "My cat is not eating",
+   "expect": null
+  },
+  {
+   "ask": "What should I name my boat?",
+   "expect": null
+  },
+  {
+   "ask": "How do I learn to knit?",
+   "expect": null
+  },
+  {
+   "ask": "What is a good film to watch tonight?",
+   "expect": null
+  },
+  {
+   "ask": "Tell me something interesting",
+   "expect": null
+  },
+  {
+   "ask": "I feel a bit lonely today",
+   "expect": null
+  },
+  {
+   "ask": "I am tired",
+   "expect": null
+  },
+  {
+   "ask": "I slept badly last night",
+   "expect": null
+  },
+  {
+   "ask": "My knee hurts when I walk",
+   "expect": null
+  },
+  {
+   "ask": "I have a headache",
+   "expect": null
+  },
+  {
+   "ask": "My daughter is visiting on Sunday",
+   "expect": null
+  },
+  {
+   "ask": "My grandson is learning to ski",
+   "expect": null
+  },
+  {
+   "ask": "I burned the toast this morning",
+   "expect": null
+  },
+  {
+   "ask": "I cut my finger on the bread knife",
+   "expect": null
+  },
+  {
+   "ask": "The neighbours had a fire in their chimney last year",
+   "expect": null
+  },
+  {
+   "ask": "We had a power cut last winter",
+   "expect": null
+  },
+  {
+   "ask": "There was a flood in the village when I was a child",
+   "expect": null
+  },
+  {
+   "ask": "I remember a big storm in 1992",
+   "expect": null
+  },
+  {
+   "ask": "Do you think it will snow at Christmas?",
+   "expect": null
+  },
+  {
+   "ask": "What do you think about survival shows on television?",
+   "expect": null
+  },
+  {
+   "ask": "What is your favourite season?",
+   "expect": null
+  },
+  {
+   "ask": "Do you ever get cold?",
+   "expect": null
+  },
+  {
+   "ask": "Are you afraid of the dark?",
+   "expect": null
+  },
+  {
+   "ask": "Can you keep a secret?",
+   "expect": null
+  },
+  {
+   "ask": "What have you learned this week?",
+   "expect": null
+  },
+  {
+   "ask": "What is on my list?",
+   "expect": null
+  },
+  {
+   "ask": "Add eggs to my shopping list",
+   "expect": null
+  },
+  {
+   "ask": "Save a note about the plumber",
+   "expect": null
+  },
+  {
+   "ask": "What files do I have?",
+   "expect": null
+  },
+  {
+   "ask": "What does my note about the garden say?",
+   "expect": null
+  },
+  {
+   "ask": "Who are you?",
+   "expect": null
+  },
+  {
+   "ask": "Why are you called Lyra?",
+   "expect": null
+  },
+  {
+   "ask": "What are you made of?",
+   "expect": null
+  },
+  {
+   "ask": "How do you work without the internet?",
+   "expect": null
+  },
+  {
+   "ask": "What can you not do?",
+   "expect": null
+  },
+  {
+   "ask": "Is the door locked?",
+   "expect": null
+  },
+  {
+   "ask": "Turn on the light",
+   "expect": null
+  },
+  {
+   "ask": "What is the news today?",
+   "expect": null
+  },
+  {
+   "ask": "Who won the football match?",
+   "expect": null
+  },
+  {
+   "ask": "How do I write a will?",
+   "expect": null
+  },
+  {
+   "ask": "What is a pension?",
+   "expect": null
+  },
+  {
+   "ask": "How much does a stamp cost?",
+   "expect": null
+  },
+  {
+   "ask": "What is the emergency number in Norway?",
+   "expect": null
+  },
+  {
+   "ask": "Should I get a flu vaccine?",
+   "expect": null
+  },
+  {
+   "ask": "What is the meaning of the word resilience?",
+   "expect": null
+  },
+  {
+   "ask": "What is a tourniquet in a guitar?",
+   "expect": null
+  },
+  {
+   "ask": "How do I shelter my savings from inflation?",
+   "expect": null
+  },
+  {
+   "ask": "How do I signal that I want to turn left on a bicycle?",
+   "expect": null
+  },
+  {
+   "ask": "How do I survive a boring meeting?",
+   "expect": null
+  },
+  {
+   "ask": "What is the best fire starter in Pokemon?",
+   "expect": null
+  },
+  {
+   "ask": "How do I treat my wooden deck?",
+   "expect": null
+  },
+  {
+   "ask": "How do I filter my email?",
+   "expect": null
+  },
+  {
+   "ask": "How do I store my winter clothes?",
+   "expect": null
+  },
+  {
+   "ask": "What knots do sailors use?",
    "expect": null
   }
  ]

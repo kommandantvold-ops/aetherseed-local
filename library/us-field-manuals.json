@@ -1,0 +1,123 @@
+{
+ "id": "us-field-manuals",
+ "title": "US military field manuals",
+ "description": "Survival, cold weather, desert, first aid, field sanitation and map reading, from US Army and US Marine Corps manuals",
+ "date": "2026-10-04",
+ "language": "eng",
+ "creator": "US Army; US Marine Corps",
+ "licence": "Works of the United States Government. The release statement each file carries is recorded with the document; where a file carries none, that is recorded too. Not taken: FM 3-05.70 Survival (2002), which is marked 'Distribution authorized to U.S. Government agencies and their contractors only', and the reformatted copy of it on the same shelf.",
+ "documents": [
+  {
+   "source": "zimgit-post-disaster_en_2024-05.zim",
+   "shelf_title": "How-to-Find-Your-Way",
+   "title": "How To Find Your Way: map reading and land navigation (GTA 05-02-013)",
+   "author": "US Army",
+   "release": "Approved for public release; distribution is unlimited."
+  },
+  {
+   "source": "armypubs_en_all_2024-12.zim",
+   "path": "armypubs.army.mil/epubs/DR_pubs/DR_a/ARN14135-TC_4-02.1-002-WEB-3.pdf",
+   "title": "First Aid (TC 4-02.1, 2016)",
+   "author": "US Army",
+   "release": "Approved for public release; distribution is unlimited."
+  },
+  {
+   "source": "armypubs_en_all_2024-12.zim",
+   "path": "armypubs.army.mil/epubs/DR_pubs/DR_a/NOCASE-TC_21-3-000-WEB-0.pdf",
+   "title": "Soldier's Handbook for Individual Operations and Survival in Cold-Weather Areas (TC 21-3, 1986)",
+   "author": "US Army",
+   "release": "Approved for public release; distribution is unlimited."
+  },
+  {
+   "source": "armypubs_en_all_2024-12.zim",
+   "path": "armypubs.army.mil/epubs/DR_pubs/DR_a/ARN35810-ATP_4-25.12-001-WEB-2.pdf",
+   "title": "Unit Field Sanitation Teams (ATP 4-25.12, 2014)",
+   "author": "US Army",
+   "release": "Approved for public release; distribution is unlimited."
+  },
+  {
+   "source": "armypubs_en_all_2024-12.zim",
+   "path": "armypubs.army.mil/epubs/DR_pubs/DR_a/ARN32068-ATP_3-90.99-000-WEB-1.pdf",
+   "title": "The Desert Environment, from Desert Operations (ATP 3-90.99, 2021)",
+   "author": "US Army; US Marine Corps",
+   "release": "Approved for public release; distribution is unlimited.",
+   "pages": [
+    [
+     13,
+     39
+    ],
+    [
+     133,
+     134
+    ]
+   ],
+   "taken": "Chapter 1, The Desert Environment, and Appendix A, Desert Regions of the World. Not taken: the chapters on combat power, offensive, defensive and stability operations, and the appendices on equipment and fratricide."
+  },
+  {
+   "source": "zimgit-post-disaster_en_2024-05.zim",
+   "shelf_title": "US-Marine-Corps-Summer-Survival-Course",
+   "title": "Summer Survival Course Handbook (Mountain Warfare Training Center, 2002)",
+   "author": "US Marine Corps",
+   "release": "No distribution statement in the file.",
+   "skip_under": [
+    "ENABLING LEARNING OBJECTIVE",
+    "TERMINAL LEARNING OBJECTIVE",
+    "TERMINAL LERNING OBJECTIVE"
+   ],
+   "not_headings": [
+    "OUTLINE",
+    "STUDENT HANDOUT",
+    "STUDENT OUTLINE",
+    "REFERENCE",
+    "REFERENCES"
+   ],
+   "skip_paragraphs": [
+    "^TERMINAL LE?A?RNING OBJECTIVE"
+   ]
+  },
+  {
+   "source": "zimgit-post-disaster_en_2024-05.zim",
+   "shelf_title": "USMC-Winter-Survival-Course",
+   "title": "Winter Survival Course Handbook (Mountain Warfare Training Center, 2002)",
+   "author": "US Marine Corps",
+   "release": "No distribution statement in the file.",
+   "skip_under": [
+    "ENABLING LEARNING OBJECTIVE",
+    "TERMINAL LEARNING OBJECTIVE",
+    "TERMINAL LERNING OBJECTIVE"
+   ],
+   "not_headings": [
+    "OUTLINE",
+    "STUDENT HANDOUT",
+    "STUDENT OUTLINE",
+    "REFERENCE",
+    "REFERENCES"
+   ],
+   "skip_paragraphs": [
+    "^TERMINAL LE?A?RNING OBJECTIVE"
+   ]
+  },
+  {
+   "source": "zimgit-post-disaster_en_2024-05.zim",
+   "shelf_title": "Wilderness-Medicine-Course",
+   "title": "Wilderness Medicine Course (Mountain Warfare Training Center, 2002)",
+   "author": "US Marine Corps",
+   "release": "No distribution statement in the file.",
+   "skip_under": [
+    "ENABLING LEARNING OBJECTIVE",
+    "TERMINAL LEARNING OBJECTIVE",
+    "TERMINAL LERNING OBJECTIVE"
+   ],
+   "not_headings": [
+    "OUTLINE",
+    "STUDENT HANDOUT",
+    "STUDENT OUTLINE",
+    "REFERENCE",
+    "REFERENCES"
+   ],
+   "skip_paragraphs": [
+    "^TERMINAL LE?A?RNING OBJECTIVE"
+   ]
+  }
+ ]
+}

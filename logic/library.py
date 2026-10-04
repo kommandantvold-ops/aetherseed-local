@@ -1,4 +1,4 @@
-"""The library: passages she shows word for word, with their source (build log 57).
+"""The library: passages she shows word for word, with their source (build logs 57, 58).
 
 Andreas, 4 Oct 2026: "A library she answers from with a knowledge base like
 that of nomad (content) so it can be a disaster relief and offgrid rural
@@ -14,37 +14,45 @@ speaks. The same treatment the to-do list gets (build log 51): the file is the
 answer, and nothing a model adds to it helps.
 
 WHAT A COLLECTION IS. One SQLite file made by tools/library_build.py from a
-Kiwix ZIM - passages, the document and place each came from, a full-text
-index - in /var/lib/aetherseed/library/. Read-only. Python's own sqlite3 is
-all this needs.
+Kiwix ZIM, or from chosen documents of several (library/NAME.json) -
+passages, the document and place each came from, a full-text index - in
+/var/lib/aetherseed/library/. Read-only. Python's own sqlite3 is all this
+needs.
 
 WHEN SHE ANSWERS FROM IT.
   - Asked to ("look up ...", "what does the library say about ...", "search
     the library for ..."): the best passage, or plainly that the library has
     nothing on it, and what it holds.
-  - Unasked, only when she is sure (find): every word that carries the
-    question is in the passage, and the passage is about it - a word of the
-    question is rare in that collection or stands in the document's title -
-    and the words stand together, not scattered. A question about her, or
-    about what she was told, is never the library's ("you", "your").
+  - Unasked, only when she is sure (find): the passage is ABOUT the
+    question by its own title or heading - a rare word of the question that
+    a title or heading says, or a title or heading that the question itself
+    says ("Hurricanes", "SNOW CAVE") - and what is about it says every
+    other word that carries the question. A question about her, or about
+    what she was told, is never the library's ("you", "your", "let's").
     Tried 4 Oct 2026 with the reader's own search: "make water safe to
     drink", asked of a medicines collection, returned an acne medicine. A
     library that always answers is worse than none.
 
 It never says more than the passage. What it cannot do: judge whether the
-passage is right, or whether it fits the person asking.
+passage is right, or whether it fits the person asking. And it matches words,
+not meaning (build log 58): "How do I treat hypothermia?" finds nothing
+unasked, because the section is headed "FIRST AID FOR HYPOTHERMIA" and never
+says "treat"; "Where is the north pole?" is shown "LOCATING THE NORTH STAR",
+which says both words. Asked to look it up, she shows the best there is.
 """
 import glob
 import math
 import os
 import re
 import sqlite3
+import threading
 from typing import Dict, List, Optional
 
 LIBRARY_DIR = os.environ.get("AETHERSEED_LIBRARY", "/var/lib/aetherseed/library")
 
 RARE = 0.03          # a word in at most this share of a collection's passages is "about" something
 NEAR = 30            # tokens: words that only meet in the running text must stand this close
+LEAFLET = 60         # passages: a document this short is about its title on every page
 SHOWN_MAX = 1200     # characters of a passage put on the screen
 
 STOP = set("""
@@ -57,11 +65,11 @@ through to too under until up very was we were what when where which while who w
 will with would you your yours yourself
 tell say said please know want need like get got give let lets us ok okay hi hello thanks
 thank much many long often best way good right kind sort thing things something anything
-make made take taken use used using
+make made take taken use used using go goes going
 """.split())
 
 # A question about her, or about what she was told, is not the library's.
-PERSONAL = re.compile(r"\b(you|your|yours|yourself|we|our|ours|us)\b", re.I)
+PERSONAL = re.compile(r"\b(you|your|yours|yourself|we|our|ours|us|let's|let’s|lets)\b", re.I)
 # Something the steward says about themselves, with no question in it, is
 # something told - not something asked: "I drink a lot of water every day".
 TOLD = re.compile(r"^\s*(?:i|i'm|i’m|im|my|me)\b", re.I)
@@ -109,6 +117,67 @@ def all_words(question: str) -> List[str]:
             continue
         out.append(w)
     return out[:12]
+
+
+_STEM_LOCK = threading.Lock()
+_STEM_DB = None
+_STEMS: Dict[str, str] = {}
+
+
+def _crude(w: str) -> str:
+    for end in ("ies", "es", "ing", "ed", "s"):
+        if w.endswith(end) and len(w) - len(end) >= 3:
+            w = w[:len(w) - len(end)]
+            break
+    return w[:-1] if w.endswith("e") and len(w) > 3 else w
+
+
+def stem(word: str) -> str:
+    """The form the index itself keeps the word in: "hurricanes" and
+    "hurricane" are one word there, and must be one word here. The first
+    measurement on Ready.gov missed every page titled in the plural ending
+    -es ("Hurricanes", "Earthquakes") because a home-made rule cut them
+    differently from the index. So the index's own tokenizer is asked."""
+    global _STEM_DB
+    w = (word or "").lower()
+    if w in _STEMS:
+        return _STEMS[w]
+    out = None
+    with _STEM_LOCK:
+        try:
+            if _STEM_DB is None:
+                db = sqlite3.connect(":memory:", check_same_thread=False)
+                db.execute("CREATE VIRTUAL TABLE t USING fts5(x, tokenize='porter unicode61')")
+                db.execute("CREATE VIRTUAL TABLE v USING fts5vocab(t, 'instance')")
+                _STEM_DB = db
+            _STEM_DB.execute("DELETE FROM t")
+            _STEM_DB.execute("INSERT INTO t(rowid, x) VALUES (1, ?)", (w,))
+            out = "-".join(r[0] for r in _STEM_DB.execute("SELECT term FROM v ORDER BY offset"))
+        except sqlite3.Error:
+            out = None
+    if not out:
+        out = _crude(w)
+    if len(_STEMS) < 20000:
+        _STEMS[w] = out
+    return out
+
+
+def stems(text: str) -> set:
+    """The words of a title or a heading, as the index keeps them."""
+    out = set()
+    for w in re.findall(r"[A-Za-z][A-Za-z0-9'’-]*|\d+", (text or "").lower()):
+        w = re.sub(r"'s$", "", w.strip("'’-").replace("’", "'"))
+        if len(w) >= 2 and w not in FUNCTION:
+            out.add(stem(w))
+    return out
+
+
+def parts(heading: str) -> List[str]:
+    """A heading, and each of the headings it is put together from: the
+    converter writes a lesser heading after the one it stands under
+    ("MAN-MADE SHELTERS: Snow Cave", "Chapter 11: HEAT STROKE")."""
+    bits = [b.strip() for b in re.split(r":\s+", heading or "") if b.strip()]
+    return [heading] + (bits if len(bits) > 1 else [])
 
 
 def lookup_query(text: str) -> Optional[str]:
@@ -179,26 +248,75 @@ class Collection:
     def sure(self, ts: List[str], words: List[str] = None) -> Optional[dict]:
         """The passage this collection is sure answers `ts`, or None.
 
-        Sure means two things. Every word that carries the question is in the
-        passage. And the passage is ABOUT it, by its own title or heading:
-          - a site (pages with headings): one of the words - a rare one, or
-            one that stands in a title - is in that passage's own title or
-            heading;
-          - a shelf of documents (no headings to go by): one of the words is
-            in that document's title, and all of them stand close together in
-            the text.
-        Rare alone is not about: "What happened in the beginning?" found
-        "happen" and "begin" side by side in a thyroid medicine's warnings
-        (measured 4 Oct 2026, the first version of this rule).
+        Sure means two things: the passage is ABOUT the question, by its own
+        title or heading, and what is about it says every word that carries
+        the question. Tried in this order:
+
+          1. A rare word of the question in a TITLE - "metronidazole" on a
+             medicines site: the documents titled for it are looked through
+             whole. A word that is merely rare is not enough ("beginning"),
+             nor one that titles say but is common ("drink"). One word decides
+             alone only when a document is named for it: "metformin", not
+             "night" ("Good night" found "Strange dreams or night sweats").
+          2. A rare word in a HEADING of which the question says half or more
+             - "FROSTBITE" over a section of a cold-weather manual: only what
+             stands under such headings is looked through, and it must say
+             the rest.
+          3. A short document with no headings to go by (a leaflet): words of
+             the question in its title, and the rest close together in its
+             text.
+          4. A title or a heading that the question itself says (said()).
         """
         if not ts or any(self.df(t) == 0 for t in ts):
             return None                      # a word of the question is not in it at all
+        words = words or ts
+        if len(ts) == 1 and not self._names_a_title(ts[0]):
+            # One word decides alone only when a document is named for it:
+            # "metformin", "giardia", "tornado" - not "weather", which a
+            # cold-weather manual's long title also says ("What is the
+            # weather like?" was shown that manual's title page).
+            return self.said(ts, words)
         in_title = [t for t in ts if self.count("title:" + _q(t))]
         rare = [t for t in ts if self.df(t) / self.n <= RARE]
-        every = " AND ".join(_q(t) for t in ts)
-        if self.meta.get("kind") == "documents":
-            if not in_title:
-                return None
+        asked = {stem(w) for w in words} | {stem(t) for t in ts}
+        heads = {t: self._heads(t, asked) for t in rare if t not in in_title}
+        anchors = [t for t in rare if t in in_title or heads.get(t)]
+        about, only = None, None
+        cands: List[int] = []
+        if anchors:
+            # ONE of them must say what the passage is about, and what is
+            # about it must say every other word - not necessarily in the
+            # same passage: "Is it SAFE to drink alcohol with metronidazole?"
+            # is answered by a passage that never says "safe". A document
+            # titled for the word is looked through whole; a section headed
+            # by it, only itself. Two headings that each say one word are
+            # not one subject: "Where is the north pole?" found "LOCATING
+            # THE NORTH STAR" and "SPRING POLE".
+            good, under = [], set()
+            for t in [t for t in anchors if t in in_title]:
+                scope = "title:%s" % _q(t)
+                if all(o == t or self.count("(%s) AND %s" % (scope, _q(o))) for o in ts):
+                    good.append(scope)
+            if good:                                     # titles before headings
+                about = " OR ".join("(%s)" % g for g in good)
+                cands = self.rows(about, 40)
+            else:
+                for t in [t for t in anchors if t not in in_title]:
+                    ids = heads[t]
+                    marks = ",".join("?" * len(ids))
+                    if all(o == t or self.db.execute(
+                            "SELECT 1 FROM passages_fts WHERE passages_fts MATCH ? AND rowid IN (%s) "
+                            "LIMIT 1" % marks, [_q(o)] + ids).fetchone() for o in ts):
+                        good.append("heading:%s" % _q(t))
+                        under.update(ids)
+                if good:
+                    about = " OR ".join("(%s)" % g for g in good)
+                    cands, only = sorted(under), under
+            # if none, a heading the question says outright may still be it
+            # ("How do I build a snow CAVE?" - nothing under "SNOW CAVE" says
+            # "build"): said(), below
+        elif self.meta.get("kind") == "documents" and in_title:
+            every = " AND ".join(_q(t) for t in ts)
             titled = " OR ".join("title:%s" % _q(t) for t in in_title)
             # the words the title does not say must stand close together in
             # the text; the ones it does say need only be there
@@ -206,18 +324,23 @@ class Collection:
             match = "(%s) AND (%s)" % (every, titled)
             if len(loose) > 1:
                 match += " AND (text:NEAR(%s, %d))" % (" ".join(_q(t) for t in loose), NEAR)
-            elif len(loose) == 1:
+            elif len(loose) == 1 and len(in_title) >= 2:
                 match += " AND (text:%s)" % _q(loose[0])
-            cands = self.rows(match, 200)
+            elif len(loose) == 1:
+                # one word, somewhere in a document whose title says one
+                # other: too little to be sure on ("What should I PLANT in
+                # SPRING?" - "Plants as Indicator of Ground Water", page 100;
+                # "a good BOOK about SURVIVAL" - a log book, page 175)
+                match = ""
+            cands = [r for r in (self.rows(match, 200) if match else []) if self._leaflet(r)]
             one_title = self.rows(" AND ".join("title:%s" % _q(t) for t in ts), 1)
             if cands and not loose and one_title:
-                cands = one_title
                 # The question is the document's own subject ("What is
                 # giardia?" - "Giardia: Drinking Water Factsheet"): it is
                 # read from its top.
                 first = self.db.execute(
                     "SELECT q.id FROM passages p JOIN passages q ON q.doc = p.doc "
-                    "WHERE p.id = ? ORDER BY q.seq LIMIT 1", (cands[0],)).fetchone()
+                    "WHERE p.id = ? ORDER BY q.seq LIMIT 1", (one_title[0],)).fetchone()
                 cands = [first[0]]
             elif cands:
                 # Otherwise by what the text says, the title left out of it:
@@ -231,42 +354,165 @@ class Collection:
                 except sqlite3.Error:
                     pass
         else:
-            # What the question is about: a rare word that a title or a
-            # heading of this collection says. A word that is merely rare is
-            # not enough ("beginning"), nor one that titles say but is common
-            # ("drink").
-            anchors = [t for t in rare if t in in_title or self.count("heading:" + _q(t))]
-            if not anchors:
-                return None
-            if len(ts) == 1 and anchors[0] not in in_title:
-                # One word decides alone only when a document is named for
-                # it: "metformin", not "night" ("Good night" found "Strange
-                # dreams or night sweats" - the held-out run, 4 Oct).
-                return None
-            about = " OR ".join("({title heading}:%s)" % _q(t) for t in anchors)
-            # ... and every other word must be said somewhere in what is
-            # about it - not necessarily in the same passage: "Is it SAFE to
-            # drink alcohol with metronidazole?" is answered by a passage
-            # that never says "safe".
-            docs = " OR ".join("title:%s" % _q(t) for t in anchors if t in in_title) or about
-            for t in ts:
-                if t not in anchors and not self.count("(%s) AND %s" % (docs, _q(t))):
-                    return None
-            cands = self.rows(about, 40)
+            cands = []
         if not cands:
-            return None
-        hit = self.passage(self.choose(cands, ts, words or ts))
+            # ... or a title or a heading that the question itself says
+            return self.said(ts, words)
+        return self._weigh(self.passage(self.choose(cands, ts, words, about, only)), asked, ts)
+
+    def _weigh(self, hit: Optional[dict], asked: set, ts: List[str]) -> Optional[dict]:
+        """Between collections: the hit whose own title and heading say more
+        of the question, then the collection that says more about it. "How
+        do I build a fire?": "FIRES: Building the Fire" says two words, a
+        medicine's "Fire warning" one."""
         if hit:
-            hit["weight"] = (len(in_title) / len(ts), sum(self.df(t) / self.n for t in ts))
+            own = stems(hit["title"]) | stems(hit["heading"])
+            hit["weight"] = (len(own & asked), len(own & asked) / max(1, len(own)),
+                             sum(self.df(t) / self.n for t in ts))
         return hit
 
-    def choose(self, cands: List[int], ts: List[str], words: List[str]) -> int:
+    def _leaflet(self, rowid: int) -> bool:
+        """Is this passage in a short document - one whose title is the
+        subject of every page of it? "Purifying Water During an Emergency" is
+        two pages on that. A handbook of two hundred is about its title only
+        loosely: "How do I store my WINTER clothes?" found "store" and
+        "clothes" near each other under "COOKING OF MEATS", in the Winter
+        Survival Course Handbook."""
+        if not hasattr(self, "_sizes"):
+            self._sizes = dict(self.db.execute("SELECT doc, count(*) FROM passages GROUP BY doc"))
+        doc = self.db.execute("SELECT doc FROM passages WHERE id = ?", (rowid,)).fetchone()
+        return bool(doc) and self._sizes.get(doc[0], 0) <= LEAFLET
+
+    def _heads(self, term: str, asked: set) -> List[int]:
+        """The passages under a heading that says this word, of which the
+        question says half or more: "FROSTBITE", "SIGNS AND SYMPTOMS OF
+        HYPOTHERMIA" for "the signs of hypothermia", "Snow Cave" under
+        "MAN-MADE SHELTERS". A word that is one among several is not what the
+        section is about: "list my files" was shown "If you have insurance,
+        contact your insurance agent to file a claim"; "How do I BUILD a
+        snow shelter?", "3-6. BUILDING ARCTIC TENTS"."""
+        out: List[int] = []
+        for (heading,) in self.db.execute(
+                "SELECT DISTINCT heading FROM passages WHERE id IN "
+                "(SELECT rowid FROM passages_fts WHERE passages_fts MATCH ? LIMIT 400)",
+                ("heading:" + _q(term),)):
+            for part in parts(heading or ""):
+                said = stems(part)
+                if stem(term) in said and 2 * len(said & asked) >= len(said):
+                    out += [r[0] for r in self.db.execute(
+                        "SELECT id FROM passages WHERE heading = ? LIMIT 60", (heading,))]
+                    break
+        return sorted(set(out))[:300]
+
+    def _names_a_title(self, term: str) -> bool:
+        """Does some document's title open with this word, or consist of it?"""
+        for (title,) in self.db.execute(
+                "SELECT DISTINCT d.title FROM passages p JOIN docs d ON d.id = p.doc "
+                "WHERE p.id IN (SELECT rowid FROM passages_fts WHERE passages_fts MATCH ? LIMIT 400)",
+                ("title:" + _q(term),)):
+            ws = [stem(w) for w in all_words(title)]
+            if ws and (ws[0] == stem(term) or set(ws) == {stem(term)}):
+                return True
+        return False
+
+    def said(self, ts: List[str], words: List[str]) -> Optional[dict]:
+        """The passage under a title or heading that the question itself says.
+
+        "What should I do during a flood?" names the page "Floods"; "How do I
+        prepare for a hurricane?" names the section "Prepare for Hurricanes".
+        Neither word is rare on a site about disasters, so rarity cannot see
+        them - the first measurement on Ready.gov found 6 of 20.
+
+          - a document's TITLE whose every word the question says: "Floods",
+            "Extreme Heat", "Power Outages";
+          - a title or HEADING of which the question says at least two words
+            and at least three in five: "Staying Safe After a Flood".
+        One word of a longer title, or a one-word heading inside a manual
+        ("WEATHER", "WATER", "TIME"), is not the question's subject: "What is
+        the weather like?" is not "Severe Weather".
+        And every word that carries the question must be said somewhere in
+        that document.
+        """
+        asked = {stem(w) for w in words} | {stem(t) for t in ts}
+        known = [w for w in words if self.df(w)]
+        if not known:
+            return None
+        try:
+            rows = self.db.execute(
+                "SELECT rowid FROM passages_fts WHERE passages_fts MATCH ? "
+                "ORDER BY bm25(passages_fts, 6.0, 4.0, 0.0) LIMIT 300",
+                ("{title heading}:(%s)" % " OR ".join(_q(w) for w in known),)).fetchall()
+        except sqlite3.Error:
+            return None
+        best, seen = None, set()
+        for (rowid,) in rows:
+            r = self.db.execute("SELECT p.doc, p.heading, d.title FROM passages p JOIN docs d "
+                                "ON d.id = p.doc WHERE p.id = ?", (rowid,)).fetchone()
+            for kind, text in (("heading", r[1] or ""), ("title", r[2] or "")):
+                key = (r[0], kind, text)
+                if not text or key in seen:
+                    continue
+                seen.add(key)
+                said, hit = set(), set()
+                for part in (parts(text) if kind == "heading" else [text]):
+                    s_, h_ = stems(part), stems(part) & asked
+                    ok = (kind == "title" and s_ and s_ <= asked) or \
+                         (len(h_) >= 2 and len(h_) >= 0.6 * len(s_))
+                    if ok and (len(h_), len(h_) / len(s_)) > (len(hit), len(hit) / max(1, len(said))):
+                        said, hit = s_, h_
+                if not hit:
+                    continue
+                lo, hi = self.db.execute("SELECT min(id), max(id) FROM passages WHERE doc = ?",
+                                         (r[0],)).fetchone()
+                if any(not self.db.execute(
+                        "SELECT 1 FROM passages_fts WHERE passages_fts MATCH ? AND rowid BETWEEN ? "
+                        "AND ? LIMIT 1", (_q(t), lo, hi)).fetchone() for t in ts):
+                    continue
+                rank = (len(hit), len(hit) / len(said), kind == "heading")
+                if best is None or rank > best[0]:
+                    best = (rank, r[0], kind, text, lo, hi)
+        if best is None:
+            return None
+        _, doc, kind, text, lo, hi = best
+        if kind == "heading":
+            first = self.db.execute("SELECT min(id) FROM passages WHERE doc = ? AND heading = ?",
+                                    (doc, text)).fetchone()[0]
+        else:
+            # in a document named for a word, that word chooses no passage:
+            # every passage of "Earthquakes" is about earthquakes
+            named = stems(text)
+            first = self.within(lo, hi, [w for w in words if stem(w) not in named])
+        return self._weigh(self.passage(first), asked, ts)
+
+    def within(self, lo: int, hi: int, words: List[str]) -> int:
+        """In one document, the passage the words point at - a word in its
+        own heading twice a word in its text, each by how rare it is - or its
+        first passage: a page is read from its top."""
+        score: Dict[int, float] = {}
+        for w in [w for w in words if self.df(w)]:
+            rarity = math.log(self.n / (1.0 + self.df(w))) + 0.1
+            for col, worth in (("heading", 2.0), ("text", 1.0)):
+                try:
+                    for (rowid,) in self.db.execute(
+                            "SELECT rowid FROM passages_fts WHERE passages_fts MATCH ? "
+                            "AND rowid BETWEEN ? AND ?", ("%s:%s" % (col, _q(w)), lo, hi)):
+                        score[rowid] = score.get(rowid, 0.0) + worth * rarity
+                except sqlite3.Error:
+                    pass
+        if not score:
+            return lo
+        top = max(score.values())
+        return min(r for r, v in score.items() if v >= top - 1e-9)
+
+    def choose(self, cands: List[int], ts: List[str], words: List[str],
+               about: Optional[str] = None, only: Optional[set] = None) -> int:
         """Of passages that all qualify, the one to show first.
 
-        On a shelf of documents there are no headings to go by, and the order
-        the words themselves gave stands.
+        With nothing to say what it is about (`about` is None: a shelf of
+        leaflets, or a look-up of loose words) the order the words themselves
+        gave stands.
 
-        On a site, the passage is looked for again in every document about
+        Otherwise the passage is looked for among everything that is about
         the subject, by all the words of the question and not only the ones
         that decided it. Each word counts by how rare it is, twice when the
         passage's own title or heading says it and once when its text does:
@@ -279,13 +525,9 @@ class Collection:
         It is words that are matched, not meaning: the right document is
         found far more surely than the right passage in it. "more" walks on.
         """
-        if self.meta.get("kind") == "documents" or len(cands) == 0:
+        if not about or not cands:
             return cands[0]
         asked = set(words) | set(ts)
-        subject = [t for t in ts if self.df(t) / self.n <= RARE and self.count("title:" + _q(t))]
-        if not subject:
-            return cands[0]
-        about = " OR ".join("title:" + _q(t) for t in subject)
         score: Dict[int, float] = {}
 
         def mark(match, worth):
@@ -300,6 +542,8 @@ class Collection:
             rarity = math.log(self.n / (1.0 + self.df(w))) + 0.1
             mark("(%s) AND ({title heading}:%s)" % (about, _q(w)), 2.0 * rarity)
             mark("(%s) AND (text:%s)" % (about, _q(w)), rarity)
+        if only is not None:
+            score = {r: v for r, v in score.items() if r in only}
         if not score:
             return cands[0]
         top = max(score.values())
@@ -327,17 +571,27 @@ class Collection:
         missing = sum(math.log(self.n) + 0.1 for t in ts if t not in known)
         if sum(idf.values()) < missing:
             return None                      # most of what was asked is not in it
-        for match in (" AND ".join(_q(t) for t in known), " OR ".join(_q(t) for t in known)):
-            rows = self.rows(match, 40)
+        # All of them in one passage, or it is not about that: "the capital of
+        # France" found "capital" in one manual's passage and "France" in
+        # none. When every word is in the collection but no one passage says
+        # them all, the commonest are let go one at a time - never below two
+        # together: "finding north without a compass" is answered where
+        # "north" and "compass" meet.
+        keep = sorted(known, key=lambda t: self.df(t))
+        while keep:
+            rows = self.rows(" AND ".join(_q(t) for t in keep), 40)
             if rows:
-                hit = self.passage(self.choose(rows, known, words or known))
+                hit = self.passage(rows[0])
                 if hit:
-                    # between collections: the one that says more about it.
-                    # "bleach" is in 3 of 12313 medicine passages (it can
-                    # bleach your hair) and 26 of 897 on water.
-                    hit["weight"] = (len(known) / len(ts),
-                                     sum(self.df(t) / self.n for t in known))
+                    # between collections: the one that says more of it, then
+                    # more about it. "bleach" is in 3 of 12313 medicine
+                    # passages (it can bleach your hair) and 26 of 897 on water.
+                    hit["weight"] = (len(keep) / len(ts),
+                                     sum(self.df(t) / self.n for t in keep))
                 return hit
+            if len(known) < len(ts) or len(keep) <= 2:
+                return None
+            keep = keep[:-1]
         return None
 
 

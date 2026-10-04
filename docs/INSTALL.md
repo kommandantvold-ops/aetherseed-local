@@ -439,30 +439,59 @@ told the date from this clock.
 **To let the unit out for maintenance**, until the next reboot or firewall
 reload: `sudo nft insert rule inet filter output accept`.
 
-## 15. The library — passages shown word for word (step 57, after the tag)
+## 15. The library — passages shown word for word (steps 57 and 58, after the tag)
 
 **Not in tag `stable-llama-2026-10-03`.** On `main` since build log 57, and on
 Lyra since 4 Oct. Andreas, pointing at Project NOMAD: *"A library she answers
 from with a knowledge base like that of nomad (content) so it can be a
-disaster relief and offgrid rural survival aid."*
+disaster relief and offgrid rural survival aid."* And, build log 58:
+*"Navigation, how to stay alive in different disasters. Like flooding,
+drought, storms, tundras etc. basic survival knowledge for most environments
+and disasters. Like what you learn in the boyscouts or at bootcamp."*
 
-A **collection** is one file, made from a Kiwix ZIM with
+A **collection** is one file, made from Kiwix ZIMs with
 `tools/library_build.py` **off the unit** (the unit can fetch nothing, step
-55; the converter needs `libzim` and `pdftotext`, the unit needs neither):
+55; the converter needs `libzim` and `pdftotext`, the unit needs neither).
+A whole ZIM becomes one collection; or a recipe in `library/` says what is
+taken — chosen documents of several ZIMs, or one site without some of its
+pages. The recipe is the record of what was taken and what was left out:
 
 ```bash
 pip install libzim                                    # where the collection is built
 python3 tools/library_build.py nhs.uk_en_medicines_2025-12.zim nhs.uk_en_medicines_2025-12.lib.sqlite
 python3 tools/library_build.py zimgit-water_en_2024-08.zim     zimgit-water_en_2024-08.lib.sqlite
+python3 tools/library_build.py --recipe library/ready-gov.json        ZIM_DIR www.ready.gov_en_2024-12.lib.sqlite
+python3 tools/library_build.py --recipe library/us-field-manuals.json ZIM_DIR us-field-manuals_2026-10.lib.sqlite
 ```
 
-The two on Lyra, built 4 Oct from `download.kiwix.org` (the build is
-repeatable — the same source gives the same file):
+The four on Lyra, built 4 Oct from `download.kiwix.org` (the build is
+repeatable — the same sources and recipe give the same file; each was built
+twice):
 
 | collection | source ZIM (sha256) | collection file (sha256) |
 |---|---|---|
-| NHS Medicines A to Z, 2025-12 — 1996 pages, 12998 passages | `7dfa9bff…ef3dae28` | `ce12e33b…2444403d` |
-| Water Treatment Library, 2024-08 — 7 documents, 897 passages | `392c7bc9…75cb56b6` | `a8af85fe…cf49cdf5` |
+| NHS Medicines A to Z, 2025-12 — 1996 pages, 12712 passages | `nhs.uk_en_medicines_2025-12.zim` `7dfa9bff…ef3dae28` | `9002055c…1fe1eff28` |
+| Water Treatment Library, 2024-08 — 7 documents, 921 passages | `zimgit-water_en_2024-08.zim` `392c7bc9…75cb56b6` | `6e98e9d8…56680c15` |
+| Ready.gov, 2024-12 — 166 pages, 849 passages (`library/ready-gov.json`) | `www.ready.gov_en_2024-12.zim` `5bb4cf0d…faec0439` | `88025f1c…5eb4dd4b6` |
+| US military field manuals — 8 documents, 3738 passages (`library/us-field-manuals.json`) | `zimgit-post-disaster_en_2024-05.zim` `0ba9bb35…cce174f8`, `armypubs_en_all_2024-12.zim` `f34f1bcb…b2d11f04` | `c36ee6bc…5baa672b` |
+
+The first two were rebuilt in step 58 with the same converter as the others
+(a row that is only a link is left out; a PDF's headings are found on every
+line), so their files differ from step 57's (`ce12e33b…`, `a8af85fe…`).
+
+**What the field-manuals collection holds**, and under what statement:
+*How To Find Your Way* (GTA 05-02-013), *First Aid* (TC 4-02.1, 2016),
+*Soldier's Handbook for Individual Operations and Survival in Cold-Weather
+Areas* (TC 21-3, 1986), *Unit Field Sanitation Teams* (ATP 4-25.12, 2014) and
+chapter 1 and appendix A of *Desert Operations* (ATP 3-90.99, 2021) — each
+marked "Approved for public release; distribution is unlimited"; and the US
+Marine Corps Mountain Warfare Training Center's *Summer Survival Course*,
+*Winter Survival Course* and *Wilderness Medicine Course* handbooks (2002),
+which carry no distribution statement. **Not taken:** FM 3-05.70 *Survival*
+(2002), marked "Distribution authorized to U.S. Government agencies and
+their contractors only", and the reformatted copy of it on the same Kiwix
+shelf; the commercial books on that shelf; the fighting chapters of *Desert
+Operations*. Build log 58 lists every document looked at and left out.
 
 On the unit (from a checkout of `main`, the collection files carried to it):
 
@@ -486,9 +515,16 @@ what she was told. *"more"* shows what follows. *"What is in the library?"*
 lists it. The model is not called for any of this, and none of it is stored
 as something she said. A unit with no collection behaves as before.
 
-**Licences.** Neither source file states one. For a unit that leaves, each
-collection's licence has to be checked and passed to the converter
-(`--licence`); it is kept in the file.
+**What it cannot do.** It matches words, not meaning. Unasked it misses a
+question whose words the section does not say (*"How do I splint a broken
+arm?"* — the manual says "fracture"), and it can show a passage that says
+the words and does not answer (*"How do I stop bleeding?"* is shown a
+medicine's side effects). `training/README.md` has the measured numbers.
+
+**Licences.** The NHS, Water and Ready.gov source files state none, and none
+of the three has been checked. For a unit that leaves, each collection's
+licence has to be checked and passed to the converter (`--licence`, or the
+recipe's `licence`); it is kept in the file.
 
 ## Decisions this build carries, not steps
 

@@ -42,7 +42,7 @@ PASSAGE_MAX = 900          # characters; a section longer than this is cut at pa
 PASSAGE_MIN = 200          # a shorter piece is joined to its neighbour under the same heading
 SCHEMA = """
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE docs(id INTEGER PRIMARY KEY, title TEXT, author TEXT, locator TEXT);
+CREATE TABLE docs(id INTEGER PRIMARY KEY, title TEXT, author TEXT, locator TEXT, note TEXT);
 CREATE TABLE passages(id INTEGER PRIMARY KEY, doc INTEGER, seq INTEGER,
                       heading TEXT, place TEXT, text TEXT);
 CREATE VIRTUAL TABLE passages_fts USING fts5(title, heading, text, content='',
@@ -74,7 +74,7 @@ BLOCK = {"p", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "dt", "dd", "block
          "table", "ul", "ol", "main"}
 # <summary> and <dt> head what follows them: on NHS pages every question in
 # "Common questions about ..." is a <summary>, and its answer the rest.
-HEAD = {"h1", "h2", "h3", "h4", "summary", "dt"}
+HEAD = {"h1", "h2", "h3", "h4", "h5", "h6", "summary", "dt"}
 VOID = {"br", "img", "hr", "input", "meta", "link", "source", "track", "wbr", "area",
         "base", "col", "embed"}
 
@@ -84,27 +84,44 @@ class Page(html.parser.HTMLParser):
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.title, self.sections = "", []
-        self._skip, self._in_title, self._head = 0, False, None
+        self.title, self.lang, self.sections = "", "", []
+        self._skip, self._in_title, self._titled, self._head = [], False, False, None
         self._buf, self._main, self._has_main = [], 0, False
         self._cell = False
+        self._a, self._plain = 0, 0       # inside a link; characters of this block outside one
 
     def feed_page(self, text):
         self._has_main = bool(re.search(r"<main[\s>]", text, re.I))
+        m = re.search(r"<html[^>]*\blang=[\"']?([A-Za-z-]+)", text, re.I)
+        self.lang = (m.group(1) if m else "").lower()
         self.feed(text)
         self._flush()
         return self
 
+    def _foreign(self, attrs):
+        """A link or a block marked as another language than the page's: the
+        language switcher of a site in fourteen languages (Ready.gov)."""
+        for key, value in attrs:
+            if key in ("hreflang", "lang") and value and self.lang:
+                if value.lower().split("-")[0] != self.lang.split("-")[0]:
+                    return True
+        return False
+
     def handle_starttag(self, tag, attrs):
-        if tag == "title":
-            self._in_title = True
         if tag == "main":
             self._main += 1
-        if tag in SKIP and tag not in VOID:
-            self._skip += 1
+        if tag in VOID:
+            if tag == "br" and not self._skip:
+                self._flush()
             return
-        if self._skip:
+        if self._skip or tag in SKIP or self._foreign(attrs):
+            self._skip.append(tag)
             return
+        if tag == "title" and not self._titled:
+            self._in_title = True
+            return
+        if tag == "a":
+            self._a += 1
         if tag in ("td", "th"):
             if self._cell:
                 self._buf.append(" | ")
@@ -119,33 +136,50 @@ class Page(html.parser.HTMLParser):
                 self._buf.append("- ")
 
     def handle_endtag(self, tag):
-        if tag == "title":
-            self._in_title = False
-        if tag in SKIP and tag not in VOID:
-            self._skip = max(0, self._skip - 1)
-            return
         if tag == "main":
-            self._flush()
+            if not self._skip:
+                self._flush()
             self._main = max(0, self._main - 1)
         if self._skip:
+            # close the innermost open element of that name, and all inside it
+            for k in range(len(self._skip) - 1, -1, -1):
+                if self._skip[k] == tag:
+                    del self._skip[k:]
+                    break
             return
+        if tag == "title" and self._in_title:
+            self._in_title, self._titled = False, True
+            return
+        if tag == "a":
+            self._a = max(0, self._a - 1)
         if tag in BLOCK:
             self._flush(heading=tag in HEAD)
             if tag in HEAD:
                 self._head = None
 
     def handle_data(self, data):
+        if self._skip:
+            return
         if self._in_title:
             self.title += data
             return
-        if self._skip or (self._has_main and not self._main):
+        if self._has_main and not self._main:
             return
         self._buf.append(data)
+        if not self._a:
+            self._plain += len(re.sub(r"[\W_]+", "", data))
 
     def _flush(self, heading=False):
         text = squeeze("".join(self._buf))
-        self._buf = []
+        plain, self._buf, self._plain = self._plain, [], 0
         if not text or text == "-":
+            return
+        if not plain and not (heading or self._head):
+            # A paragraph or a list row that is nothing but a link is the
+            # site's way around itself - "Prepare for a flood / During a
+            # flood", "Français / Kreyòl / Tagalog" - and leads nowhere on a
+            # unit with no site behind it. It was the first thing shown for
+            # "look up flooding".
             return
         if heading or self._head:
             self.sections.append((text, []))
@@ -158,6 +192,11 @@ class Page(html.parser.HTMLParser):
 def page_sections(text):
     p = Page().feed_page(text)
     return squeeze(p.title), [(h, paras) for h, paras in p.sections if paras]
+
+
+def page_lang(text):
+    m = re.search(r"<html[^>]*\blang=[\"']?([A-Za-z-]+)", text, re.I)
+    return (m.group(1) if m else "").lower()
 
 
 # ---------------------------------------------------------------------------
@@ -212,25 +251,210 @@ def pdf_pages(path):
     return pages
 
 
-def page_paragraphs(text):
-    """Paragraphs of one PDF page: blank lines part them; lines inside one are
-    joined, and a word hyphenated across a line end is put back together."""
+NOT_A_HEADING = re.compile(r"^(figure|fig\.|table|note|notes|warning|caution|danger|legend|page)\b", re.I)
+CHAPTER = re.compile(r"^(chapter|appendix|section|part)\s+([0-9]+|[A-Z]|[IVXLC]+)\b[\s.:\-–—]*(.*)$", re.I)
+
+
+LEADER = re.compile(r"(?:\.\s?){5,}")          # the dots of a table of contents
+RUN_IN_MAJOR = re.compile(r"^\d{1,2}\.\s+([A-Z][A-Z0-9 '’/&,-]{2,60}?)\.\s+\S")
+RUN_IN_MINOR = re.compile(
+    r"^\(?(?:[a-z]|\d{1,2})[.)]\s+((?:[A-Z][A-Za-z'’/-]*)"
+    r"(?:\s+(?:[A-Z][A-Za-z'’/-]*|of|and|the|for|in|to|a|an|or|with|on|by)){0,5})"
+    r"(?:\.\s+[A-Z(]|:\s*(?:$|[A-Z(]))")
+BULLET = re.compile(r"^[\uf000-\uf8ff•▪■●◦]\s*")
+
+
+def heading_line(line):
+    """Is this line of a PDF a heading? Capitals throughout ("DETERMINING THE
+    DISTANCE", "3-2. TENT GROUP EQUIPMENT") or a chapter line. A sentence in
+    capitals, a figure caption, a code ("WSVX.02.04") and a line of a table
+    of contents are not."""
+    t = line.strip()
+    if not 4 <= len(t) <= 90 or NOT_A_HEADING.match(t) or LEADER.search(t) \
+            or t.startswith(("- ", "(")) or "[" in t:
+        return False
+    if CHAPTER.match(t) and len(t) <= 70:
+        return True
+    letters = [c for c in t if c.isalpha()]
+    words = [w for w in t.split() if re.fullmatch(r"[A-Za-z'’()/&-]{3,}[,:]?", w)]
+    if len(letters) < 4 or not words or t.endswith((".", ",", ";")):
+        return False
+    return all(c.isupper() for c in letters) and len(words) <= 12
+
+
+def page_blocks(text, running=()):
+    """One PDF page as [("h", heading) | ("m", lesser heading) | ("p", paragraph)].
+
+    Blank lines part paragraphs. Inside one, a line is joined to the one
+    before it only when that line ran to the margin - prose wraps, the rows of
+    a list or a table do not, and a table read as one sentence is how "1
+    gallon" loses its "1/4 teaspoon". A word hyphenated across a line end is
+    put back together.
+
+    A heading is looked for on every line, not only where a blank line stands
+    before it: a handbook typed without blank lines kept the first line of
+    each lesson - "UNITED STATES MARINE CORPS" - as the heading of all 532
+    passages under it. And a heading that opens its own paragraph is one too:
+    "2. STRESS. Stress has many ..." (h), "c. Snow Cave. A snow cave is ..."
+    (m, the lesser kind - it stands under the heading above it).
+
+    `running`: lines to leave out - the document's running heads and feet.
+    A block of a table of contents (dots leading to page numbers) is left out
+    whole: it says every word of the manual and answers nothing.
+    """
     out = []
     for block in re.split(r"\n\s*\n", text.replace("\r", "")):
-        lines = [squeeze(l) for l in block.split("\n")]
-        lines = [l for l in lines if l]
+        lines = [BULLET.sub("- ", squeeze(l)) for l in block.split("\n")]
+        lines = [l for l in lines if l and l not in running]
+        if sum(1 for l in lines if LEADER.search(l)) >= 2:
+            continue
+        lines = [l for l in lines if not LEADER.search(l)]
         if not lines:
             continue
-        para = lines[0]
-        for l in lines[1:]:
-            if re.search(r"[A-Za-z]{2}-$", para) and re.match(r"[a-z]", l):
+        width = max(len(l) for l in lines)
+        para, last = None, None
+
+        def close():
+            # a page number, a date or a running head on its own carries nothing to quote
+            if para is not None and len(para) >= 4 and \
+                    not re.fullmatch(r"[\divxlc\s.\-|/:]+", para, re.I):
+                out.append(("p", para))
+
+        for l in lines:
+            major, minor = RUN_IN_MAJOR.match(l), RUN_IN_MINOR.match(l)
+            # a line in capitals that only carries on the sentence before it
+            # ("... see\nMCRP 2-10B.1") is not a heading
+            carries_on = (last is not None and width >= 30 and len(last) >= 0.7 * width
+                          and not last.endswith((".", ":", "?", "!")))
+            if heading_line(l) and not carries_on:
+                close()
+                para, last = None, None
+                out.append(("h", l))
+                continue
+            if major or minor:
+                close()
+                out.append(("h", major.group(1)) if major else ("m", minor.group(1)))
+                para, last = l, l
+                continue
+            if para is None:
+                para, last = l, l
+                continue
+            full = (width >= 30 and len(last) >= 0.7 * width
+                    and not re.match(r"(\d+[.)]?\s|[•▪■*–-]\s|\(?[a-z0-9]{1,2}\)\s)", l))
+            if full and re.search(r"[A-Za-z]{2}-$", para) and re.match(r"[a-z]", l):
                 para = para[:-1] + l
-            else:
+            elif full:
                 para += " " + l
-        # a page number or a running head on its own carries nothing to quote
-        if len(para) < 4 or re.fullmatch(r"[\divxlc\s.\-|]+", para, re.I):
-            continue
-        out.append(para)
+            else:
+                para += "\n" + l
+            last = l
+        close()
+    return out
+
+
+def page_paragraphs(text):
+    """The paragraphs of one PDF page, headings among them as plain lines."""
+    return [t for _, t in page_blocks(text)]
+
+
+EDGE, EDGE_PAGES = 6, 3
+
+
+def running_lines(pages):
+    """The lines that head or foot a document's pages: among the first or
+    last EDGE lines of at least EDGE_PAGES of them ("UNITED STATES MARINE
+    CORPS", "Chapter 3", "TC 21-3", "WSVX 02.01")."""
+    edge = {}
+    for _, text in pages:
+        ls = [squeeze(l) for l in text.replace("\r", "").split("\n")]
+        ls = [l for l in ls if l]
+        for l in set(ls[:EDGE] + ls[-EDGE:]):
+            if len(l) <= 90:
+                edge[l] = edge.get(l, 0) + 1
+    return {l for l, c in edge.items() if c >= EDGE_PAGES}
+
+
+def document_passages(pages, skip_under=(), not_headings=(), skip_paragraphs=()):
+    """[(heading, place, text)] for a whole PDF: [(page number, text), ...].
+
+    A line that heads or foots several pages, or a block that stands on many
+    of them, is the document's running head ("TC 21-3", "GTA 05-02-013"), not
+    its text. A chapter line takes the line after it as its title ("CHAPTER
+    3" / "Tents and Heating Equipment"). A lesser heading is given with the
+    one it stands under: "SURVIVAL SHELTERS: Snow Cave".
+
+    What a recipe may say of one document (library/NAME.json):
+      skip_under       headings whose passages are left out, and which are
+                       not taken as headings: a course handbook's "ENABLING
+                       LEARNING OBJECTIVES" lists every subject of the lesson
+                       and teaches none of them;
+      not_headings     lines in capitals that are not headings ("OUTLINE");
+      skip_paragraphs  patterns; a paragraph that one of them opens is left out.
+    """
+    skip_under = tuple(x.upper().rstrip(":") for x in skip_under)
+    not_headings = {x.upper().rstrip(":") for x in not_headings}
+    skip_paragraphs = [re.compile(x) for x in skip_paragraphs]
+    running = running_lines(pages) if len(pages) >= 2 * EDGE_PAGES else set()
+    blocks = [(n, page_blocks(text, running)) for n, text in pages]
+    seen = {}
+    for _, bs in blocks:
+        for t in {t for _, t in bs if len(t) <= 90}:
+            seen[t] = seen.get(t, 0) + 1
+    many = max(4, len(pages) // 7)
+    furniture = {t for t, c in seen.items() if c >= many}
+    out, major, minor, skipping = [], "", "", False
+    for number, bs in blocks:
+        paras = []
+        where = "%s: %s" % (major, minor) if major and minor else (major or minor)
+
+        def close():
+            for text in passages_from(paras):
+                out.append((where, "page %d" % number, text))
+        k = 0
+        while k < len(bs):
+            kind, t = bs[k]
+            k += 1
+            if t in furniture:
+                continue
+            if kind in ("h", "m"):
+                t = t.rstrip(" :")
+                bare = t.upper()
+                if bare.startswith(skip_under) and skip_under:
+                    close()
+                    paras, skipping = [], True
+                    continue
+                if bare in not_headings:
+                    close()
+                    paras, skipping = [], False
+                    continue
+                skipping = False
+            elif skipping or any(p.match(t) for p in skip_paragraphs):
+                continue
+            if kind == "h" and minor:
+                # A line in capitals that says again what the section in hand
+                # is called is the caption of its drawing, not a new heading:
+                # "b. Snow Cave. A snow cave is ..." / [figure] "SNOW CAVE".
+                # Taken as one, it headed the NEXT section: "SNOW CAVE:
+                # Tree-pit Snow Shelter".
+                cap = set(re.findall(r"[a-z0-9]+", t.lower()))
+                if cap and 2 * len(cap & set(re.findall(r"[a-z0-9]+", minor.lower()))) >= len(cap):
+                    continue
+            if kind == "h":
+                m = CHAPTER.match(t)
+                if m and not m.group(3) and k < len(bs) and len(bs[k][1]) <= 70 \
+                        and not bs[k][1].endswith(".") and bs[k][1] not in furniture:
+                    t = "%s: %s" % (t, bs[k][1].split("\n")[0])
+                    k += 1
+                close()
+                paras, major, minor = [], t, ""
+                where = major
+            elif kind == "m":
+                close()
+                paras, minor = [], t
+                where = "%s: %s" % (major, minor) if major else minor
+            else:
+                paras.append(t)
+        close()
     return out
 
 
@@ -257,26 +481,52 @@ def items(z):
         yield e, e.get_item()
 
 
-def from_site(z, db, log):
-    pages = []
+def from_site(z, db, log, lang="en", skip_titles="", skip_paragraphs=()):
+    """skip_titles: pages whose title it finds are left out (a site's pages of
+    posts to copy, graphics and games are not text to answer from).
+    skip_paragraphs: a paragraph one of these opens is left out (a banner
+    that stands on too few pages to be found as furniture)."""
+    pages, other, unwanted = [], 0, 0
+    skip_titles = re.compile(skip_titles) if skip_titles else None
+    skip_paragraphs = [re.compile(x) for x in skip_paragraphs]
     for e, it in items(z):
         if it.mimetype != "text/html":
             continue
-        title, sections = page_sections(bytes(it.content).decode("utf-8", "replace"))
+        text = bytes(it.content).decode("utf-8", "replace")
+        if lang and page_lang(text) and page_lang(text).split("-")[0] != lang:
+            other += 1                      # Ready.gov carries fourteen languages
+            continue
+        title, sections = page_sections(text)
+        if skip_titles and skip_titles.search(title or e.title or ""):
+            unwanted += 1
+            continue
+        if skip_paragraphs:
+            sections = [(h, [t for t in paras if not any(p.match(t) for p in skip_paragraphs)])
+                        for h, paras in sections]
         if sections:
-            pages.append((title or e.title or e.path, e.path,
-                          [(h, t) for h, paras in sections for t in passages_from(paras)]))
-    # Page furniture: the same words on more than a quarter of the pages
-    # ("Can you answer a 5 minute survey about your visit today?", on 1546 of
-    # 1996) are the site's, not the page's.
+            pages.append((title or e.title or e.path, e.path, sections))
+    # Page furniture: a paragraph on more than a quarter of the pages ("Can you
+    # answer a 5 minute survey about your visit today?" on 1546 of 1996; the
+    # language menu; "Image") is the site's, not the page's.
     seen = {}
-    for _, _, passages in pages:
-        for text in {t for _, t in passages}:
+    for _, _, sections in pages:
+        for text in {t for _, paras in sections for t in paras}:
             seen[text] = seen.get(text, 0) + 1
     furniture = {t for t, c in seen.items() if len(pages) >= 20 and c > len(pages) // 4}
+    # The site's own name at the end of most of its titles ("- NHS",
+    # "| Ready.gov") is the site's, too.
+    tails = {}
+    for title, _, _ in pages:
+        m = re.search(r"\s[|–—-]\s([^|–—-]{2,30})$", title)
+        if m:
+            tails[m.group(0)] = tails.get(m.group(0), 0) + 1
+    tail = max(tails, key=tails.get) if tails else ""
+    if tail and tails[tail] > len(pages) // 2:
+        pages = [(t[:-len(tail)] if t.endswith(tail) else t, p, sec) for t, p, sec in pages]
     docs = n = 0
-    for title, path, passages in pages:
-        passages = [(h, t) for h, t in passages if t not in furniture]
+    for title, path, sections in pages:
+        passages = [(h, t) for h, paras in sections
+                    for t in passages_from([x for x in paras if x not in furniture])]
         if not passages:
             continue
         cur = db.execute("INSERT INTO docs(title, author, locator) VALUES (?,?,?)",
@@ -285,14 +535,13 @@ def from_site(z, db, log):
         for seq, (heading, text) in enumerate(passages, 1):
             n += 1
             add(db, cur.lastrowid, seq, title, heading, "", text)
-    log("%d pages, %d passages; left out as page furniture: %d texts"
-        % (docs, n, len(furniture)))
+    log("%d pages, %d passages; left out: %d paragraphs of page furniture, %d pages in "
+        "another language, %d pages by their title" % (docs, n, len(furniture), other, unwanted))
 
 
 def from_shelf(z, db, log):
     """A zimgit shelf: database.js names each document and its file."""
-    raw = bytes(z.get_entry_by_path("database.js").get_item().content).decode("utf-8", "replace")
-    listing = ast.literal_eval(raw[raw.index("["):raw.rindex("]") + 1])
+    listing = shelf_listing(z)
     docs = n = 0
     with tempfile.TemporaryDirectory() as tmp:
         for row in listing:
@@ -309,16 +558,65 @@ def from_shelf(z, db, log):
                 cur = db.execute("INSERT INTO docs(title, author, locator) VALUES (?,?,?)",
                                  (row.get("ti") or fname, row.get("aut") or "", fname))
                 doc, seq, before = cur.lastrowid, 0, n
-                for number, text in pages:
-                    for text in passages_from(page_paragraphs(text)):
-                        seq += 1
-                        n += 1
-                        add(db, doc, seq, row.get("ti") or fname, "", "page %d" % number, text)
+                for heading, place, text in document_passages(pages):
+                    seq += 1
+                    n += 1
+                    add(db, doc, seq, row.get("ti") or fname, heading, place, text)
                 docs += 1
                 log("  %-45s %4d pages, %5d passages%s"
                     % ((row.get("ti") or fname)[:45], len(pages), n - before,
                        "" if n > before else "   <- NO TEXT (scanned?)"))
     log("%d documents, %d passages" % (docs, n))
+
+
+def shelf_listing(z):
+    raw = bytes(z.get_entry_by_path("database.js").get_item().content).decode("utf-8", "replace")
+    return ast.literal_eval(raw[raw.index("["):raw.rindex("]") + 1])
+
+
+def from_recipe(recipe, sources, db, log):
+    """Chosen documents from one or more ZIMs, each under the title, author
+    and release statement the recipe gives it. The recipe is the record of
+    what was taken and why; what it does not name is not in the collection."""
+    from libzim.reader import Archive
+    archives, used, docs, n = {}, [], 0, 0
+    with tempfile.TemporaryDirectory() as tmp:
+        for d in recipe["documents"]:
+            src = os.path.join(sources, d["source"])
+            if d["source"] not in archives:
+                archives[d["source"]] = Archive(src)
+                used.append({"file": d["source"], "bytes": os.path.getsize(src),
+                             "sha256": sha256_file(src)})
+            z = archives[d["source"]]
+            path = d.get("path")
+            if not path:
+                rows = [r for r in shelf_listing(z) if r.get("ti") == d["shelf_title"]]
+                if not rows:
+                    raise SystemExit("not on the shelf: %r" % d["shelf_title"])
+                path = "files/" + rows[0]["fp"][0]
+            pdf = os.path.join(tmp, "doc.pdf")
+            with open(pdf, "wb") as f:
+                f.write(bytes(z.get_entry_by_path(path).get_item().content))
+            pages = pdf_pages(pdf)
+            if d.get("pages"):
+                # only the pages named: the chapter on the desert itself, not
+                # the chapters on fighting in it
+                pages = [(k, t) for k, t in pages
+                         if any(lo <= k <= hi for lo, hi in d["pages"])]
+            cur = db.execute("INSERT INTO docs(title, author, locator, note) VALUES (?,?,?,?)",
+                             (d["title"], d.get("author", ""), path, d.get("release", "")))
+            before = n
+            taken = document_passages(pages, d.get("skip_under", ()), d.get("not_headings", ()),
+                                      d.get("skip_paragraphs", ()))
+            for seq, (heading, place, text) in enumerate(taken, 1):
+                n += 1
+                add(db, cur.lastrowid, seq, d["title"], heading, place, text)
+            docs += 1
+            log("  %-58s %4d pages, %5d passages%s"
+                % (d["title"][:58], len(pages), n - before,
+                   "" if n - before >= len(pages) // 3 else "   <- LITTLE TEXT (scanned or slides?)"))
+    log("%d documents, %d passages" % (docs, n))
+    return used
 
 
 def add(db, doc, seq, title, heading, place, text):
@@ -328,35 +626,11 @@ def add(db, doc, seq, title, heading, place, text):
                (cur.lastrowid, title, heading, text))
 
 
-def build(source, out, licence="", log=print):
-    from libzim.reader import Archive          # needed here only, never on the unit
-    z = Archive(source)
-    if os.path.exists(out):
-        os.remove(out)
-    db = sqlite3.connect(out)
-    db.executescript(SCHEMA)
-    m = zim_meta(z)
-    shelf = True
-    try:
-        z.get_entry_by_path("database.js")
-    except Exception:
-        shelf = False
-    log("%s: %s" % (os.path.basename(source), "a shelf of documents" if shelf else "a site"))
-    (from_shelf if shelf else from_site)(z, db, log)
-    meta = {
-        "format": "1",
-        "id": m["name"] or os.path.splitext(os.path.basename(source))[0],
-        "title": m["title"], "description": m["description"], "creator": m["creator"],
-        "publisher": m["publisher"], "date": m["date"], "language": m["language"],
-        "kind": "documents" if shelf else "site",
-        "licence": licence or m["license"] or "not stated in the source file",
-        "source_file": os.path.basename(source),
-        "source_bytes": str(os.path.getsize(source)),
-        "source_sha256": sha256_file(source),
-        "docs": str(db.execute("SELECT count(*) FROM docs").fetchone()[0]),
-        "passages": str(db.execute("SELECT count(*) FROM passages").fetchone()[0]),
-        "passage_max": str(PASSAGE_MAX),
-    }
+def finish(db, meta):
+    meta["docs"] = str(db.execute("SELECT count(*) FROM docs").fetchone()[0])
+    meta["passages"] = str(db.execute("SELECT count(*) FROM passages").fetchone()[0])
+    meta["passage_max"] = str(PASSAGE_MAX)
+    meta["format"] = "1"
     db.executemany("INSERT INTO meta VALUES (?,?)", sorted(meta.items()))
     db.commit()
     db.execute("INSERT INTO passages_fts(passages_fts) VALUES ('optimize')")
@@ -366,13 +640,77 @@ def build(source, out, licence="", log=print):
     return meta
 
 
+def fresh(out):
+    if os.path.exists(out):
+        os.remove(out)
+    db = sqlite3.connect(out)
+    db.executescript(SCHEMA)
+    return db
+
+
+def build(source, out, licence="", log=print, skip_titles="", skip_paragraphs=(), more=None):
+    """One whole ZIM -> one collection."""
+    from libzim.reader import Archive          # needed here only, never on the unit
+    z = Archive(source)
+    db = fresh(out)
+    m = zim_meta(z)
+    shelf = True
+    try:
+        z.get_entry_by_path("database.js")
+    except Exception:
+        shelf = False
+    log("%s: %s" % (os.path.basename(source), "a shelf of documents" if shelf else "a site"))
+    if shelf:
+        from_shelf(z, db, log)
+    else:
+        from_site(z, db, log, lang=(m["language"] or "en")[:2], skip_titles=skip_titles,
+                  skip_paragraphs=skip_paragraphs)
+    return finish(db, dict(more or {}, **{
+        "id": m["name"] or os.path.splitext(os.path.basename(source))[0],
+        "title": m["title"], "description": m["description"], "creator": m["creator"],
+        "publisher": m["publisher"], "date": m["date"], "language": m["language"],
+        "kind": "documents" if shelf else "site",
+        "licence": licence or m["license"] or "not stated in the source file",
+        "source_file": os.path.basename(source),
+        "source_bytes": str(os.path.getsize(source)),
+        "source_sha256": sha256_file(source)}))
+
+
+def build_recipe(recipe_path, sources, out, log=print):
+    """A recipe (library/*.json) -> one collection: documents chosen from one
+    or more ZIMs ("documents"), or one site with what is left out of it
+    ("site")."""
+    import json
+    with open(recipe_path, encoding="utf-8") as f:
+        recipe = json.load(f)
+    if recipe.get("site"):
+        return build(os.path.join(sources, recipe["site"]), out, recipe.get("licence", ""), log,
+                     recipe.get("skip_titles", ""), recipe.get("skip_paragraphs", ()),
+                     {"recipe": os.path.basename(recipe_path),
+                      "recipe_sha256": sha256_file(recipe_path)})
+    db = fresh(out)
+    log("%s: %d documents by recipe" % (os.path.basename(recipe_path), len(recipe["documents"])))
+    used = from_recipe(recipe, sources, db, log)
+    return finish(db, {
+        "id": recipe["id"], "title": recipe["title"], "description": recipe["description"],
+        "creator": recipe.get("creator", ""), "publisher": "", "date": recipe["date"],
+        "language": recipe.get("language", "eng"), "kind": "documents",
+        "licence": recipe["licence"], "recipe": os.path.basename(recipe_path),
+        "recipe_sha256": sha256_file(recipe_path),
+        "sources": json.dumps(used, sort_keys=True)})
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("source")
+    ap.add_argument("source", help="a ZIM file - or, with --recipe, the directory the ZIMs are in")
     ap.add_argument("out")
     ap.add_argument("--licence", default="", help="the collection's licence, once checked")
+    ap.add_argument("--recipe", help="library/NAME.json: chosen documents, one or more ZIMs")
     a = ap.parse_args(argv)
-    meta = build(a.source, a.out, a.licence)
+    if a.recipe:
+        meta = build_recipe(a.recipe, a.source, a.out)
+    else:
+        meta = build(a.source, a.out, a.licence)
     print("%s: %s docs, %s passages, %d bytes, sha256 %s"
           % (a.out, meta["docs"], meta["passages"], os.path.getsize(a.out), sha256_file(a.out)))
     return 0
