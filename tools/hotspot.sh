@@ -18,6 +18,8 @@
 #   sudo tools/hotspot.sh off          take it down and remove it
 #        tools/hotspot.sh status       is it set up, is it up, who is on it
 #   sudo tools/hotspot.sh sync         apply the rule below once, now
+#   sudo tools/hotspot.sh start        the same, after giving a cable time to
+#                                      find its link (what `watch` begins with)
 #   sudo tools/hotspot.sh watch        apply it, and again whenever a cable's
 #                                      link changes (aetherseed-hotspot.service)
 #        tools/hotspot.sh --check NAME validate NAME and a passkey on standard
@@ -52,6 +54,7 @@ ADDRESS=10.42.0.1/24
 CHANNEL=6
 WATCHER=aetherseed-hotspot.service
 NET_DIR=${AETHERSEED_NET_DIR:-/sys/class/net}
+SETTLE=${AETHERSEED_SETTLE:-30}       # seconds a cable is given to find its link at start
 STATUS_URL=${AETHERSEED_STATUS_URL:-http://127.0.0.1:8001/aetherseed/status}
 
 die() { echo "hotspot: $*" >&2; exit 2; }
@@ -133,15 +136,36 @@ sync_rule() {
   fi
 }
 
+# The rule at start. A cable that is in has no link yet when the unit comes
+# up: on Lyra, 4 Oct 2026, the port found its link 15 seconds after this
+# began, and for 14 of them the unit's Wi-Fi was up with the cable in.
+# So "no cable" is believed at start only once it has stayed so for SETTLE
+# seconds. With no cable, the Wi-Fi is that much later at start.
+start_rule() {
+  local waited=0
+  if set_up; then
+    while ! cable_linked && [ "$waited" -lt "$SETTLE" ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+  fi
+  sync_rule
+}
+
 case ${1:-} in
   sync)
     [ "$(id -u)" = 0 ] || die "run with sudo"
     sync_rule
     ;;
 
+  start)
+    [ "$(id -u)" = 0 ] || die "run with sudo"
+    start_rule
+    ;;
+
   watch)
     [ "$(id -u)" = 0 ] || die "run with sudo"
-    sync_rule
+    start_rule
     # Every change of a link, as the kernel reports it. Changes of the radio
     # itself are passed over - the rule causes those. A link that flaps is
     # read once it has settled.

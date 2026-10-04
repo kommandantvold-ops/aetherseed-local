@@ -267,14 +267,15 @@ exit 0
         for n in names:
             open(os.path.join(self.state, n), "w").close()
 
-    def _sync(self):
+    def _sync(self, what="sync", settle="30"):
         import subprocess
         sh = os.path.join(os.path.dirname(SERVICES), "tools", "hotspot.sh")
         log = os.path.join(self.tmp, "log")
         open(log, "w").close()
         env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], LOG=log,
-                   STATE=self.state, AETHERSEED_NET_DIR=self.net)
-        r = subprocess.run(["bash", sh, "sync"], env=env, text=True, capture_output=True)
+                   STATE=self.state, AETHERSEED_NET_DIR=self.net, AETHERSEED_SETTLE=settle,
+                   NET=self.net)
+        r = subprocess.run(["bash", sh, what], env=env, text=True, capture_output=True)
         with open(log) as f:
             did = [l.strip()[6:] for l in f if not l.startswith("nmcli -t") and l.strip() != "nmcli radio wifi"]
         return r, did, sorted(os.listdir(self.state))
@@ -318,6 +319,30 @@ exit 0
         self._port("eth0", kind="1", carrier="0", device=True)
         r, did, state = self._sync()
         self.assertEqual((r.returncode, did, state), (0, [], ["radio"]))
+
+    def test_at_start_a_cable_is_given_time_to_find_its_link(self):
+        # On Lyra the port found its link fifteen seconds after the unit came
+        # up, and the Wi-Fi was up with the cable in for fourteen of them.
+        self._have("profile")
+        self._port("eth0", kind="1", carrier="0", device=True)
+        # a second passes; at the third the cable has its link
+        with open(os.path.join(self.bin, "sleep"), "w") as f:
+            f.write('#!/bin/bash\necho x >> "$STATE/../slept"\n'
+                    '[ "$(wc -l < "$STATE/../slept")" -ge 3 ] && echo 1 > "$NET/eth0/carrier"\nexit 0\n')
+        r, did, state = self._sync("start")
+        self.assertEqual((did, state), ([], ["profile"]))          # the radio never came on
+        with open(os.path.join(self.tmp, "slept")) as f:
+            self.assertEqual(len(f.read().split()), 3)
+
+    def test_at_start_with_no_cable_it_comes_up_after_the_wait(self):
+        self._have("profile")
+        self._port("eth0", kind="1", carrier="0", device=True)
+        with open(os.path.join(self.bin, "sleep"), "w") as f:
+            f.write('#!/bin/bash\necho x >> "$STATE/../slept"\nexit 0\n')
+        r, did, state = self._sync("start", settle="5")
+        self.assertEqual(did, ["radio wifi on", "connection up aetherseed-hotspot"])
+        with open(os.path.join(self.tmp, "slept")) as f:
+            self.assertEqual(len(f.read().split()), 5)             # waited the whole of it first
 
     def test_networkmanager_never_raises_it_by_itself(self):
         sh = os.path.join(os.path.dirname(SERVICES), "tools", "hotspot.sh")
