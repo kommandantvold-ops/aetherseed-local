@@ -122,6 +122,11 @@ ExecStartPre=-/usr/bin/nm-online -s -q -t 30
 ExecStartPre=/usr/bin/curl --silent --fail --output /dev/null \
     --retry 60 --retry-delay 1 --retry-connrefused --max-time 5 \
     http://127.0.0.1:2077/
+# --host-resolver-rules: the browser can look up no name at all (build log 55).
+# On 4 Oct 2026 this browser, with background networking, sync and component
+# updates switched off above, held a connection to Google (port 5228). The
+# firewall's output chain is what stops such a packet; this flag and the
+# managed policy (kiosk/chromium-policy.json) are what stop the browser trying.
 # -C: the kiosk's own config (kiosk/labwc/rc.xml says why). Without it labwc
 # read /etc/xdg/labwc and started the Pi desktop behind the console.
 ExecStart=/usr/bin/labwc -C /opt/aetherseed/kiosk/labwc -s "/usr/bin/chromium \
@@ -132,6 +137,7 @@ ExecStart=/usr/bin/labwc -C /opt/aetherseed/kiosk/labwc -s "/usr/bin/chromium \
     --no-first-run --no-default-browser-check \
     --disable-features=Translate,AutofillServerCommunication \
     --disable-background-networking \
+    --host-resolver-rules='MAP * ~NOTFOUND , EXCLUDE 127.0.0.1' \
     --disable-component-update \
     --check-for-update-interval=31536000 \
     --disable-sync \

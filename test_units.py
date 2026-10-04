@@ -122,6 +122,12 @@ class TestNoPersonInTheBuild(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(HERE, "tools", "power.py")))
 
 
+def chain(rules, name):
+    """The directives of one chain of services/nftables.conf."""
+    i = rules.index("chain %s {" % name)
+    return rules[i + 1:rules.index("}", i)]
+
+
 class TheUnitsOwnWifi(unittest.TestCase):
     """Build log 54: a phone on the unit's own Wi-Fi is a second screen.
 
@@ -144,10 +150,10 @@ class TheUnitsOwnWifi(unittest.TestCase):
     def test_the_console_is_admitted_from_the_units_wifi_and_nowhere_else(self):
         port = [l for l in self.rules if "2077" in l]
         self.assertEqual(port, ['iifname "wlan0" tcp dport 2077 accept'])
-        dhcp = [l for l in self.rules if "dport 67" in l]
+        dhcp = [l for l in chain(self.rules, "input") if "dport 67" in l]
         self.assertEqual(dhcp, ['iifname "wlan0" udp dport 67 accept'])
         # everything admitted, line by line: a new one is added here on purpose
-        accepts = [l for l in self.rules if l.endswith("accept") and "policy" not in l]
+        accepts = [l for l in chain(self.rules, "input") if l.endswith("accept")]
         self.assertEqual(accepts, [
             'iif "lo" accept',
             "ct state established,related accept",
@@ -164,10 +170,8 @@ class TheUnitsOwnWifi(unittest.TestCase):
     def test_nothing_passes_through_the_unit(self):
         # NetworkManager's shared mode switches forwarding on; this is what
         # keeps a phone on the unit's Wi-Fi out of the cable network.
-        i = self.rules.index("chain forward {")
-        self.assertEqual(self.rules[i + 1],
-                         "type filter hook forward priority filter; policy drop;")
-        self.assertEqual(self.rules[i + 2], "}")
+        self.assertEqual(chain(self.rules, "forward"),
+                         ["type filter hook forward priority filter; policy drop;"])
         self.assertIn("type filter hook input priority filter; policy drop;", self.rules)
 
     def test_the_hotspot_tool_checks_what_it_is_given(self):
@@ -197,6 +201,81 @@ class TheUnitsOwnWifi(unittest.TestCase):
         # wlan0 only, WPA2 only, and it does not touch the firewall itself
         self.assertIn("wifi-sec.proto rsn", text)
         self.assertNotIn("nft ", text)
+
+
+class NothingTheUnitStartsLeavesIt(unittest.TestCase):
+    """Build log 55. Andreas, 4 Oct 2026: "nothing at all should go out".
+
+    Measured that day on Lyra with a cable in: the kiosk's browser held a
+    connection to Google, the clock was synced over the network, package lists
+    were fetched daily, the unit announced itself - and the firewall's output
+    chain was "policy accept".
+    """
+
+    def setUp(self):
+        with open(os.path.join(SERVICES, "nftables.conf"), encoding="utf-8") as f:
+            self.out = chain(directives(f.read()), "output")
+
+    def test_outbound_is_dropped_unless_named(self):
+        self.assertEqual(self.out[0], "type filter hook output priority filter; policy drop;")
+        accepts = [l for l in self.out if l.endswith("accept")]
+        # everything let out, line by line: a new one is added here on purpose
+        self.assertEqual(accepts, [
+            'oif "lo" accept',
+            "ct state established,related accept",
+            "udp sport 68 udp dport 67 accept",
+            'oifname "wlan0" udp sport 67 udp dport 68 accept',
+            "icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, "
+            "mld-listener-report, mld2-listener-report } accept",
+        ])
+
+    def test_no_name_lookup_no_clock_no_web_is_let_out(self):
+        text = " ".join(self.out)
+        for port in ("dport 53", "dport 123", "dport 80", "dport 443", "dport 5353"):
+            self.assertNotIn(port, text)
+        self.assertNotIn("ct state new", text)
+
+    def test_what_tried_is_named_and_counted(self):
+        self.assertEqual(self.out[-2],
+                         'limit rate 6/minute log prefix "aetherseed out-drop: " flags skuid')
+        self.assertEqual(self.out[-1], 'counter comment "outbound dropped by policy"')
+
+    def test_the_browser_can_look_up_no_name(self):
+        d = unit("aetherseed-kiosk.service")
+        self.assertTrue(any("--host-resolver-rules='MAP * ~NOTFOUND , EXCLUDE 127.0.0.1'" in l
+                            for l in d))
+        self.assertTrue(any("--app=http://127.0.0.1:2077/" in l for l in d))
+
+    def test_the_browser_may_open_the_console_and_nothing_else(self):
+        import json
+        with open(os.path.join(os.path.dirname(SERVICES), "kiosk", "chromium-policy.json"),
+                  encoding="utf-8") as f:
+            p = json.load(f)
+        self.assertEqual(p["URLBlocklist"], ["*"])
+        self.assertEqual(p["URLAllowlist"], ["127.0.0.1:2077"])
+        for off in ("BackgroundModeEnabled", "MetricsReportingEnabled", "ComponentUpdatesEnabled",
+                    "SearchSuggestEnabled", "TranslateEnabled", "PrintingEnabled",
+                    "AllowFileSelectionDialogs", "BrowserNetworkTimeQueriesEnabled"):
+            self.assertIs(p[off], False, off)
+        self.assertIs(p["SyncDisabled"], True)
+        self.assertEqual(p["DeveloperToolsAvailability"], 2)     # not available
+        self.assertEqual(p["DownloadRestrictions"], 3)           # all blocked
+        self.assertEqual(p["ExtensionInstallBlocklist"], ["*"])
+
+    def test_the_clock_asks_nobody(self):
+        with open(os.path.join(SERVICES, "timesyncd-aetherseed.conf"), encoding="utf-8") as f:
+            d = directives(f.read())
+        self.assertEqual(d, ["[Time]", "NTP=", "FallbackNTP=", "SaveIntervalSec=60"])
+
+    def test_the_cartridge_sees_all_of_it(self):
+        with open(os.path.join(os.path.dirname(SERVICES), "tools", "cartridge.sh"),
+                  encoding="utf-8") as f:
+            text = f.read()
+        for needle in ("/etc/chromium/policies/managed/aetherseed.json",
+                       "/etc/systemd/timesyncd.conf.d/aetherseed.conf",
+                       "service.avahi.enabled", "timer.apt_daily.enabled",
+                       "timer.apt_daily_upgrade.enabled"):
+            self.assertIn(needle, text)
 
 
 if __name__ == "__main__":

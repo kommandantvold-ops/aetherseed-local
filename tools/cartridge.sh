@@ -40,6 +40,8 @@ IDENTITY_FILES=(
   /etc/systemd/system/aetherseed-shutdown.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
   /etc/nftables.conf
+  /etc/chromium/policies/managed/aetherseed.json
+  /etc/systemd/timesyncd.conf.d/aetherseed.conf
 )
 APP_DIR=/opt/aetherseed
 
@@ -166,6 +168,11 @@ collect() {
   # that runs it is a different device from one that does not, so the id
   # says which.
   emit service.keepalive.enabled    "$(systemctl is-enabled aetherseed-keepalive 2>/dev/null || echo unknown)"
+  # Nothing the unit starts leaves it (build log 55): what would call out is
+  # off, and the cartridge says so.
+  emit service.avahi.enabled        "$(systemctl is-enabled avahi-daemon 2>/dev/null || echo unknown)"
+  emit timer.apt_daily.enabled      "$(systemctl is-enabled apt-daily.timer 2>/dev/null || echo unknown)"
+  emit timer.apt_daily_upgrade.enabled "$(systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null || echo unknown)"
 }
 
 fingerprint() {  # one hash over the whole sorted body

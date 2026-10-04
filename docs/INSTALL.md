@@ -387,6 +387,57 @@ step 2: `wpa_supplicant` is enabled again (the access point needs it).
 Whoever holds the passkey is at the console — it is the steward's, like the
 screen.
 
+## 14. Nothing the unit starts leaves it (step 55, after the tag)
+
+**Not in tag `stable-llama-2026-10-03`.** On `main` since build log 55, and on
+Lyra since 4 Oct. Andreas: *"nothing at all should go out."* Until this step
+the firewall filtered only what came in. Measured on Lyra that day, cable in:
+the screen's browser held connections to Google, the clock was synced over the
+network, package lists were fetched daily, and the unit announced itself.
+
+What it does: the firewall's **output chain drops everything the unit starts**
+and names in the journal whatever tried (`aetherseed out-drop:`); the browser
+gets a managed policy (the console and nothing else) and can look up no name;
+the clock asks nobody; avahi and the two `apt` timers are off. Still let out,
+because without them the unit cannot be reached at all: loopback, answers on
+connections opened *to* the unit (SSH, the console from its own Wi-Fi), the
+address lease, IPv6 neighbour discovery.
+
+**Do this last.** After it the unit can fetch nothing — every step above that
+needs the network (3–7) must be done. From a checkout of `main`:
+
+```bash
+cd ~/aetherseed-main
+sudo install -d -m 755 /etc/systemd/timesyncd.conf.d /etc/chromium/policies/managed
+sudo install -o root -g root -m 644 services/timesyncd-aetherseed.conf /etc/systemd/timesyncd.conf.d/aetherseed.conf
+sudo install -o root -g root -m 644 kiosk/chromium-policy.json /etc/chromium/policies/managed/aetherseed.json
+sudo install -o root -g root -m 644 services/aetherseed-kiosk.service /etc/systemd/system/
+sudo systemctl disable --now avahi-daemon.socket avahi-daemon.service apt-daily.timer apt-daily-upgrade.timer
+sudo systemctl daemon-reload && sudo systemctl restart systemd-timesyncd
+sudo install -o root -g root -m 644 services/nftables.conf /etc/nftables.conf
+sudo nft -c -f /etc/nftables.conf                      # syntax check
+sudo systemd-run --on-active=300 nft flush ruleset     # dead-man's switch, as in step 8
+sudo nft -f /etc/nftables.conf
+# open a NEW ssh session; if it works, stop the run-….timer printed above
+sudo systemctl restart aetherseed-kiosk
+```
+
+Check, from the unit: `curl -m 4 http://1.1.1.1/` fails, `getent hosts
+example.com` fails, and both show in `sudo journalctl -k | grep out-drop` and
+in the counter of `sudo nft list chain inet filter output`. `sudo ss -tunp`
+shows no socket to anything off the unit but the address lease and your own
+SSH session.
+
+**The clock.** It is no longer corrected. `systemd-timesyncd` stays on only to
+save the time every minute and resume from it at start, so a unit that was
+unplugged is behind by as long as it was off. The board keeps time through a
+power cut only with a battery on its RTC connector; set the clock by hand
+otherwise (`sudo date -s "2026-10-04 12:00:00"`). The model is
+told the date from this clock.
+
+**To let the unit out for maintenance**, until the next reboot or firewall
+reload: `sudo nft insert rule inet filter output accept`.
+
 ## Decisions this build carries, not steps
 
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds
