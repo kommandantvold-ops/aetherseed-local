@@ -295,6 +295,24 @@ class AskedTheBestThereIs(Lib):
     def test_between_collections_the_one_that_says_more_about_it(self):
         self.assertEqual(self.lib.look_up("bleach")["collection_id"], "water")
 
+    def test_a_passage_with_something_to_read(self):
+        # build log 59: the shortest passage that says the word ranks first -
+        # "look up frostbite" was shown one sentence on its third degree
+        d = tempfile.mkdtemp(prefix="library-read-")
+        try:
+            long = ("Determine whether the frostbite is superficial or deep. " * 5).strip()
+            make(os.path.join(d, "cold.lib.sqlite"), "documents", "Cold", "2026-10-04", [
+                ("Cold injuries", "", [
+                    ("THIRD-DEGREE FROSTBITE", "page 1", "Third-degree frostbite is deep."),
+                    ("TREATMENT FOR FROSTBITE", "page 2", long),
+                    ("TRENCH FOOT", "page 3", "Keep the feet dry and change socks often.")])])
+            lib = L.Library(d)
+            self.assertEqual(lib.look_up("frostbite")["heading"], "TREATMENT FOR FROSTBITE")
+            # with nothing longer to show, the short one is still shown
+            self.assertEqual(lib.look_up("trench foot")["heading"], "TRENCH FOOT")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_nothing_is_said_as_nothing(self):
         self.assertIsNone(self.lib.look_up("how to tie a bowline"))
         self.assertIsNone(self.lib.look_up("snake bite"))

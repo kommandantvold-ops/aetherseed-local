@@ -56,6 +56,7 @@ LIBRARY_DIR = os.environ.get("AETHERSEED_LIBRARY", "/var/lib/aetherseed/library"
 RARE = 0.03          # a word in at most this share of a collection's passages is "about" something
 NEAR = 30            # tokens: words that only meet in the running text must stand this close
 LEAFLET = 60         # passages: a document this short is about its title on every page
+WORTH_READING = 200  # characters: a passage shorter than this is passed over when asked to look up
 SHOWN_MAX = 1200     # characters of a passage put on the screen
 
 STOP = set("""
@@ -614,7 +615,12 @@ class Collection:
         while keep:
             rows = self.rows(" AND ".join(_q(t) for t in keep), 40)
             if rows:
-                hit = self.passage(rows[0])
+                # The shortest passage that says the word ranks first, and
+                # says least: "look up frostbite" was shown one sentence on
+                # its third degree, and "the weather" a line of a contents
+                # page. The first that has something to read, if there is one.
+                hit = next((h for h in map(self.passage, rows)
+                            if h and len(h["text"]) >= WORTH_READING), None) or self.passage(rows[0])
                 if hit:
                     # between collections: the one that says more of it, then
                     # more about it. "bleach" is in 3 of 12313 medicine
