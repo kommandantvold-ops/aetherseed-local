@@ -130,11 +130,14 @@ collect() {
   # about itself, so all of it is part of the cartridge. The venv is excluded
   # from the digest - pip writes timestamps into its metadata, which would make
   # the hash differ between two identical installs - and the versions that
-  # matter are recorded explicitly instead.
+  # matter are recorded explicitly instead. __pycache__ is left out for the
+  # same reason: Python writes it when someone with the right runs a module
+  # there, and it is not the application (build log 57: ten such files, from
+  # diagnostics run as root, had moved Lyra's digest).
   if [ -d "$APP_DIR" ]; then
-    emit app.digest "$(cd "$APP_DIR" && find . -path ./venv -prune -o -type f -print \
+    emit app.digest "$(cd "$APP_DIR" && find . -path ./venv -prune -o -name __pycache__ -prune -o -type f -print \
                         | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)"
-    emit app.files  "$(cd "$APP_DIR" && find . -path ./venv -prune -o -type f -print | wc -l | tr -d ' ')"
+    emit app.files  "$(cd "$APP_DIR" && find . -path ./venv -prune -o -name __pycache__ -prune -o -type f -print | wc -l | tr -d ' ')"
     emit app.tokenizers "$("$APP_DIR/venv/bin/python3" -c 'import tokenizers;print(tokenizers.__version__)' 2>/dev/null || echo MISSING)"
     emit app.numpy      "$("$APP_DIR/venv/bin/python3" -c 'import numpy;print(numpy.__version__)' 2>/dev/null || echo MISSING)"
   else

@@ -168,7 +168,9 @@ def sha256_file(path):
 
 
 def identity():
-    app = sh("cd %s && find . -path ./venv -prune -o -type f -print | LC_ALL=C sort "
+    # compiled leftovers (__pycache__) are not the application: on 4 Oct 2026
+    # ten of them, from diagnostics run as root, were in the first report's hash
+    app = sh("cd %s && find . -path ./venv -prune -o -name __pycache__ -prune -o -type f -print | LC_ALL=C sort "
              "| xargs sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1" % APP).strip()
     blobs = sorted(glob.glob("/usr/share/hailo-ollama/models/blob/*"))
     name = ""

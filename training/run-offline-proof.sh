@@ -30,7 +30,7 @@ fi
 [ -f /var/lib/aetherseed/.aetherseed/aetherroot/memory.db ] || { echo "no memory on this unit" >&2; exit 1; }
 
 install -d -o aetherseed -g aetherseed -m 750 "$BASE"
-systemd-run --quiet --unit="$UNIT" \
+systemd-run --quiet --unit="$UNIT" --setenv=PYTHONDONTWRITEBYTECODE=1 \
   "$APP/venv/bin/python3" "$APP/training/offline_proof.py" --dir "$DIR" --minutes "$MINUTES"
 
 cat <<EOF
