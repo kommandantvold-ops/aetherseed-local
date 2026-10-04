@@ -703,9 +703,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         Asked to look something up, she shows the best passage there is or
         says the library has nothing. Unasked, only when the library is sure
-        (logic/library.py), and never over what the build knows about her or
-        what her steward told her. Anything unexpected falls through to the
-        model, as before there was a library.
+        (logic/library.py), and never for a question about her or about what
+        she was told. Anything unexpected falls through to the model, as
+        before there was a library.
         """
         try:
             library = lib.library()
@@ -736,12 +736,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 if nxt is None:
                     return serve("That is the end of that document.", None, "more; end of document")
                 return serve(lib.shown(nxt), nxt, f"more; {nxt['collection_id']} #{nxt['id']}")
-            # Unasked. What the build knows about her, and what her steward
-            # told her, come first.
-            if root.knowledge is not None and root.knowledge.lines_for(user_msg, max_chars=400):
-                return False
-            if root._fact_lines(user_msg, {}):
-                return False
+            # Unasked: only when the library is sure, and never a question
+            # about her or about what she was told (logic/library.find).
+            # It does NOT stand down for a [Known] line or a steward fact that
+            # merely shares a word: tried on a copy of Lyra's memory, 4 Oct
+            # 2026, that sent "Can children take aspirin?" to the model
+            # because a verse of Genesis says "children", and "What is
+            # amoxicillin used for?" because a line of the build says "used".
             hit = library.find(user_msg)
             if hit is None:
                 return False
@@ -879,8 +880,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # ---- THE LIBRARY ----
         # A passage shown word for word, model not called (build log 57).
-        # Not for a tool turn, a reading, or a story.
-        if not intent and not reading and request_mode != FICTION:
+        # Not for a tool turn, a reading, or a story - but "What if I forget
+        # to take it?" is a question, not a story: the what-if framing alone
+        # does not keep the library out (tried 4 Oct 2026: that turn went to
+        # the model as fiction, and it wrote "doxicyclene").
+        a_story = request_mode == FICTION and not mode_reason.startswith("asks a what-if")
+        if not intent and not reading and not a_story:
             if self._answer_from_the_library(model, user_msg):
                 return
 

@@ -344,6 +344,20 @@ class AtTheProxy(_Proxy):
         self.ask("Write a story about how much bleach to add to a gallon of water")
         self.assertGreater(len(SCRIPT["requests"]), n)
 
+    def test_a_what_if_is_a_question_not_a_story(self):
+        reply = self._served("What if I take too much ibuprofen?")
+        self.assertIn("Taking too much ibuprofen by mouth can be dangerous.", reply)
+
+    def test_a_shared_word_in_what_she_was_told_does_not_take_it_away(self):
+        # on Lyra a verse of Genesis saying "children" sent an aspirin
+        # question to the model
+        saved = proxy.root._fact_lines
+        proxy.root._fact_lines = lambda q, report=None: ["[Steward told you] bleach is under the sink"]
+        try:
+            self.assertIn(BLEACH, self._served("How much bleach do I add to a gallon of water?"))
+        finally:
+            proxy.root._fact_lines = saved
+
     def test_a_unit_without_a_library_is_as_it_was(self):
         L._LIB = L.Library(os.path.join(Lib.dir, "no-such-dir"))
         n = len(SCRIPT["requests"])
