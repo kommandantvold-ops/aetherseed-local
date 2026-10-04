@@ -91,3 +91,28 @@ observer. Nothing was added."*).
 | `ecosystem_soak.py` | the soak and its report (`--report DIR` at any time) |
 | `ecosystem-probes.json` | the 22 questions and the words each answer should have |
 | `ecosystem-workspace/` | the copy's workspace |
+
+## The offline proof (build log 56)
+
+A second check, for a different question: **does she work with no network at
+all?** Andreas's DIANA-readiness checklist asks for a "written, repeatable
+test protocol/log - something a DIANA test centre could rerun independently".
+
+```bash
+sudo bash /opt/aetherseed/training/run-offline-proof.sh      # 10 minutes of questions
+```
+
+It returns at once and watches the unit. **Pull the network cable.** When no
+interface has a link, there is no default route and every radio is blocked
+(`rfkill list`), it runs the ecosystem soak above for ten minutes, and every
+ten seconds records each interface's link and packet counters, the routes,
+the radios, every socket to anything off the unit, and the firewall's
+counters. Put the cable back any time after that. The report is
+`/var/lib/aetherseed/training/offline-<time>/report.txt`, with the evidence
+beside it (`samples.jsonl`, `out-drop.txt`, `soak/`, `SHA256SUMS`).
+
+**PASSED** means: isolated at every sample, at least one question, none
+failed, and no packet sent on any interface. It says nothing about voice
+(this build has none) or about longer than the run. The program changes
+nothing on the unit - it does not pull links down or block radios itself.
+`training/offline_proof.py` carries the protocol in full.

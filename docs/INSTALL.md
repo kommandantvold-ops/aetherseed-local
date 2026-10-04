@@ -413,6 +413,7 @@ sudo install -o root -g root -m 644 services/timesyncd-aetherseed.conf /etc/syst
 sudo install -o root -g root -m 644 kiosk/chromium-policy.json /etc/chromium/policies/managed/aetherseed.json
 sudo install -o root -g root -m 644 services/aetherseed-kiosk.service /etc/systemd/system/
 sudo systemctl disable --now avahi-daemon.socket avahi-daemon.service apt-daily.timer apt-daily-upgrade.timer
+sudo rfkill block bluetooth       # and `wlan`, unless the unit's own Wi-Fi (§13) is set up
 sudo systemctl daemon-reload && sudo systemctl restart systemd-timesyncd
 sudo install -o root -g root -m 644 services/nftables.conf /etc/nftables.conf
 sudo nft -c -f /etc/nftables.conf                      # syntax check
