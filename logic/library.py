@@ -26,6 +26,9 @@ WHEN SHE ANSWERS FROM IT.
   - "look it up", after an answer of her own: the same, for the question
     just asked. When one passage says every word of a question she answered
     herself, a line under her answer says so (says_it_all, build log 59).
+  - "explain that", after a passage of the steward's OWN document: the model
+    is given that one passage and puts it in her words (build log 62). Never
+    for the built-in collections: a dose is not retold.
   - Unasked, only when she is sure (find): the passage is ABOUT the
     question by its own title or heading - a rare word of the question that
     a title or heading says, or a title or heading that the question itself
@@ -53,6 +56,15 @@ from typing import Dict, List, Optional
 
 LIBRARY_DIR = os.environ.get("AETHERSEED_LIBRARY", "/var/lib/aetherseed/library")
 
+
+def own_dir() -> str:
+    """The steward's own documents (logic/own_shelf.py, build log 62):
+    collections of the same make, on a shelf of his own beside the workspace.
+    The shelf says where it is; asked each time, so there is one place that
+    knows."""
+    from logic import own_shelf
+    return own_shelf.SHELF_DIR
+
 RARE = 0.03          # a word in at most this share of a collection's passages is "about" something
 NEAR = 30            # tokens: words that only meet in the running text must stand this close
 LEAFLET = 60         # passages: a document this short is about its title on every page
@@ -79,7 +91,8 @@ PERSONAL = re.compile(r"\b(you|your|yours|yourself|we|our|ours|us|let's|let’s|
 TOLD = re.compile(r"^\s*(?:i|i'm|i’m|im|my|me)\b", re.I)
 
 LOOKUP = [re.compile(p, re.I) for p in (
-    r"^\s*(?:please\s+)?look\s*up\s+(?P<q>.+?)\s*(?:in\s+the\s+library)?\s*[?.!]*\s*$",
+    r"^\s*(?:please\s+)?look\s*up\s+(?P<q>.+?)\s*(?:in\s+the\s+library|(?P<own>in\s+my\s+(?:own\s+)?"
+    r"(?:documents?|books?|pdfs?)))?\s*[?.!]*\s*$",
     r"^\s*(?:please\s+)?(?:search|check|ask)\s+the\s+library\s+(?:for|about|on)\s+(?P<q>.+?)\s*[?.!]*\s*$",
     r"^\s*what\s+does\s+the\s+library\s+say\s+(?:about|on)\s+(?P<q>.+?)\s*[?.!]*\s*$",
     r"^\s*(?:in|from)\s+the\s+library\s*[:,]\s*(?P<q>.+?)\s*[?.!]*\s*$",
@@ -209,6 +222,12 @@ def lookup_query(text: str) -> Optional[str]:
     return None
 
 
+def lookup_in_own(text: str) -> bool:
+    """"look up momentum in my book": only the steward's own documents."""
+    m = LOOKUP[0].match(text or "")
+    return bool(m and m.group("own"))
+
+
 # "look it up" - after an answer of her own, search the library for the
 # question just asked (build log 59).
 LOOK_IT_UP = re.compile(
@@ -217,6 +236,43 @@ LOOK_IT_UP = re.compile(
 # Something asked, by its form: it ends in a question mark or opens as one.
 ASKED = re.compile(r"\?\s*$|^\s*(?:how|what|which|when|where|why|who|is|are|can|could|should|"
                    r"do|does)\b", re.I)
+
+
+# "explain that" - after a passage of the steward's own document was shown:
+# she puts that one passage in her own words (build log 62). With a few words
+# of his after it, those are what she is asked: "explain that: why the minus?"
+EXPLAIN = re.compile(
+    r"^\s*(?:please\s+)?(?:can\s+you\s+|could\s+you\s+)?"
+    r"(?:(?:explain|simplify|rephrase)\s+(?:that|this|it|the\s+passage)(?:\s+to\s+me)?"
+    r"(?:\s+in\s+(?:simple|simpler|plain|other|your\s+own)\s+(?:words|terms))?"
+    r"|what\s+does\s+(?:that|this|it)\s+mean|forklar\s+(?:det|dette|den))"
+    r"(?:\s*,?\s*please)?\s*(?:[?.!]*\s*$|[:,-]\s*(?P<ask>.{3,300}?)\s*$)", re.I)
+
+
+def asks_to_explain(text: str):
+    """None, or what he asked about the passage ("" when just "explain that")."""
+    m = EXPLAIN.match(text or "")
+    return None if not m else (m.group("ask") or "")
+
+
+def as_shown(hit: dict):
+    """(the passage as it goes on the screen, was it cut). A long passage is
+    cut at the end of a line or a sentence."""
+    text = hit["text"]
+    if len(text) <= SHOWN_MAX:
+        return text, False
+    end = max(text.rfind("\n", 0, SHOWN_MAX), text.rfind(". ", 0, SHOWN_MAX) + 1)
+    return text[:end if end > SHOWN_MAX // 2 else SHOWN_MAX].rstrip(), True
+
+
+def to_explain(hit: dict) -> str:
+    """What the model is given to explain: the passage as it was shown, no
+    more - "explain that" is about what is on the screen."""
+    return as_shown(hit)[0]
+
+
+NOT_RETOLD = ("That passage is from the built-in library, and I keep it word for word: "
+              "I do not retell it. Say \"more\" for what follows it.")
 
 
 def says_look_it_up(text: str) -> bool:
@@ -238,11 +294,14 @@ class Collection:
                                   check_same_thread=False)
         self.meta: Dict[str, str] = dict(self.db.execute("SELECT key, value FROM meta"))
         self.n = int(self.meta.get("passages") or 0) or 1
+        self.own = self.meta.get("own") == "1"      # the steward's own document
         self._df: Dict[str, int] = {}
 
     @property
     def name(self) -> str:
         t = self.meta.get("title") or self.meta.get("id") or os.path.basename(self.path)
+        if self.own:
+            return t
         d = (self.meta.get("date") or "")[:7]
         return "%s (%s)" % (t, d) if d else t
 
@@ -276,7 +335,7 @@ class Collection:
         return {"id": r[0], "doc": r[1], "seq": r[2], "heading": r[3] or "", "place": r[4] or "",
                 "text": r[5], "title": r[6] or "", "author": r[7] or "", "locator": r[8] or "",
                 "last": r[9], "collection": self.name, "collection_id": self.meta.get("id", ""),
-                "licence": self.meta.get("licence", "")}
+                "licence": self.meta.get("licence", ""), "own": self.own}
 
     # -- unasked: only when sure ------------------------------------------
     def sure(self, ts: List[str], words: List[str] = None) -> Optional[dict]:
@@ -596,12 +655,36 @@ class Collection:
         return any(word.startswith(a[:max(4, len(a) - 2)]) or a.startswith(word[:max(4, len(word) - 2)])
                    for a in asked)
 
+    # -- asked for a section by its name: where it begins ------------------
+    def opens(self, ts: List[str]) -> Optional[dict]:
+        """The first passage under the heading that the terms name whole:
+        "look up momentum" in a book with a section "2.3 Momentum" is asked
+        for that section from its beginning, not for the passage in the
+        middle of it that says the word most often (build log 62). The
+        steward's own documents only: there a heading is a section of a book
+        he is reading, and "more" walks on through it."""
+        asked = set(ts)
+        if not asked:
+            return None
+        found = None
+        for heading, first in self.db.execute(
+                "SELECT heading, MIN(rowid) FROM passages WHERE heading != '' GROUP BY heading"):
+            name = re.sub(r"^[\d.]+\s+(?:[?*†‡⋆]\s+)?", "", parts(heading)[-1])
+            if set(terms(name)) == asked and (found is None or first < found):
+                found = first
+        return self.passage(found) if found else None
+
     # -- asked to look it up: the best there is ---------------------------
     def best(self, ts: List[str], words: List[str] = None) -> Optional[dict]:
         known = [t for t in ts if self.df(t)]
         if not known:
             return None
-        idf = {t: math.log(self.n / (1.0 + self.df(t))) + 0.1 for t in known}
+        # Never below nothing: in a document of two passages a word both of
+        # them say weighed less than a word that was not there at all, and
+        # "look up momentum of a body" found nothing in the steward's own
+        # notes on momentum (build log 62). No word of the built-in
+        # collections is in every passage, so nothing changes for them.
+        idf = {t: max(math.log(self.n / (1.0 + self.df(t))), 0.0) + 0.1 for t in known}
         missing = sum(math.log(self.n) + 0.1 for t in ts if t not in known)
         if sum(idf.values()) < missing:
             return None                      # most of what was asked is not in it
@@ -635,10 +718,18 @@ class Collection:
 
 
 class Library:
-    def __init__(self, directory: str = None):
+    def __init__(self, directory: str = None, own: str = None):
+        """The unit's library: the built-in collections and, beside them, the
+        steward's own documents. Given a directory, only what is in it - the
+        check and the tests measure the built-in library alone - unless `own`
+        names a shelf too."""
         self.dir = directory or LIBRARY_DIR
+        self.own_dir = own if own is not None else (own_dir() if directory is None else None)
         self.collections: List[Collection] = []
-        for path in sorted(glob.glob(os.path.join(self.dir, "*.lib.sqlite"))):
+        paths = sorted(glob.glob(os.path.join(self.dir, "*.lib.sqlite")))
+        if self.own_dir:
+            paths += sorted(glob.glob(os.path.join(self.own_dir, "*.lib.sqlite")))
+        for path in paths:
             try:
                 self.collections.append(Collection(path))
             except sqlite3.Error as exc:
@@ -648,7 +739,7 @@ class Library:
         return bool(self.collections)
 
     def holds(self) -> List[str]:
-        return [c.name for c in self.collections]
+        return [c.name if not c.own else 'your document "%s"' % c.name for c in self.collections]
 
     def _pick(self, hits: List[dict]) -> Optional[dict]:
         hits = [h for h in hits if h]
@@ -697,14 +788,22 @@ class Library:
                 return True
         return False
 
-    def look_up(self, query: str) -> Optional[dict]:
-        """Asked. The best passage there is, or None when there is nothing."""
+    def look_up(self, query: str, own_only: bool = False) -> Optional[dict]:
+        """Asked. The best passage there is, or None when there is nothing.
+        own_only: "in my book" - the steward's own documents alone."""
+        among = [c for c in self.collections if c.own] if own_only else self.collections
         ts = terms(query)
-        if not ts or not self.collections:
+        if not ts or not among:
             return None
         words = all_words(query)
-        sure = self._pick([c.sure(ts, words) for c in self.collections])
-        return sure or self._pick([c.best(ts, words) for c in self.collections])
+        opened = [h for h in (c.opens(ts) for c in among if c.own) if h]
+        if opened:
+            return opened[0]
+        sure = self._pick([c.sure(ts, words) for c in among])
+        return sure or self._pick([c.best(ts, words) for c in among])
+
+    def own_names(self) -> List[str]:
+        return ['your document "%s"' % c.name for c in self.collections if c.own]
 
     def after(self, hit: dict) -> Optional[dict]:
         """The passage that follows `hit` in the same document."""
@@ -722,24 +821,28 @@ class Library:
 
 def shown(hit: dict) -> str:
     """The passage, word for word, and where it is from."""
-    text = hit["text"]
-    cut = False
-    if len(text) > SHOWN_MAX:
-        end = max(text.rfind("\n", 0, SHOWN_MAX), text.rfind(". ", 0, SHOWN_MAX) + 1)
-        text = text[:end if end > SHOWN_MAX // 2 else SHOWN_MAX].rstrip()
-        cut = True
-    where = [hit["collection"], '"%s"' % hit["title"]]
+    text, cut = as_shown(hit)
+    if hit.get("own"):
+        where = ['your document "%s"' % hit["title"]]
+    else:
+        where = [hit["collection"], '"%s"' % hit["title"]]
     if hit.get("author") and hit["author"].lower() not in ("various", "-", ""):
         where.append(hit["author"])
     if hit.get("heading"):
         where.append(hit["heading"])
     if hit.get("place"):
         where.append(hit["place"])
-    lines = ["From the library, word for word:", "", text]
+    lines = ["From your own document, word for word:" if hit.get("own")
+             else "From the library, word for word:", "", text]
     if cut:
         lines.append("[the passage goes on]")
     lines += ["", "Source: " + " - ".join(where)]
-    if hit.get("seq") and hit.get("last") and hit["seq"] < hit["last"]:
+    more = hit.get("seq") and hit.get("last") and hit["seq"] < hit["last"]
+    if hit.get("own"):
+        # his own document: she may also put the passage in her own words
+        lines.append('Say "more" for what follows it, or "explain that".' if more
+                     else 'Say "explain that" and I put it in my own words.')
+    elif more:
         lines.append('Say "more" for what follows it.')
     return "\n".join(lines)
 
@@ -754,11 +857,19 @@ def nothing(query: str, holds: List[str]) -> str:
 def contents(lib: "Library") -> str:
     if not lib:
         return "I have no library on this unit."
-    lines = ["The library on this unit:"]
-    for c in lib.collections:
-        lines.append("- %s: %s. %s documents, %s passages."
-                     % (c.name, (c.meta.get("description") or "").rstrip("."),
-                        c.meta.get("docs", "?"), c.meta.get("passages", "?")))
+    built_in = [c for c in lib.collections if not c.own]
+    own = [c for c in lib.collections if c.own]
+    lines = []
+    if built_in:
+        lines.append("The library on this unit:")
+        for c in built_in:
+            lines.append("- %s: %s. %s documents, %s passages."
+                         % (c.name, (c.meta.get("description") or "").rstrip("."),
+                            c.meta.get("docs", "?"), c.meta.get("passages", "?")))
+    if own:
+        lines.append("Your own documents:")
+        for c in own:
+            lines.append("- %s: %s passages." % (c.name, c.meta.get("passages", "?")))
     lines.append('Ask me to "look up" something, and I show the passage word for word.')
     return "\n".join(lines)
 
@@ -771,4 +882,11 @@ def library() -> Library:
     global _LIB
     if _LIB is None:
         _LIB = Library()
+    return _LIB
+
+
+def reload() -> Library:
+    """Open it again: a document was put on the steward's shelf, or taken off."""
+    global _LIB
+    _LIB = Library()
     return _LIB

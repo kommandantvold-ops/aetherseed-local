@@ -183,6 +183,10 @@ collect() {
   emit timer.apt_daily_upgrade.enabled "$(systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null || echo unknown)"
   # The library she shows passages from (build log 57): which collections,
   # and exactly which bytes. A unit with another library is another device.
+  # The steward's own documents (build log 62, ~/aetherseed-shelf) are NOT
+  # described here: like the memory and the workspace they are the steward's,
+  # and two units of one build differ in them. What reads them is: the code
+  # under app.digest, and poppler-utils among the packages.
   local lib
   for lib in /var/lib/aetherseed/library/*.lib.sqlite; do
     [ -e "$lib" ] || continue

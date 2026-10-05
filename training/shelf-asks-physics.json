@@ -1,0 +1,20 @@
+[
+  {"look": "momentum"},
+  {"look": "conservation of energy"},
+  {"look": "the principle of inertia"},
+  {"look": "torque"},
+  {"look": "voltage"},
+  {"look": "resistance"},
+  {"look": "Ohm's law"},
+  {"look": "Newton's law of gravity"},
+  {"look": "scientific notation"},
+  {"look": "wavelength and frequency"},
+  {"look": "reflection"},
+  {"look": "time dilation"},
+  {"look": "kinetic energy", "ask": "what is the difference between momentum and kinetic energy?"},
+  {"look": "E=mc2", "ask": "what does the c stand for?"},
+  {"look": "angular momentum", "ask": "why does a spinning skater speed up?"},
+  {"look": "converting units", "ask": "how many grams are in a kilogram?"},
+  {"look": "magnetic field", "ask": "who discovered it?"},
+  {"look": "Noether's theorem", "ask": "what symmetry goes with energy?"}
+]

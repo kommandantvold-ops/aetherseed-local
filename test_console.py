@@ -139,8 +139,10 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self._req("POST", path, b"{}")[0], 502)
         self.assertEqual(set(serve.PROXIED_POST),
-                         {"/api/chat", "/aetherseed/setup", "/aetherseed/steward"},
+                         {"/api/chat", "/aetherseed/setup", "/aetherseed/steward",
+                          "/aetherseed/shelf/remove"},        # the steward's own shelf (62)
                          "a new POST route reaches the proxy only by being added here on purpose")
+        self.assertIn("/aetherseed/shelf", serve.PROXIED_GET)
         # guided correction's list takes a query string, matched on its path (50)
         self.assertEqual(self._req("GET", "/aetherseed/memories?limit=5&q=cat")[0], 502)
         self.assertEqual(self._req("GET", "/aetherseed/memories")[0], 502)
@@ -183,7 +185,7 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self.assertEqual(serve._counts["refused"], before["refused"] + 1)
         self.assertLessEqual(set(serve._counts),
                              {"page", "status", "record", "rings", "chat", "setup", "refused",
-                              "memories", "steward"},
+                              "memories", "steward", "upload", "shelf"},
                              "the heartbeat keeps counts by route and nothing else")
 
 
@@ -311,3 +313,87 @@ class OnlyTheUnitsOwnScreenIsTheWitness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TheStewardsOwnShelf(unittest.TestCase):
+    """Build log 62: a document goes THROUGH this server to the proxy. What
+    is not an upload from the console is refused here, before it is read."""
+
+    @classmethod
+    def setUpClass(cls):
+        serve.CSP = serve.build_csp(HTML)
+        cls.saved = (serve.BACKEND, serve.UPLOAD_MAX)
+        serve.BACKEND = "http://127.0.0.1:9"        # nothing answers: relayed means 502
+        cls.srv = serve.Threaded(("127.0.0.1", 0), serve.Console)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        serve.BACKEND, serve.UPLOAD_MAX = cls.saved
+
+    def _post(self, body, headers, declared=None):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.putrequest("POST", "/aetherseed/upload")
+        for k, v in headers.items():
+            c.putheader(k, v)
+        c.putheader("Content-Length", str(len(body) if declared is None else declared))
+        c.endheaders()
+        if declared is None:
+            c.send(body)
+        r = c.getresponse()
+        data = r.read()
+        c.close()
+        return r.status, data
+
+    GOOD = {"Content-Type": "application/octet-stream", "X-Filename": "Basic%20Physics.pdf"}
+
+    def test_an_upload_from_the_console_is_relayed(self):
+        self.assertEqual(self._post(b"%PDF-1.4 words", self.GOOD)[0], 502)
+
+    def test_too_large_is_refused_before_it_is_read(self):
+        status, data = self._post(b"", self.GOOD, declared=serve.UPLOAD_MAX + 1)
+        self.assertEqual(status, 413)
+        self.assertIn(b"too large", data)
+
+    def test_what_is_not_an_upload_from_the_console_is_refused(self):
+        for why, headers in (
+                ("no name", {"Content-Type": "application/octet-stream"}),
+                # a form on another page can send these without asking first
+                ("a form", {"Content-Type": "multipart/form-data; boundary=x",
+                            "X-Filename": "a.pdf"}),
+                ("json", {"Content-Type": "application/json", "X-Filename": "a.pdf"}),
+                ("a raw name", {"Content-Type": "application/octet-stream",
+                                "X-Filename": "../../etc/passwd"}),
+                ("a header in the name", {"Content-Type": "application/octet-stream",
+                                          "X-Filename": "a.pdf\tX-Other: 1"})):
+            with self.subTest(why=why):
+                self.assertEqual(self._post(b"words", headers)[0], 400)
+        self.assertEqual(self._post(b"", self.GOOD)[0], 400)                # nothing in it
+
+    def test_the_size_it_takes_is_the_size_the_shelf_takes(self):
+        sys.path.insert(0, HERE)
+        from logic import own_shelf
+        self.assertEqual(serve.UPLOAD_MAX, own_shelf.MAX_BYTES)
+
+    def test_the_page_offers_it_in_both_languages_and_not_on_the_unit_itself(self):
+        for key in ("shelf:", "shelfTitle:", "shelfHelp:", "shelfAdd:", "shelfHere:", "shelfHow:",
+                    "shelfNone:", "shelfSending:", "shelfSent:", "shelfTooLarge:", "shelfFailed:",
+                    "docReading:", "docFailed:", "docReady:", "docRemove:", "docSure:",
+                    "explains:", "explainsPart:"):
+            self.assertEqual(HTML.count(key), 2, key)
+        # the unit's own browser opens no file dialog (kiosk/chromium-policy.json)
+        self.assertIn("$('shelfAddRow').hidden = ON_THE_UNIT", HTML)
+        self.assertIn("'127.0.0.1'", HTML)
+
+    def test_a_file_name_and_a_note_are_never_markup(self):
+        shelf = HTML[HTML.index("async function loadShelf()"):HTML.index("// ---- the ring tree")]
+        self.assertNotIn("innerHTML", shelf)
+        self.assertNotIn("insertAdjacentHTML", shelf)
+
+    def test_her_words_about_a_passage_are_labelled_as_hers(self):
+        self.assertIn("if (p.explains)", HTML)
+        self.assertIn("not the document’s", HTML)
+

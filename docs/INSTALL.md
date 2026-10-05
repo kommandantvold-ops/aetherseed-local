@@ -553,6 +553,69 @@ of the three has been checked. For a unit that leaves, each collection's
 licence has to be checked and passed to the converter (`--licence`, or the
 recipe's `licence`); it is kept in the file.
 
+## 16. The steward's own documents — upload, look up, "explain that" (step 62, after the tag)
+
+Not part of the tag `stable-llama-2026-10-03`. It is on `main`, and on Lyra
+since 5 Oct. Andreas: *"a file upload button in the gui, that adds documents
+to the library/workspace, and a way for Lyra to process that information.
+Lets say I want to upload a pdf on basic physics so Lyra can help me study."*
+
+No new package: `pdftotext` and `pdfinfo` (poppler-utils — a PDF's text,
+page by page) are in the Raspberry Pi OS image this build starts from, where
+the printing system brings them; on Lyra `25.03.0-5+deb13u4`, and among the
+packages the cartridge counts. Check, then four files more than §15 installs:
+
+```bash
+which pdftotext pdfinfo                        # both, or: sudo apt-get install -y poppler-utils
+sudo install -o root -g root -m 644 logic/own_shelf.py logic/library.py /opt/aetherseed/logic/
+sudo install -d -o root -g root -m 755 /opt/aetherseed/tools
+sudo install -o root -g root -m 644 tools/library_build.py /opt/aetherseed/tools/library_build.py
+sudo install -o root -g root -m 644 proxy.py /opt/aetherseed/proxy.py
+sudo install -o root -g root -m 644 gui/index.html gui/serve.py /opt/aetherseed/gui/
+sudo systemctl restart aetherseed-proxy aetherseed-gui aetherseed-kiosk
+```
+
+`tools/library_build.py` is the converter of §15, now on the unit too: a
+document the steward adds is read with the same code the built-in
+collections are made with (it asks for `libzim` only when a ZIM is opened,
+and none is on the unit). Without `poppler-utils` the unit takes text files
+and refuses PDFs, saying why.
+
+**Adding a document.** *Documents* in the console's header, from a phone or
+a laptop on the unit's Wi-Fi (§13: `http://10.42.0.1:2077`, with the cable
+out). On the unit's own screen the list is shown and the way to add is told:
+its browser is locked and opens no file dialog (`kiosk/chromium-policy.json`).
+A PDF or a UTF-8 text file (`.pdf`, `.txt`, `.md`), up to 60 MB and 2000
+pages, forty documents. It is kept as it came and read into a collection of
+its own under `/var/lib/aetherseed/aetherseed-shelf/` — the proxy's state
+directory, beside the workspace; the console server relays it and writes
+nothing. The cartridge does not describe the shelf: it is the steward's,
+like the memory.
+
+**What she does with it.** It is part of the library of §15: *"look up
+momentum in my book"* (or just *"look up momentum"*) shows the passage word
+for word, with the document's name, its section and its page; a section
+asked for by its name opens at its beginning, and *"more"* walks on.
+Unasked she shows a passage of it only by the rule of §15. Under a passage
+of his own document, ***"explain that"*** — or *"explain that: why is it
+negative?"* — gives the model that one passage and his question, and
+nothing else: no memory, no ring. Her answer is labelled on the console as
+her own words about the passage, and is stored as unverified — in the
+record, never retrieved into a later prompt, never in a ring. A passage of
+the **built-in** library is not retold: asked to explain one, she says it
+stays word for word.
+
+**What it cannot do.** A scan — pictures of pages — has no words and is
+refused with that reason. Formulas come out of a PDF flat: `E = mc2` for
+E = mc², `3.2 × 106` for 3.2 × 10⁶, a fraction as two lines; she is given
+them as they are shown. Headings are found when they are in capitals, when a
+"Chapter N" line stands over them, or when they carry a section number
+(`1.7 Equivalence of mass and energy`); in a book of another make the
+passages are found by their words but may stand under the wrong heading or
+none. An explanation is two or three sentences — the bounds on every answer
+of hers (step 13) — and it is the model's: build log 62 has what was read by
+hand.
+
 ## Decisions this build carries, not steps
 
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds

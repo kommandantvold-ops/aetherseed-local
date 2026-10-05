@@ -282,8 +282,13 @@ def heading_line(line):
     return all(c.isupper() for c in letters) and len(words) <= 12
 
 
-def page_blocks(text, running=()):
+def page_blocks(text, running=(), heading=None):
     """One PDF page as [("h", heading) | ("m", lesser heading) | ("p", paragraph)].
+
+    `heading`: for a document of another make than the manuals - a callable
+    that says of a line "h", "m" or None, asked where heading_line says no
+    (logic/own_shelf.py: a textbook's "1.7 Equivalence of mass and energy").
+    Without it, nothing here is different.
 
     Blank lines part paragraphs. Inside one, a line is joined to the one
     before it only when that line ran to the margin - prose wraps, the rows of
@@ -328,10 +333,11 @@ def page_blocks(text, running=()):
             # ("... see\nMCRP 2-10B.1") is not a heading
             carries_on = (last is not None and width >= 30 and len(last) >= 0.7 * width
                           and not last.endswith((".", ":", "?", "!")))
-            if heading_line(l) and not carries_on:
+            kind = "h" if heading_line(l) else (heading(l) if heading else None)
+            if kind and not carries_on:
                 close()
                 para, last = None, None
-                out.append(("h", l))
+                out.append((kind, l))
                 continue
             if major or minor:
                 close()
@@ -376,7 +382,7 @@ def running_lines(pages):
     return {l for l, c in edge.items() if c >= EDGE_PAGES}
 
 
-def document_passages(pages, skip_under=(), not_headings=(), skip_paragraphs=()):
+def document_passages(pages, skip_under=(), not_headings=(), skip_paragraphs=(), heading=None):
     """[(heading, place, text)] for a whole PDF: [(page number, text), ...].
 
     A line that heads or foots several pages, or a block that stands on many
@@ -392,12 +398,14 @@ def document_passages(pages, skip_under=(), not_headings=(), skip_paragraphs=())
                        and teaches none of them;
       not_headings     lines in capitals that are not headings ("OUTLINE");
       skip_paragraphs  patterns; a paragraph that one of them opens is left out.
+
+    `heading`: see page_blocks - the steward's own documents only.
     """
     skip_under = tuple(x.upper().rstrip(":") for x in skip_under)
     not_headings = {x.upper().rstrip(":") for x in not_headings}
     skip_paragraphs = [re.compile(x) for x in skip_paragraphs]
     running = running_lines(pages) if len(pages) >= 2 * EDGE_PAGES else set()
-    blocks = [(n, page_blocks(text, running)) for n, text in pages]
+    blocks = [(n, page_blocks(text, running, heading)) for n, text in pages]
     seen = {}
     for _, bs in blocks:
         for t in {t for _, t in bs if len(t) <= 90}:
@@ -432,7 +440,10 @@ def document_passages(pages, skip_under=(), not_headings=(), skip_paragraphs=())
                 skipping = False
             elif skipping or any(p.match(t) for p in skip_paragraphs):
                 continue
-            if kind == "h" and minor:
+            if kind == "h" and minor and not (heading and CHAPTER.match(t)):
+                # (In a document with numbered sections a chapter line is
+                # never a caption: "Chapter 2" after "1.2 Momentum" shares
+                # its 2 with it, and was passed over - build log 62.)
                 # A line in capitals that says again what the section in hand
                 # is called is the caption of its drawing, not a new heading:
                 # "b. Snow Cave. A snow cave is ..." / [figure] "SNOW CAVE".

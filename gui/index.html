@@ -157,6 +157,15 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
 .guide ul{margin:0; padding-left:18px; font-size:14px; color:var(--ink-2)}
 .guide .err{color:var(--alarm); font-size:13px}
 .ring .acts{margin-top:10px}
+
+/* The steward's own documents (build log 62). A title is the name of a file
+   someone chose: set as text, never markup, like everything else here. */
+.doc{border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px; background:var(--surface-2)}
+.doc .name{font-size:15px; color:var(--ink); overflow-wrap:anywhere}
+.doc .acts{margin-top:8px}
+.card .row.left{justify-content:flex-start}
+.card .row.left .send{margin-left:0}
+.card .help.how{margin:14px 0 0}
 </style>
 </head>
 <body>
@@ -168,6 +177,7 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
     <button type="button" class="chip" id="memoryChip"><span id="memoryLabel"></span> <b id="episodes">–</b></button>
     <button type="button" class="chip" id="rings">–</button>
     <span class="chip" id="modelChip">–</span>
+    <button id="shelfBtn"></button>
     <button id="recordBtn"></button>
     <button id="offBtn"></button>
   </div>
@@ -220,6 +230,25 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
     </form>
     <div class="tree" id="treeBody"></div>
     <div class="row" id="turnMoreRow" hidden><button type="button" id="turnMore"></button></div>
+  </div>
+</div>
+
+<!-- The steward's own documents (build log 62): added from a phone or a
+     laptop on the unit's Wi-Fi. On the unit's own screen the browser is
+     locked and opens no file dialog, so there the list is shown and the way
+     to add is told. -->
+<div class="setup" id="shelf" hidden>
+  <div class="card wide">
+    <div class="top"><h1 id="shelfTitle"></h1><button type="button" id="shelfClose"></button></div>
+    <p class="help" id="shelfHelp"></p>
+    <div class="row left" id="shelfAddRow">
+      <input type="file" id="shelfFile" accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown" hidden>
+      <button type="button" class="send" id="shelfAdd"></button>
+    </div>
+    <p class="state" id="shelfProgress" hidden></p>
+    <p class="err" id="shelfError" hidden></p>
+    <div class="tree" id="shelfBody"></div>
+    <p class="help how" id="shelfHow"></p>
   </div>
 </div>
 
@@ -318,6 +347,21 @@ const T = {
     fromUnit: 'from the unit itself, not the model',
     fromLibrary: 'from the library, word for word, not the model',
     notLibrary: 'not from the library — say “look it up” to search it',
+    explains: (x) => `her own words about the passage above${x ? ' (' + x + ')' : ''} — not the document’s`,
+    explainsPart: 'she was given only the first part of it',
+    shelf: 'Documents', shelfTitle: 'Your documents',
+    shelfHelp: (n) => `Documents you add are kept on this unit and become part of ${n || 'the companion'}’s library. Nothing is sent anywhere.`,
+    shelfAdd: 'Add a document', shelfKinds: (mb) => `A PDF or a plain text file, up to ${mb} MB.`,
+    shelfHere: 'On this screen no file can be chosen. Take the cable out, join the unit’s Wi-Fi with a phone or a laptop, open this page there, and add the document from it.',
+    shelfNoPdf: 'This unit cannot read PDFs yet; text files work.',
+    shelfHow: 'Then ask: “look up momentum in my book”. Under a passage, say “explain that” — or “explain that: why is it negative?” — and the answer is in the companion’s own words, labelled as such.',
+    shelfNone: 'No documents yet.', shelfNoList: 'Could not read the list.',
+    shelfSending: (pc) => `Sending… ${pc}%`, shelfSent: 'Received. Reading it — a long book takes a few minutes.',
+    shelfTooLarge: (mb) => `That file is too large: ${mb} MB is the most.`,
+    shelfFailed: 'It could not be sent. Try again in a moment.',
+    docReading: 'being read…', docFailed: (why) => `could not be read: ${why}`,
+    docReady: (pages, n) => pages ? `${pages} pages · ${n} passages` : `${n} passages`,
+    docRemove: 'Remove', docSure: 'Remove it from the unit?', docYes: 'Yes, remove', docNo: 'Keep',
     off: 'Quantum rest', offTitle: (n) => `Put ${n || 'the companion'} into quantum rest?`,
     offHelp: 'Everything is saved and the unit powers down, so it can be moved or unplugged safely. Nothing is erased. Wait until the screen has gone dark before you unplug the power.',
     offGo: 'Quantum rest', offCancel: 'Cancel',
@@ -402,6 +446,21 @@ const T = {
     fromUnit: 'fra enheten selv, ikke fra modellen',
     fromLibrary: 'fra biblioteket, ord for ord, ikke fra modellen',
     notLibrary: 'ikke fra biblioteket — si «slå det opp» for å søke der',
+    explains: (x) => `hennes egne ord om avsnittet over${x ? ' (' + x + ')' : ''} — ikke dokumentets`,
+    explainsPart: 'hun fikk bare den første delen av det',
+    shelf: 'Dokumenter', shelfTitle: 'Dine dokumenter',
+    shelfHelp: (n) => `Dokumenter du legger til, blir liggende på denne enheten og blir en del av biblioteket til ${n || 'følgesvennen'}. Ingenting sendes noe sted.`,
+    shelfAdd: 'Legg til et dokument', shelfKinds: (mb) => `En PDF eller en ren tekstfil, opptil ${mb} MB.`,
+    shelfHere: 'På denne skjermen kan ingen fil velges. Ta ut kabelen, koble en telefon eller en PC til enhetens Wi-Fi, åpne denne siden der, og legg til dokumentet derfra.',
+    shelfNoPdf: 'Denne enheten kan ikke lese PDF ennå; tekstfiler virker.',
+    shelfHow: 'Spør så: «look up momentum in my book». Under et avsnitt kan du si «forklar det» — eller «explain that: why is it negative?» — og svaret er med følgesvennens egne ord, merket som det.',
+    shelfNone: 'Ingen dokumenter ennå.', shelfNoList: 'Kunne ikke lese listen.',
+    shelfSending: (pc) => `Sender … ${pc} %`, shelfSent: 'Mottatt. Leser det — en lang bok tar noen minutter.',
+    shelfTooLarge: (mb) => `Filen er for stor: ${mb} MB er det meste.`,
+    shelfFailed: 'Det kunne ikke sendes. Prøv igjen om litt.',
+    docReading: 'leses …', docFailed: (why) => `kunne ikke leses: ${why}`,
+    docReady: (pages, n) => pages ? `${pages} sider · ${n} avsnitt` : `${n} avsnitt`,
+    docRemove: 'Fjern', docSure: 'Fjerne det fra enheten?', docYes: 'Ja, fjern', docNo: 'Behold',
     off: 'Kvantehvile', offTitle: (n) => `Legge ${n || 'følgesvennen'} i kvantehvile?`,
     offHelp: 'Alt er lagret, og enheten slår seg av, så den trygt kan flyttes eller kobles fra. Ingenting slettes. Vent til skjermen er mørk før du trekker ut strømmen.',
     offGo: 'Kvantehvile', offCancel: 'Avbryt',
@@ -435,6 +494,7 @@ function applyLanguage() {
   $('trustLabel').textContent = s.trust;
   $('memoryLabel').textContent = s.memory;
   $('recordBtn').textContent = s.record;
+  $('shelfBtn').textContent = s.shelf;
   $('offBtn').textContent = s.off;
   $('intro1').textContent = s.intro1;
   $('intro2').textContent = s.intro2;
@@ -509,6 +569,14 @@ function provenance(turnEl, p) {
   // Her own answer, though a passage of the library says every word of the
   // question (build log 59). "look it up" asks the library the same thing.
   if (p.library_line) tag(s.notLibrary, 'quiet');
+  // Her own words about a passage of the steward's own document (build log
+  // 62): the passage stands above, word for word; this is the model's.
+  if (p.explains) {
+    const where = [p.explains.title ? `“${p.explains.title}”` : '', p.explains.place || '']
+      .filter(Boolean).join(', ');
+    tag(s.explains(where), 'fiction');
+    if (p.explains.part) tag(s.explainsPart, 'quiet');
+  }
   if (p.memory_used) tag(s.usedMemory, 'quiet');
   if (p.facts_used > 0) tag(s.usedFacts, 'quiet');
   if (p.rings_used > 0) tag(s.usedRing, 'quiet');
@@ -627,6 +695,122 @@ $('offGo').onclick = async () => {
     $('offError').hidden = false;
     $('offGo').disabled = false;
   }
+};
+
+// ---- the steward's own documents (build log 62) -----------------------------
+// Andreas, 5 Oct 2026: "a file upload button in the gui, that adds documents
+// to the library/workspace". The file goes to the unit as it is, in the body
+// of one request; the proxy keeps it and reads it into a collection of its
+// own. The page then asks the list how the reading went.
+const ON_THE_UNIT = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+let shelfTimer = null, shelfInfo = null;
+
+function shelfSay(id, text) {
+  $(id).textContent = text || ''; $(id).hidden = !text;
+}
+
+async function loadShelf() {
+  const s = t(), body = $('shelfBody');
+  let d;
+  try {
+    const r = await fetch('/aetherseed/shelf');
+    if (!r.ok) throw new Error(String(r.status));
+    d = await r.json();
+  } catch {
+    body.replaceChildren(el('p', 'growing', s.shelfNoList));
+    return;
+  }
+  shelfInfo = d;
+  const mb = Math.floor((d.max_bytes || 0) / 1048576);
+  $('shelfAdd').title = s.shelfKinds(mb);
+  if (!ON_THE_UNIT && d.can_read_pdf === false && $('shelfError').hidden) shelfSay('shelfError', s.shelfNoPdf);
+  const docs = d.documents || [];
+  body.replaceChildren();
+  if (!docs.length) body.append(el('p', 'growing', s.shelfNone));
+  let reading = false;
+  for (const doc of docs) {
+    const node = el('div', 'doc');
+    node.append(el('div', 'name', doc.title || doc.id));
+    if (doc.state === 'reading') { reading = true; node.append(el('p', 'state fix', s.docReading)); }
+    else if (doc.state === 'failed') node.append(el('p', 'state aside', s.docFailed(doc.note || '')));
+    else {
+      node.append(el('p', 'state ok', s.docReady(doc.pages, doc.passages ?? 0)));
+      if (doc.note) node.append(el('p', 'state aside', doc.note));
+    }
+    if (doc.state !== 'reading') {
+      const acts = el('div', 'acts'), rm = el('button', null, s.docRemove);
+      rm.type = 'button';
+      rm.onclick = () => {
+        const yes = el('button', null, s.docYes), no = el('button', null, s.docNo);
+        yes.type = no.type = 'button';
+        no.onclick = loadShelf;
+        yes.onclick = async () => {
+          yes.disabled = true;
+          try {
+            await fetch('/aetherseed/shelf/remove', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: doc.id }) });
+          } catch {}
+          loadShelf();
+        };
+        acts.replaceChildren(el('span', 'state fix', s.docSure), yes, no);
+      };
+      acts.append(rm); node.append(acts);
+    }
+    body.append(node);
+  }
+  clearTimeout(shelfTimer);
+  if (reading && !$('shelf').hidden) shelfTimer = setTimeout(loadShelf, 3000);
+  else if (!reading && $('shelfProgress').textContent === s.shelfSent) shelfSay('shelfProgress', '');
+}
+
+$('shelfBtn').onclick = () => {
+  if (!name) return;
+  const s = t();
+  $('shelfTitle').textContent = s.shelfTitle;
+  $('shelfClose').textContent = s.close;
+  $('shelfHelp').textContent = s.shelfHelp(name);
+  $('shelfAdd').textContent = s.shelfAdd;
+  $('shelfHow').textContent = s.shelfHow;
+  shelfSay('shelfError', ''); shelfSay('shelfProgress', '');
+  // The unit's own browser opens no file dialog (it is locked down, INSTALL
+  // 9): there the button is not offered, and the way to add is told.
+  $('shelfAddRow').hidden = ON_THE_UNIT;
+  if (ON_THE_UNIT) shelfSay('shelfProgress', s.shelfHere);
+  $('shelf').hidden = false;
+  $('shelfClose').focus();
+  loadShelf();
+};
+$('shelfClose').onclick = () => { $('shelf').hidden = true; clearTimeout(shelfTimer); };
+$('shelfAdd').onclick = () => { $('shelfFile').value = ''; $('shelfFile').click(); };
+$('shelfFile').onchange = () => {
+  const f = $('shelfFile').files[0], s = t();
+  if (!f) return;
+  shelfSay('shelfError', '');
+  const max = (shelfInfo && shelfInfo.max_bytes) || 0;
+  if (max && f.size > max) { shelfSay('shelfError', s.shelfTooLarge(Math.floor(max / 1048576))); return; }
+  $('shelfAdd').disabled = true;
+  shelfSay('shelfProgress', s.shelfSending(0));
+  // XMLHttpRequest, not fetch: it is the one that says how far the sending is.
+  const x = new XMLHttpRequest();
+  x.open('POST', '/aetherseed/upload');
+  x.setRequestHeader('Content-Type', 'application/octet-stream');
+  x.setRequestHeader('X-Filename', encodeURIComponent(f.name));
+  x.upload.onprogress = (e) => {
+    if (e.lengthComputable) shelfSay('shelfProgress', s.shelfSending(Math.floor(100 * e.loaded / e.total)));
+  };
+  const done = (ok, why) => {
+    $('shelfAdd').disabled = false;
+    shelfSay('shelfProgress', ok ? s.shelfSent : '');
+    if (!ok) shelfSay('shelfError', why || s.shelfFailed);
+    loadShelf();
+  };
+  x.onload = () => {
+    let d = {}; try { d = JSON.parse(x.responseText); } catch {}
+    done(x.status === 202, d.error);
+  };
+  x.onerror = x.onabort = x.ontimeout = () => done(false);
+  x.send(f);
 };
 
 // ---- the ring tree ----------------------------------------------------------
@@ -916,6 +1100,7 @@ $('turnMore').onclick = () => loadTurns(false);
 $('treeClose').onclick = () => { $('tree').hidden = true; };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('tree').hidden) $('tree').hidden = true;
+  if (e.key === 'Escape' && !$('shelf').hidden) $('shelfClose').click();
 });
 
 // ---- first run --------------------------------------------------------------

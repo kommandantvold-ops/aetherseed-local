@@ -12,10 +12,14 @@ budget, the sanitizers, all four generation bounds, provenance - lives at the
 proxy's exit point, and a UI that went straight to the model would have none
 of them.
 
-Static files only, read-only, no directory listing, no uploads. One write:
-the shutdown request (see SHUTDOWN_REQUEST), an empty file that a root-owned
-systemd path unit turns into an orderly poweroff. This server never gains the
-privilege to shut anything down itself.
+Static files only, read-only, no directory listing. One write: the shutdown
+request (see SHUTDOWN_REQUEST), an empty file that a root-owned systemd path
+unit turns into an orderly poweroff. This server never gains the privilege to
+shut anything down itself.
+
+A document for the steward's own shelf (build log 62) passes THROUGH this
+server and is never written by it: the upload is relayed to the proxy, which
+keeps it under its own state directory (logic/own_shelf.py).
 """
 import base64
 import hashlib
@@ -40,7 +44,19 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # /aetherseed/steward: guided correction (build log 50) - the steward supports
 # or corrects a turn or a ring. The console's only way to change what the
 # companion remembers; the proxy checks and records every one.
-PROXIED_POST = ("/api/chat", "/aetherseed/setup", "/aetherseed/steward")
+PROXIED_POST = ("/api/chat", "/aetherseed/setup", "/aetherseed/steward",
+                "/aetherseed/shelf/remove")
+
+# THE STEWARD'S OWN SHELF (build log 62). Andreas, 5 Oct 2026: "a file upload
+# button in the gui, that adds documents to the library/workspace". The body
+# of the request is the file itself; its name is in X-Filename. Three checks
+# here, before a byte is read: the size, the content type, and that the name
+# header is there - a page on another origin cannot send a custom header
+# without a preflight, and this server answers none. What the file is, the
+# proxy decides (logic/own_shelf.accept).
+UPLOAD_PATH = "/aetherseed/upload"
+UPLOAD_MAX = int(os.environ.get("AETHERSEED_UPLOAD_MAX", str(60 * 1024 * 1024)))
+UPLOAD_TYPE = "application/octet-stream"
 
 # SHUTDOWN. So the device can be moved without pulling the plug on a running
 # SQLite store. The console cannot power anything off - it runs unprivileged
@@ -78,7 +94,9 @@ def _console_seen():
 # /aetherseed/rings: the ring tree (step 37) - read-only, like the record.
 # /aetherseed/memories: the turns, for guided correction (50); it takes a query
 # string (?before=&q=&limit=), so it is matched on its path alone.
-PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", "/api/tags")
+# /aetherseed/shelf: the steward's own documents and how far each is read (62).
+PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", "/api/tags",
+               "/aetherseed/shelf")
 PROXIED_GET_QUERY = ("/aetherseed/memories",)
 
 # The page's own script is pinned by the hash of its bytes.
@@ -138,7 +156,7 @@ CSP = None      # set in __main__, once index.html is known to exist
 HEARTBEAT_SECONDS = int(os.environ.get("AETHERSEED_GUI_HEARTBEAT", "300"))
 
 _counts = {"page": 0, "status": 0, "record": 0, "rings": 0, "chat": 0, "setup": 0,
-           "refused": 0}
+           "refused": 0, "upload": 0, "shelf": 0}
 _counts_lock = threading.Lock()
 
 
@@ -161,9 +179,11 @@ def _heartbeat():
                 _counts[k] = 0
         if sum(seen.values()):
             print("[gui] %ds  page=%d status=%d record=%d rings=%d chat=%d setup=%d "
-                  "refused=%d" % (HEARTBEAT_SECONDS, seen["page"], seen["status"],
-                                  seen["record"], seen["rings"], seen["chat"],
-                                  seen["setup"], seen["refused"]), flush=True)
+                  "refused=%d upload=%d shelf=%d"
+                  % (HEARTBEAT_SECONDS, seen["page"], seen["status"],
+                     seen["record"], seen["rings"], seen["chat"],
+                     seen["setup"], seen["refused"], seen.get("upload", 0),
+                     seen.get("shelf", 0)), flush=True)
         else:
             print("[gui] %ds  idle" % HEARTBEAT_SECONDS, flush=True)
 
@@ -193,10 +213,10 @@ class Console(http.server.SimpleHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         super().end_headers()
 
-    def _relay(self, method, body=None):
+    def _relay(self, method, body=None, headers=None):
         req = urllib.request.Request(
             BACKEND + self.path, data=body, method=method,
-            headers={"Content-Type": "application/json"})
+            headers=headers or {"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=300) as up:
                 self.send_response(up.status)
@@ -240,7 +260,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
                 _console_seen()
             _tally("status" if self.path.endswith("/status")
                    else "record" if self.path.endswith("/record")
-                   else "rings" if self.path.endswith("/rings") else "page")
+                   else "rings" if self.path.endswith("/rings")
+                   else "shelf" if self.path.endswith("/shelf") else "page")
             self._relay("GET")
             return
         if self.path == "/":
@@ -291,16 +312,41 @@ class Console(http.server.SimpleHTTPRequestHandler):
         print("[gui] shutdown requested from the console", flush=True)
         self._json(202, {"shutting_down": True})
 
+    def _upload(self):
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        name = self.headers.get("X-Filename") or ""
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if n > UPLOAD_MAX:
+            # Refused unread: the rest of the request is not taken in.
+            self.close_connection = True
+            _tally("refused")
+            self._json(413, {"error": "That file is too large: %d MB is the most I take."
+                             % (UPLOAD_MAX // (1024 * 1024)), "code": "too_large"})
+            return
+        if n <= 0 or ctype != UPLOAD_TYPE or not name or len(name) > 800 \
+                or not re.fullmatch(r"[A-Za-z0-9._~%!'()*-]+", name):
+            self.close_connection = True
+            _tally("refused")
+            self._json(400, {"error": "not an upload from the console", "code": "bad_upload"})
+            return
+        _tally("upload")
+        self._relay("POST", self.rfile.read(n),
+                    headers={"Content-Type": UPLOAD_TYPE, "X-Filename": name})
+
     def do_POST(self):
         if self.path == SHUTDOWN_PATH:
             self._shutdown()
+            return
+        if self.path == UPLOAD_PATH:
+            self._upload()
             return
         if self.path not in PROXIED_POST:
             _tally("refused")
             self.send_error(404)
             return
         _tally("setup" if self.path == "/aetherseed/setup"
-               else "steward" if self.path == "/aetherseed/steward" else "chat")
+               else "steward" if self.path == "/aetherseed/steward"
+               else "shelf" if self.path.startswith("/aetherseed/shelf") else "chat")
         n = int(self.headers.get("Content-Length", 0))
         self._relay("POST", self.rfile.read(n) if n else b"")
 

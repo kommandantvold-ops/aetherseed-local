@@ -19,6 +19,7 @@ import json
 import re
 import urllib.request
 import urllib.error
+import urllib.parse
 import threading
 import time
 import sys
@@ -53,6 +54,7 @@ from logic import companion
 from logic.speaker import validate_speaker, STEWARD, is_steward
 from logic import steward
 from logic import library as lib
+from logic import own_shelf
 from logic.facts import FACT_TAG, FACT_NOTE
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
@@ -181,6 +183,25 @@ def _write_own_words():
             except Exception:
                 pass
         _OWN_WORDS_LOCK.release()
+
+
+# "explain that" (build log 62): what the model is told when it is handed one
+# passage of the steward's own document. The passage goes in as workspace
+# data does - defused, in its block, cut and marked by the budget guard if it
+# does not fit - so nothing new stands between a document and the prompt.
+EXPLAIN_NOTE = ("Your steward is studying a document of their own. One passage of it is "
+                "below. Explain what that passage says, in simple words. Use only what "
+                "the passage says. If the passage does not say, say that it does not.")
+EXPLAIN_ASK = "Explain this passage in simple words."
+
+
+def _shelf_read():
+    """A document was read into its collection, or taken off the shelf: the
+    library is opened again so that it is in it, or no longer."""
+    try:
+        lib.reload()
+    except Exception as e:
+        print(f"[shelf] the library could not be opened again: {e!r}", flush=True)
 
 
 _TOO_LARGE = {
@@ -695,7 +716,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # the library the same thing (build log 59). In memory only.
     _library_asked = {"q": None, "at": 0.0}
 
-    def _answer_from_the_library(self, model: str, user_msg: str) -> bool:
+    def _answer_from_the_library(self, model: str, user_msg: str,
+                                 speaker: str = STEWARD) -> bool:
         """Show a passage word for word, model not called. True if handled.
 
         Andreas, 4 Oct 2026: "A library she answers from ... so it can be a
@@ -727,11 +749,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
             if lib.asks_contents(user_msg):
                 return serve(lib.contents(library), None, "what it holds")
+            ask = lib.asks_to_explain(user_msg)
+            if ask is not None:
+                # "explain that", after a passage of the steward's own
+                # document (build log 62): the model is given that passage
+                # and nothing else. With no passage on the screen it is hers
+                # to answer, as before; a passage of the built-in library
+                # stays word for word - a dose is not retold.
+                hit = last["hit"]
+                if hit is None or time.time() - last["at"] > 900:
+                    return False
+                if not hit.get("own"):
+                    return serve(lib.NOT_RETOLD, hit, "explain; the built-in library is not retold")
+                pending["q"] = None
+                last["at"] = time.time()          # "more" still walks on from it
+                self._explain_a_passage(model, user_msg, ask, hit, speaker)
+                return True
             asked = lib.lookup_query(user_msg)
             if asked is not None:
-                hit = library.look_up(asked)
+                own_only = lib.lookup_in_own(user_msg)
+                hit = library.look_up(asked, own_only=own_only)
+                if hit is None and own_only and not library.own_names():
+                    return serve("You have no documents of your own on this unit yet.",
+                                 None, "asked in his documents; there are none")
                 if hit is None:
-                    return serve(lib.nothing(asked, library.holds()), None, "asked; nothing to show")
+                    return serve(lib.nothing(asked, library.own_names() if own_only
+                                             else library.holds()), None, "asked; nothing to show")
                 return serve(lib.shown(hit), hit,
                              f"asked; {hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\"")
             if lib.says_look_it_up(user_msg):
@@ -772,6 +815,148 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # Not stored as an episode and not scored, like every answer the unit
         # gives without the model: the source's words are not something she
         # said, and must not come back into a later prompt as if they were.
+
+    def _explain_a_passage(self, model: str, user_msg: str, ask: str, hit: dict,
+                           speaker: str = STEWARD):
+        """Her own words about one passage of the steward's own document.
+
+        Andreas, 5 Oct 2026: "a way for Lyra to process that information ...
+        so Lyra can help me study" - asked how: "Find and show passages" and
+        "Explain a passage". The passage was shown word for word first; this
+        is the model's turn, and it is given the charter, the passage as it
+        was shown, and what he asked. No memory, no ring, no steward fact is
+        retrieved: the prompt holds 864 tokens, and an explanation is about
+        the passage in front of her, not about what was said last week.
+
+        Tagged on the console as her words about the passage, with its name
+        and page, so it is never mistaken for the document. Stored as
+        unverified: in the record and in the memory view, never retrieved
+        into a later prompt and never part of a ring - a 3B model's retelling
+        of a textbook must not come back later as something she knows (40d).
+        It earns no trust and costs none.
+        """
+        passage = lib.to_explain(hit)
+        c_name, c_lang = _settings()
+        system_prompt = (charter(c_name, c_lang) + "\n" + EXPLAIN_NOTE + "\n" + DATA_NOTE
+                         + "\n\n[WORKSPACE DATA]\n" + sanitize_injected(passage)
+                         + "\n[END WORKSPACE DATA]")
+        question = (ask or "").strip() or EXPLAIN_ASK
+        messages = [{"role": "system", "content": system_prompt},
+                    {"role": "user", "content": question}]
+        print(f"[library] explain; {hit['collection_id']} #{hit['id']} "
+              f"({len(passage)} characters shown to the model)", flush=True)
+        stream = _Stream(self)
+        try:
+            raw_response, ai_content = call_hailo_chat(model, messages, emit=stream)
+        except PromptTooLarge as e:
+            print(f"[token-budget] REFUSED: {e}", flush=True)
+            self._serve_plain(model, _TOO_LARGE.get(c_lang, _TOO_LARGE["en"]),
+                              source="library", mode="gate")
+            return
+        except Exception as e:
+            print(f"[generation] explain failed: {e!r}", flush=True)
+            if stream.started:
+                try:
+                    stream(json.dumps({"model": model,
+                                       "message": {"role": "assistant", "content": ""},
+                                       "done": True, "done_reason": "error",
+                                       "error": str(e)[:200]}))
+                except Exception:
+                    pass
+                return
+            self._send_json({"error": str(e)[:200]}, status=502)
+            return
+
+        report, check_failed = None, False
+        if ai_content:
+            try:
+                from honesty_check import check_response
+                report = check_response(question, ai_content, tool_outputs=(passage,),
+                                        memory_context="")
+            except Exception as e:
+                check_failed = True
+                print(f"[honesty] the check could not run: {e!r}", flush=True)
+        stream(_terminator(raw_response, model, {
+            "mode": UNVERIFIED,
+            "mode_requested": "factual",
+            "why": "her own words about a passage of the steward's document",
+            "checked": not check_failed,
+            "unbacked_sources": len(report.high) if report is not None else 0,
+            "unsourced_figures": len(report.medium) if report is not None else 0,
+            "used_tools": False, "memory_used": False,
+            # What she was given, so the console can say so under her words.
+            "explains": {"title": hit.get("title", ""), "heading": hit.get("heading", ""),
+                         "place": hit.get("place", ""),
+                         "part": len(passage) < len(hit.get("text", ""))},
+        }))
+        if not ai_content:
+            return
+        stored_ok = False
+        try:
+            root.store_interaction(user_msg, ai_content, resonance=0.4, mode=UNVERIFIED,
+                                   speaker=speaker)
+            stored_ok = True
+        except Exception as e:
+            global STORE_FAILURES
+            STORE_FAILURES += 1
+            print(f"[memory] turn NOT stored ({STORE_FAILURES} so far): {e!r}", flush=True)
+        record({
+            "mode_requested": "factual", "mode_stored": UNVERIFIED,
+            "why": "explains a passage of the steward's own document",
+            "honesty_high": len(report.high) if report is not None else 0,
+            "honesty_medium": len(report.medium) if report is not None else 0,
+            "resonance": 0.4, "used_tools": False, "declined": False,
+            "checked": not check_failed, "remembered": stored_ok, "facts_used": [],
+            "explains": "%s #%s" % (hit.get("collection_id", ""), hit.get("id", "")),
+            "prompt": user_msg[:160], "answer": ai_content[:160], "speaker": speaker,
+            "reading": False,
+        })
+
+    # ---- THE STEWARD'S OWN SHELF (build log 62) ----------------------------
+    def _shelf_listing(self):
+        self._send_json({"documents": own_shelf.listing(),
+                         "can_read_pdf": own_shelf.can_read_pdf(),
+                         "max_bytes": own_shelf.MAX_BYTES,
+                         "max_documents": own_shelf.MAX_DOCUMENTS,
+                         "kinds": list(own_shelf.KINDS)})
+
+    def _shelf_upload(self, body: bytes):
+        """A document for the shelf: the body is the file, its name is in
+        X-Filename (percent-encoded). Kept, listed as being read, and read in
+        the background; the console asks the listing how it went."""
+        try:
+            filename = urllib.parse.unquote(self.headers.get("X-Filename") or "", errors="strict")
+        except Exception:
+            filename = ""
+        if not filename or len(filename) > 255 or "\x00" in filename:
+            self._send_json({"error": "The file has no name I can use.", "code": "name"}, status=400)
+            return
+        entry, err = own_shelf.accept(filename, body)
+        if err:
+            self._send_json({"error": err, "code": "refused"}, status=400)
+            return
+        # The name and the words of a document are the steward's: the journal
+        # gets its kind and size only (37: what was said stays out of it).
+        print(f"[shelf] took a .{entry['kind']} of {entry['bytes']} bytes; reading it",
+              flush=True)
+        own_shelf.read_in_background(entry, done=_shelf_read)
+        self._send_json({"document": entry}, status=202)
+
+    def _shelf_remove(self, body: bytes):
+        try:
+            req = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            req = {}
+        doc_id = req.get("id") if isinstance(req, dict) else None
+        if not own_shelf.remove(doc_id if isinstance(doc_id, str) else ""):
+            self._send_json({"error": "There is no such document.", "code": "missing"}, status=404)
+            return
+        last = ProxyHandler._library_last
+        if last["hit"] is not None and last["hit"].get("own"):
+            last["hit"] = None                    # nothing of it stays to be explained
+        _shelf_read()
+        print("[shelf] a document was removed", flush=True)
+        self._send_json({"ok": True, "documents": own_shelf.listing()})
 
     def _proxy_chat_augmented(self, body: bytes):
         try:
@@ -905,7 +1090,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         a_story = request_mode == FICTION and not mode_reason.startswith("asks a what-if")
         library_line = False
         if not intent and not reading and not a_story:
-            if self._answer_from_the_library(model, user_msg):
+            if self._answer_from_the_library(model, user_msg, speaker):
                 return
             # She answers this one herself. It is remembered as the question
             # "look it up" would ask the library; and when one passage of the
@@ -1246,6 +1431,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         # The node's own routes. Everything else is passed through to
         # hailo-ollama so an ollama client still works unchanged.
+        if self.path == "/aetherseed/shelf":
+            self._shelf_listing()
+            return
         if self.path == "/aetherseed/status":
             try:
                 rs = root.get_status()
@@ -1396,10 +1584,26 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
+        if content_length > own_shelf.MAX_BYTES + 4096:
+            # Nothing this proxy takes is larger than one document for the
+            # shelf. Refused unread, and the connection closed with it.
+            self.close_connection = True
+            self._send_json({"error": "That file is too large: %d MB is the most I take."
+                             % (own_shelf.MAX_BYTES // (1024 * 1024)), "code": "too_large"},
+                            status=413)
+            return
         body = self.rfile.read(content_length) if content_length > 0 else b""
 
         if self.path == "/aetherseed/steward":
             self._steward(body)
+            return
+
+        if self.path == "/aetherseed/upload":
+            self._shelf_upload(body)
+            return
+
+        if self.path == "/aetherseed/shelf/remove":
+            self._shelf_remove(body)
             return
 
         if self.path == "/aetherseed/setup":
@@ -1480,6 +1684,14 @@ def main():
     print(f"  {trust.get_status_line()}")
     print("=" * 50)
     print()
+
+    # A start in the middle of reading a document: read it again.
+    try:
+        for entry in own_shelf.unfinished():
+            print("[shelf] a document was left half read; reading it again", flush=True)
+            own_shelf.read_in_background(entry, done=_shelf_read)
+    except Exception as e:
+        print(f"[shelf] could not look at the shelf: {e!r}", flush=True)
 
     server = ThreadedHTTPServer((PROXY_BIND, PROXY_PORT), ProxyHandler)
     try:
