@@ -473,6 +473,28 @@ told the date from this clock.
 **To let the unit out for maintenance**, until the next reboot or firewall
 reload: `sudo nft insert rule inet filter output accept`.
 
+### A unit that goes to a pilot home: SSH by key only (step 63)
+
+Andreas, 5 Oct, on the pilot units: *"leave the ssh open on the pilots"* —
+*"only you and me should be able to have access, once the units have
+finished their pilot test we need to be able to work on them … in the final
+build there will be no access like that, but for now in testing it is
+wise."* So, on a pilot unit, once the key of whoever is to reach it is in the
+admin account's `~/.ssh/authorized_keys`:
+
+```bash
+printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' \
+  | sudo tee /etc/ssh/sshd_config.d/01-aetherseed-key-only.conf
+sudo sshd -t && sudo systemctl reload ssh
+# from another terminal, BEFORE closing this one: a login by key works, and
+#   ssh -o PubkeyAuthentication=no <admin>@<unit>   is answered "Permission denied (publickey)"
+```
+
+A keyboard at the unit still logs in (Ctrl+Alt+F2) with the admin account's
+password; that is the way back in if the key is lost. To undo: remove the
+file, `sudo systemctl reload ssh`. Not part of the cartridge: it is the
+pilot's arrangement, and the final build has no such access at all.
+
 ## 15. The library — passages shown word for word (steps 57 to 59, after the tag)
 
 **Not in tag `stable-llama-2026-10-03`.** On `main` since build log 57, and on
