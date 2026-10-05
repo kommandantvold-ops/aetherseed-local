@@ -91,6 +91,32 @@ observer. Nothing was added."*).
 | `ecosystem_soak.py` | the soak and its report (`--report DIR` at any time) |
 | `ecosystem-probes.json` | the 22 questions and the words each answer should have |
 | `ecosystem-workspace/` | the copy's workspace |
+| `shelf_check.py` | a document of the steward's, tried on a copy (62) |
+| `shelf-asks-physics.json`, `shelf-plain-physics.json` | what build log 62 asked of its test document |
+
+## A document of the steward's, tried on a copy (build log 62)
+
+The steward can add documents of his own from the console (*Documents*); she
+shows passages of them word for word and, asked to *"explain that"*, puts
+one passage in her own words. To see what she makes of a document without
+putting it on her shelf or a word of it into her memory:
+
+```bash
+sudo -u aetherseed /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/shelf_check.py \
+    --dir /var/lib/aetherseed/training/shelf-$(date +%Y%m%d-%H%M%S) \
+    --document /tmp/book.pdf --asks /opt/aetherseed/training/shelf-asks-physics.json
+```
+
+It copies her memory as the soak does, runs a second proxy on the copy
+(port 8013) with a shelf of its own, adds the document there, and for each
+entry of `--asks` sends *"look up … in my book"* and then *"explain that"*
+(with the entry's own question, when it has one). `--plain` is a list of
+plain questions, to see which the document now answers unasked.
+`report.txt` in the run's folder is made to be read by a person: each
+passage as it was shown, and under it her words about it. An explanation is
+stored — as unverified — in the **copy**; her own memory and shelf are not
+touched. `shelf-asks-physics.json` and `shelf-plain-physics.json` are the
+questions of build log 62, for Crowell's *Conceptual Physics*.
 
 ## The offline proof (build log 56)
 

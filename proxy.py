@@ -195,6 +195,16 @@ EXPLAIN_NOTE = ("Your steward is studying a document of their own. One passage o
 EXPLAIN_ASK = "Explain this passage in simple words."
 
 
+def _which(hit: dict) -> str:
+    """A passage, for the journal. Of the built-in library: its collection,
+    number and title, as since build log 57. Of the steward's own document:
+    its number only - the name of a file he chose is his, and stays out of
+    the journal like everything he says (37)."""
+    if hit.get("own"):
+        return f"a document of the steward's own, #{hit['id']}"
+    return f"{hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\""
+
+
 def _shelf_read():
     """A document was read into its collection, or taken off the shelf: the
     library is opened again so that it is in it, or no longer."""
@@ -776,7 +786,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     return serve(lib.nothing(asked, library.own_names() if own_only
                                              else library.holds()), None, "asked; nothing to show")
                 return serve(lib.shown(hit), hit,
-                             f"asked; {hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\"")
+                             f"asked; {_which(hit)}")
             if lib.says_look_it_up(user_msg):
                 # After an answer of her own: the library, asked the same
                 # question. With nothing waiting, "look it up" is hers.
@@ -788,7 +798,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     return serve(lib.nothing(q, library.holds()), None,
                                  "look it up; nothing to show")
                 return serve(lib.shown(hit), hit,
-                             f"look it up; {hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\"")
+                             f"look it up; {_which(hit)}")
             if self._LIBRARY_MORE.match(user_msg or ""):
                 hit = last["hit"]
                 if hit is None or time.time() - last["at"] > 900:
@@ -796,7 +806,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 nxt = library.after(hit)
                 if nxt is None:
                     return serve("That is the end of that document.", None, "more; end of document")
-                return serve(lib.shown(nxt), nxt, f"more; {nxt['collection_id']} #{nxt['id']}")
+                return serve(lib.shown(nxt), nxt, f"more; {_which(nxt)}")
             # Unasked: only when the library is sure, and never a question
             # about her or about what she was told (logic/library.find).
             # It does NOT stand down for a [Known] line or a steward fact that
@@ -808,7 +818,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if hit is None:
                 return False
             return serve(lib.shown(hit), hit,
-                         f"unasked, sure; {hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\"")
+                         f"unasked, sure; {_which(hit)}")
         except Exception as e:
             print(f"[library] stood down: {e!r}", flush=True)
             return False
@@ -843,7 +853,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         question = (ask or "").strip() or EXPLAIN_ASK
         messages = [{"role": "system", "content": system_prompt},
                     {"role": "user", "content": question}]
-        print(f"[library] explain; {hit['collection_id']} #{hit['id']} "
+        print(f"[library] explain; {_which(hit)} "
               f"({len(passage)} characters shown to the model)", flush=True)
         stream = _Stream(self)
         try:

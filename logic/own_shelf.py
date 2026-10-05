@@ -161,6 +161,8 @@ def accept(filename: str, data: bytes, shelf: str = None) -> Tuple[Optional[dict
         if len(have) >= MAX_DOCUMENTS:
             return None, "The shelf is full (%d documents). Remove one first." % MAX_DOCUMENTS
         doc_id = make_id(filename, {e["id"] for e in have})
+        # his documents are his: the shelf is closed to the unit's other accounts
+        os.makedirs(shelf, mode=0o750, exist_ok=True)
         os.makedirs(os.path.join(shelf, "files"), mode=0o750, exist_ok=True)
         kept, _, _ = _paths(shelf, doc_id, ext)
         fd = os.open(kept, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)

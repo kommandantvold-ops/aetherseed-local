@@ -347,7 +347,7 @@ const T = {
     fromUnit: 'from the unit itself, not the model',
     fromLibrary: 'from the library, word for word, not the model',
     notLibrary: 'not from the library — say “look it up” to search it',
-    explains: (x) => `her own words about the passage above${x ? ' (' + x + ')' : ''} — not the document’s`,
+    explains: (x) => `her own words about the passage above${x ? ' (' + x + ')' : ''} — not the document’s; check them against it`,
     explainsPart: 'she was given only the first part of it',
     shelf: 'Documents', shelfTitle: 'Your documents',
     shelfHelp: (n) => `Documents you add are kept on this unit and become part of ${n || 'the companion'}’s library. Nothing is sent anywhere.`,
@@ -446,7 +446,7 @@ const T = {
     fromUnit: 'fra enheten selv, ikke fra modellen',
     fromLibrary: 'fra biblioteket, ord for ord, ikke fra modellen',
     notLibrary: 'ikke fra biblioteket — si «slå det opp» for å søke der',
-    explains: (x) => `hennes egne ord om avsnittet over${x ? ' (' + x + ')' : ''} — ikke dokumentets`,
+    explains: (x) => `hennes egne ord om avsnittet over${x ? ' (' + x + ')' : ''} — ikke dokumentets; sjekk dem mot det`,
     explainsPart: 'hun fikk bare den første delen av det',
     shelf: 'Dokumenter', shelfTitle: 'Dine dokumenter',
     shelfHelp: (n) => `Dokumenter du legger til, blir liggende på denne enheten og blir en del av biblioteket til ${n || 'følgesvennen'}. Ingenting sendes noe sted.`,
@@ -570,7 +570,10 @@ function provenance(turnEl, p) {
   // question (build log 59). "look it up" asks the library the same thing.
   if (p.library_line) tag(s.notLibrary, 'quiet');
   // Her own words about a passage of the steward's own document (build log
-  // 62): the passage stands above, word for word; this is the model's.
+  // 62): the passage stands above, word for word; this is the model's. Read
+  // by hand on Lyra, about half of 18 explanations of a physics book said
+  // something the passage does not - a wrong number, a film it never names,
+  // once the opposite - so the label says to check them, every time.
   if (p.explains) {
     const where = [p.explains.title ? `“${p.explains.title}”` : '', p.explains.place || '']
       .filter(Boolean).join(', ');

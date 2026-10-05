@@ -605,16 +605,29 @@ record, never retrieved into a later prompt, never in a ring. A passage of
 the **built-in** library is not retold: asked to explain one, she says it
 stays word for word.
 
-**What it cannot do.** A scan — pictures of pages — has no words and is
-refused with that reason. Formulas come out of a PDF flat: `E = mc2` for
-E = mc², `3.2 × 106` for 3.2 × 10⁶, a fraction as two lines; she is given
-them as they are shown. Headings are found when they are in capitals, when a
-"Chapter N" line stands over them, or when they carry a section number
-(`1.7 Equivalence of mass and energy`); in a book of another make the
-passages are found by their words but may stand under the wrong heading or
-none. An explanation is two or three sentences — the bounds on every answer
-of hers (step 13) — and it is the model's: build log 62 has what was read by
-hand.
+**What it cannot do.** Her explanations cannot be relied on. Read by hand on
+Lyra, of 18 explanations of passages of a physics textbook 7 were right, 9
+said something the passage does not or denied something it does (a 120-watt
+bulb for its 100-watt one; that the puck "moves randomly"; once the opposite
+of the passage), one said nothing and one left the passage for "general
+knowledge". Two other ways of
+handing her the passage did no better, and in both she named a film the
+passage does not name. The console therefore labels every explanation *"her
+own words about the passage above — not the document's; check them against
+it"*, and the passage itself stands above it, word for word. An explanation
+is two or three sentences — the bounds on every answer of hers (step 13).
+
+A scan — pictures of pages — has no words and is refused with that reason.
+Formulas come out of a PDF flat: `E = mc2` for E = mc², `3.2 × 106` for
+3.2 × 10⁶, a fraction as two lines; they are shown so, and she is given them
+so (asked how many grams are in a kilogram, she once read the book's 10³ g
+as "103 g (one hundred three grams)"). Headings are found when they are in
+capitals, when a "Chapter N" line stands over them, or when they carry a
+section number (`1.7 Equivalence of mass and energy`); in a book of another
+make the passages are found by their words but may stand under the wrong
+heading or none. A chapter's problems are filed under its last section.
+`training/shelf_check.py` tries a document on a copy of her memory
+(`training/README.md`).
 
 ## Decisions this build carries, not steps
 

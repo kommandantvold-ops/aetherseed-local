@@ -107,6 +107,12 @@ class WhatTheShelfTakes(Shelf):
             self.assertEqual(f.read(), NOTES.encode())
         self.assertEqual([d["id"] for d in S.listing()], [e["id"]])
 
+    def test_the_shelf_is_closed_to_the_units_other_accounts(self):
+        e = self.take("notes.txt", NOTES.encode())
+        for path in (self.shelf, os.path.join(self.shelf, "files"),
+                     os.path.join(self.shelf, "files", e["id"] + ".txt")):
+            self.assertEqual(os.stat(path).st_mode & 0o007, 0, path)
+
     def test_only_what_it_can_read(self):
         for name, data, says in (
                 ("photo.jpg", b"\xff\xd8\xff", "PDF or a plain text"),
@@ -546,6 +552,17 @@ class AtTheProxy(_Proxy):
         self.assertNotIn("explains", meta)
         self.assertEqual(self.post("/aetherseed/shelf/remove", json.dumps({"id": doc}),
                                    {"Content-Type": "application/json"})[0], 404)
+
+    def test_the_name_of_his_document_stays_out_of_the_journal(self):
+        hit = {"own": True, "id": 7, "title": "Letters to my doctor",
+               "collection_id": "own-letters-to-my-doctor"}
+        said = proxy._which(hit)
+        self.assertIn("#7", said)
+        for word in ("letters", "doctor", "Letters"):
+            self.assertNotIn(word, said)
+        # the built-in library is named, as before
+        self.assertIn("water", proxy._which({"id": 2, "title": "Purifying Water",
+                                             "collection_id": "water"}))
 
     def test_what_is_refused_says_why(self):
         status, d = self.upload("holiday.jpg", b"\xff\xd8\xff")
