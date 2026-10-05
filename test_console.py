@@ -380,6 +380,7 @@ class TheStewardsOwnShelf(unittest.TestCase):
 
     def test_the_page_offers_it_in_both_languages_and_not_on_the_unit_itself(self):
         for key in ("shelf:", "shelfTitle:", "shelfHelp:", "shelfAdd:", "shelfHere:", "shelfHow:",
+                    "shelfHowExplain:",
                     "shelfNone:", "shelfSending:", "shelfSent:", "shelfTooLarge:", "shelfFailed:",
                     "docReading:", "docFailed:", "docReady:", "docRemove:", "docSure:",
                     "explains:", "explainsPart:"):
@@ -392,6 +393,14 @@ class TheStewardsOwnShelf(unittest.TestCase):
         shelf = HTML[HTML.index("async function loadShelf()"):HTML.index("// ---- the ring tree")]
         self.assertNotIn("innerHTML", shelf)
         self.assertNotIn("insertAdjacentHTML", shelf)
+
+    def test_the_page_tells_of_explaining_only_where_it_is_on(self):
+        # off in the build (build log 62): the page says how to look up, and
+        # says "explain that" only when the unit reports that it explains
+        self.assertIn("d.explains ? s.shelfHowExplain : s.shelfHow", HTML)
+        for line in re.findall(r"\n    shelfHow: '([^\n]*)',\n", HTML):
+            self.assertNotRegex(line, r"explain|forklar")
+        self.assertEqual(len(re.findall(r"\n    shelfHow: '", HTML)), 2)
 
     def test_her_words_about_a_passage_are_labelled_as_hers(self):
         self.assertIn("if (p.explains)", HTML)

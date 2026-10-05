@@ -354,7 +354,8 @@ const T = {
     shelfAdd: 'Add a document', shelfKinds: (mb) => `A PDF or a plain text file, up to ${mb} MB.`,
     shelfHere: 'On this screen no file can be chosen. Take the cable out, join the unit’s Wi-Fi with a phone or a laptop, open this page there, and add the document from it.',
     shelfNoPdf: 'This unit cannot read PDFs yet; text files work.',
-    shelfHow: 'Then ask: “look up momentum in my book”. Under a passage, say “explain that” — or “explain that: why is it negative?” — and the answer is in the companion’s own words, labelled as such.',
+    shelfHow: 'Then ask: “look up momentum in my book”. The passage is shown word for word, with its section and page; say “more” for what follows it.',
+    shelfHowExplain: 'Then ask: “look up momentum in my book”. Under a passage, say “explain that” — or “explain that: why is it negative?” — and the answer is in the companion’s own words, labelled as such.',
     shelfNone: 'No documents yet.', shelfNoList: 'Could not read the list.',
     shelfSending: (pc) => `Sending… ${pc}%`, shelfSent: 'Received. Reading it — a long book takes a few minutes.',
     shelfTooLarge: (mb) => `That file is too large: ${mb} MB is the most.`,
@@ -453,7 +454,8 @@ const T = {
     shelfAdd: 'Legg til et dokument', shelfKinds: (mb) => `En PDF eller en ren tekstfil, opptil ${mb} MB.`,
     shelfHere: 'På denne skjermen kan ingen fil velges. Ta ut kabelen, koble en telefon eller en PC til enhetens Wi-Fi, åpne denne siden der, og legg til dokumentet derfra.',
     shelfNoPdf: 'Denne enheten kan ikke lese PDF ennå; tekstfiler virker.',
-    shelfHow: 'Spør så: «look up momentum in my book». Under et avsnitt kan du si «forklar det» — eller «explain that: why is it negative?» — og svaret er med følgesvennens egne ord, merket som det.',
+    shelfHow: 'Spør så: «look up momentum in my book». Avsnittet vises ord for ord, med kapittel og side; si «more» for det som følger.',
+    shelfHowExplain: 'Spør så: «look up momentum in my book». Under et avsnitt kan du si «forklar det» — eller «explain that: why is it negative?» — og svaret er med følgesvennens egne ord, merket som det.',
     shelfNone: 'Ingen dokumenter ennå.', shelfNoList: 'Kunne ikke lese listen.',
     shelfSending: (pc) => `Sender … ${pc} %`, shelfSent: 'Mottatt. Leser det — en lang bok tar noen minutter.',
     shelfTooLarge: (mb) => `Filen er for stor: ${mb} MB er det meste.`,
@@ -724,6 +726,9 @@ async function loadShelf() {
     return;
   }
   shelfInfo = d;
+  // Explaining is off in the build (build log 62); the page tells of it only
+  // on a unit where it is on.
+  $('shelfHow').textContent = d.explains ? s.shelfHowExplain : s.shelfHow;
   const mb = Math.floor((d.max_bytes || 0) / 1048576);
   $('shelfAdd').title = s.shelfKinds(mb);
   if (!ON_THE_UNIT && d.can_read_pdf === false && $('shelfError').hidden) shelfSay('shelfError', s.shelfNoPdf);
@@ -774,7 +779,6 @@ $('shelfBtn').onclick = () => {
   $('shelfClose').textContent = s.close;
   $('shelfHelp').textContent = s.shelfHelp(name);
   $('shelfAdd').textContent = s.shelfAdd;
-  $('shelfHow').textContent = s.shelfHow;
   shelfSay('shelfError', ''); shelfSay('shelfProgress', '');
   // The unit's own browser opens no file dialog (it is locked down, INSTALL
   // 9): there the button is not offered, and the way to add is told.

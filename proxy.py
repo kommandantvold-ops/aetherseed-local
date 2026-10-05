@@ -766,11 +766,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 # and nothing else. With no passage on the screen it is hers
                 # to answer, as before; a passage of the built-in library
                 # stays word for word - a dose is not retold.
+                # OFF in the build (lib.EXPLAINS; Andreas, 5 Oct: "leave it
+                # off"): then a passage of his own stays word for word too.
+                # Said by the unit, model not called - handed "explain that"
+                # with no passage in front of it, the model would explain
+                # something else.
                 hit = last["hit"]
                 if hit is None or time.time() - last["at"] > 900:
                     return False
                 if not hit.get("own"):
-                    return serve(lib.NOT_RETOLD, hit, "explain; the built-in library is not retold")
+                    return serve(lib.stays(hit), hit, "explain; the built-in library is not retold")
+                if not lib.EXPLAINS:
+                    return serve(lib.stays(hit), hit, "explain; explaining is off in this build")
                 pending["q"] = None
                 last["at"] = time.time()          # "more" still walks on from it
                 self._explain_a_passage(model, user_msg, ask, hit, speaker)
@@ -926,6 +933,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _shelf_listing(self):
         self._send_json({"documents": own_shelf.listing(),
                          "can_read_pdf": own_shelf.can_read_pdf(),
+                         "explains": bool(lib.EXPLAINS),
                          "max_bytes": own_shelf.MAX_BYTES,
                          "max_documents": own_shelf.MAX_DOCUMENTS,
                          "kinds": list(own_shelf.KINDS)})

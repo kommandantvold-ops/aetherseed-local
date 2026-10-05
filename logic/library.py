@@ -27,8 +27,9 @@ WHEN SHE ANSWERS FROM IT.
     just asked. When one passage says every word of a question she answered
     herself, a line under her answer says so (says_it_all, build log 59).
   - "explain that", after a passage of the steward's OWN document: the model
-    is given that one passage and puts it in her words (build log 62). Never
-    for the built-in collections: a dose is not retold.
+    is given that one passage and puts it in her words (build log 62). OFF
+    in the build (EXPLAINS): read by hand, 7 of 18 explanations were right.
+    Never for the built-in collections: a dose is not retold.
   - Unasked, only when she is sure (find): the passage is ABOUT the
     question by its own title or heading - a rare word of the question that
     a title or heading says, or a title or heading that the question itself
@@ -249,6 +250,17 @@ EXPLAIN = re.compile(
     r"(?:\s*,?\s*please)?\s*(?:[?.!]*\s*$|[:,-]\s*(?P<ask>.{3,300}?)\s*$)", re.I)
 
 
+# OFF in the build. Andreas, 5 Oct 2026, shown what was read by hand on Lyra -
+# of 18 explanations of a physics textbook 7 right, 9 saying something the
+# passage does not: "leave it off". The way to turn it on is kept for the
+# day a model explains better, and so that training/shelf_check.py can
+# measure that day on a copy (--explain): AETHERSEED_EXPLAIN=1 in the
+# proxy's environment. No unit file sets it. While off, "explain that" after
+# a passage is answered as it is for the built-in library: the passage
+# stays word for word.
+EXPLAINS = os.environ.get("AETHERSEED_EXPLAIN") == "1"
+
+
 def asks_to_explain(text: str):
     """None, or what he asked about the passage ("" when just "explain that")."""
     m = EXPLAIN.match(text or "")
@@ -272,7 +284,17 @@ def to_explain(hit: dict) -> str:
 
 
 NOT_RETOLD = ("That passage is from the built-in library, and I keep it word for word: "
-              "I do not retell it. Say \"more\" for what follows it.")
+              "I do not retell it.")
+NOT_EXPLAINED = ("I show passages of your documents word for word, and I do not put them "
+                 "in my own words.")
+AND_MORE = ' Say "more" for what follows it.'
+
+
+def stays(hit: dict) -> str:
+    """Asked to explain a passage she does not explain: that it stays word
+    for word - and, where something follows it, how to read on."""
+    more = hit.get("seq") and hit.get("last") and hit["seq"] < hit["last"]
+    return (NOT_EXPLAINED if hit.get("own") else NOT_RETOLD) + (AND_MORE if more else "")
 
 
 def says_look_it_up(text: str) -> bool:
@@ -838,8 +860,9 @@ def shown(hit: dict) -> str:
         lines.append("[the passage goes on]")
     lines += ["", "Source: " + " - ".join(where)]
     more = hit.get("seq") and hit.get("last") and hit["seq"] < hit["last"]
-    if hit.get("own"):
-        # his own document: she may also put the passage in her own words
+    if hit.get("own") and EXPLAINS:
+        # his own document, and explaining is on: she may also put the
+        # passage in her own words
         lines.append('Say "more" for what follows it, or "explain that".' if more
                      else 'Say "explain that" and I put it in my own words.')
     elif more:

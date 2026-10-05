@@ -553,7 +553,7 @@ of the three has been checked. For a unit that leaves, each collection's
 licence has to be checked and passed to the converter (`--licence`, or the
 recipe's `licence`); it is kept in the file.
 
-## 16. The steward's own documents — upload, look up, "explain that" (step 62, after the tag)
+## 16. The steward's own documents — upload and look up (step 62, after the tag)
 
 Not part of the tag `stable-llama-2026-10-03`. It is on `main`, and on Lyra
 since 5 Oct. Andreas: *"a file upload button in the gui, that adds documents
@@ -596,26 +596,33 @@ like the memory.
 momentum in my book"* (or just *"look up momentum"*) shows the passage word
 for word, with the document's name, its section and its page; a section
 asked for by its name opens at its beginning, and *"more"* walks on.
-Unasked she shows a passage of it only by the rule of §15. Under a passage
-of his own document, ***"explain that"*** — or *"explain that: why is it
-negative?"* — gives the model that one passage and his question, and
-nothing else: no memory, no ring. Her answer is labelled on the console as
-her own words about the passage, and is stored as unverified — in the
-record, never retrieved into a later prompt, never in a ring. A passage of
-the **built-in** library is not retold: asked to explain one, she says it
-stays word for word.
+Unasked she shows a passage of it only by the rule of §15.
 
-**What it cannot do.** Her explanations cannot be relied on. Read by hand on
+**"explain that" is built, and off.** Under a passage of his own document,
+*"explain that"* — or *"explain that: why is it negative?"* — would give the
+model that one passage and his question, and nothing else: no memory, no
+ring; the answer labelled on the console as her own words about the passage,
+and stored as unverified (in the record, never retrieved into a later
+prompt, never in a ring — Andreas, 5 Oct: *"set aside"*). Shown what was
+read by hand (below), he said: ***"leave it off"***. So in this build she
+answers *"explain that"* after a passage as she does for the built-in
+library, which is never retold: the passage stays word for word. It is on
+only where the proxy's environment says `AETHERSEED_EXPLAIN=1`; no unit file
+says it, and `training/shelf_check.py --explain` sets it for a copy, so that
+a later model can be measured the same way.
+
+**What it cannot do.** Her explanations could not be relied on, which is why
+they are off. Read by hand on
 Lyra, of 18 explanations of passages of a physics textbook 7 were right, 9
 said something the passage does not or denied something it does (a 120-watt
 bulb for its 100-watt one; that the puck "moves randomly"; once the opposite
 of the passage), one said nothing and one left the passage for "general
 knowledge". Two other ways of
 handing her the passage did no better, and in both she named a film the
-passage does not name. The console therefore labels every explanation *"her
-own words about the passage above — not the document's; check them against
-it"*, and the passage itself stands above it, word for word. An explanation
-is two or three sentences — the bounds on every answer of hers (step 13).
+passage does not name. Where it is turned on, the console labels every
+explanation *"her own words about the passage above — not the document's;
+check them against it"*. An explanation is two or three sentences — the
+bounds on every answer of hers (step 13).
 
 A scan — pictures of pages — has no words and is refused with that reason.
 Formulas come out of a PDF flat: `E = mc2` for E = mc², `3.2 × 106` for

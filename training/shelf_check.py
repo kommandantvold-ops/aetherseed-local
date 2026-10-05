@@ -11,8 +11,10 @@ in the copy. Nothing of hers is written. The built-in library is the unit's
 own, read-only, so what is shown is what she would show.
 
 --asks is a list of {"look": "momentum", "ask": "why is it conserved?"}: for
-each, "look up <look> in my book", then "explain that" (with ": <ask>" when
-one is given). --plain is a list of plain questions, asked as they are, to
+each, "look up <look> in my book". With --explain, "explain that" follows
+(with ": <ask>" when one is given): explaining is OFF in the build (Andreas,
+5 Oct 2026: "leave it off"), and --explain turns it on for the copy's proxy
+only, so that a later model can be measured the same way. --plain is a list of plain questions, asked as they are, to
 see which of them the document now answers unasked. Every turn goes to
 turns.jsonl and, to be read by a person, to report.txt: the passage as it
 was shown, and under it her words about it. Build log 62.
@@ -64,6 +66,8 @@ def main(argv=None):
     ap.add_argument("--name", help="the file name to give it (default: its own)")
     ap.add_argument("--asks", help='JSON: [{"look": ..., "ask": ...}, ...]')
     ap.add_argument("--plain", help="JSON: [question, ...], asked as they are")
+    ap.add_argument("--explain", action="store_true",
+                    help='turn "explain that" on for the copy, and ask it after each passage')
     ap.add_argument("--port", type=int, default=8013)
     a = ap.parse_args(argv)
 
@@ -72,6 +76,10 @@ def main(argv=None):
     os.makedirs(a.dir, exist_ok=True)
     home = os.path.join(a.dir, "home")
     episodes = eco.copy_home(a.copy_from, home)
+    if a.explain:
+        os.environ["AETHERSEED_EXPLAIN"] = "1"      # the copy's proxy only: it inherits this
+    else:
+        os.environ.pop("AETHERSEED_EXPLAIN", None)
     proc, base = eco.start_proxy(home, a.port, os.path.join(a.dir, "proxy.log"))
     turns, lines = os.path.join(a.dir, "turns.jsonl"), []
 
@@ -86,7 +94,9 @@ def main(argv=None):
 
     try:
         before = eco.get(base, "/aetherseed/status")
-        say("copy of %d episodes; build %s" % (episodes, eco.build_id()))
+        say("copy of %d episodes; build %s; explaining %s" % (
+            episodes, eco.build_id(),
+            "ON for this copy" if eco.get(base, "/aetherseed/shelf").get("explains") else "off"))
         status, d = upload(base, a.document, a.name)
         if status != 202:
             say("REFUSED (%s): %s" % (status, d.get("error")))
@@ -109,7 +119,8 @@ def main(argv=None):
             say("\n" + "=" * 78 + "\n[%d] YOU: %s   (%s, %.1f s)\n" % (
                 n, look, shown["meta"].get("mode"), shown["secs"]))
             say(shown["reply"])
-            if shown["meta"].get("mode") != "library" or "Source:" not in shown["reply"]:
+            if not a.explain or shown["meta"].get("mode") != "library" \
+                    or "Source:" not in shown["reply"]:
                 continue
             explain = "explain that" + (": " + item["ask"] if item.get("ask") else "")
             told = eco.chat(base, explain)

@@ -339,14 +339,35 @@ class InTheLibrary(Shelf):
         self.assertIn("- physics notes:", said)
         self.assertNotIn("The library on this unit:", said)
 
-    def test_a_passage_of_it_is_shown_as_his_and_offers_to_be_explained(self):
+    def test_a_passage_of_it_is_shown_as_his(self):
         hit = self.lib.look_up("momentum of a body")
         self.assertTrue(hit["own"])
         shown = L.shown(hit)
         self.assertIn("From your own document, word for word:", shown)
         self.assertIn("mass times its velocity", shown)
         self.assertIn('Source: your document "physics notes" - Momentum', shown)
-        self.assertIn('"explain that"', shown)
+        # explaining is off in the build: the passage does not offer it
+        self.assertFalse(L.EXPLAINS)
+        self.assertNotIn("explain", shown)
+        saved, L.EXPLAINS = L.EXPLAINS, True
+        try:
+            self.assertIn('"explain that"', L.shown(hit))
+        finally:
+            L.EXPLAINS = saved
+
+    def test_explaining_is_off_unless_the_proxys_environment_says_otherwise(self):
+        # Andreas, 5 Oct 2026: "leave it off". On only where a person set it
+        # on for that proxy - training/shelf_check.py --explain, on a copy.
+        import subprocess
+        env = {k: v for k, v in os.environ.items() if k != "AETHERSEED_EXPLAIN"}
+        ask = [sys.executable, "-B", "-c", "from logic import library as L; print(L.EXPLAINS)"]
+        self.assertEqual(subprocess.run(ask, env=env, cwd=HERE, capture_output=True,
+                                        text=True).stdout.strip(), "False")
+        self.assertEqual(subprocess.run(ask, env=dict(env, AETHERSEED_EXPLAIN="1"), cwd=HERE,
+                                        capture_output=True, text=True).stdout.strip(), "True")
+        for name in os.listdir(os.path.join(HERE, "services")):
+            with open(os.path.join(HERE, "services", name), encoding="utf-8", errors="replace") as f:
+                self.assertNotIn("AETHERSEED_EXPLAIN", f.read(), name)
 
     def test_the_built_in_library_alone_is_measured_without_it(self):
         # training/library_check.py and test_library.py name a directory:
@@ -391,7 +412,8 @@ from test_library import Lib, BLEACH  # noqa: E402
 
 
 class AtTheProxy(_Proxy):
-    """Uploaded through the proxy, read, shown, explained."""
+    """Uploaded through the proxy, read, shown - and, where explaining is
+    turned on, explained. It is off in the build; the tests of it turn it on."""
 
     @classmethod
     def setUpClass(cls):
@@ -406,6 +428,7 @@ class AtTheProxy(_Proxy):
     def setUp(self):
         super().setUp()
         self.saved = (L._LIB, L.LIBRARY_DIR, S.SHELF_DIR)
+        self.explains, L.EXPLAINS = L.EXPLAINS, True
         L.LIBRARY_DIR = Lib.lib.dir                  # the built-in collections of the tests
         S.SHELF_DIR = os.path.join(self.tmp, "aetherseed-shelf")
         L.reload()
@@ -414,6 +437,7 @@ class AtTheProxy(_Proxy):
 
     def tearDown(self):
         L._LIB, L.LIBRARY_DIR, S.SHELF_DIR = self.saved
+        L.EXPLAINS = self.explains
         super().tearDown()
 
     def post(self, path, body, headers):
@@ -499,6 +523,31 @@ class AtTheProxy(_Proxy):
         self.assertNotIn("hard a thing is to stop",
                          proxy.root.retrieve_context("What is momentum?") or "")
 
+    def test_off_in_the_build_a_passage_of_his_stays_word_for_word(self):
+        L.EXPLAINS = False
+        self.read_in()
+        self.assertFalse(self.get("/aetherseed/shelf")["explains"])
+        shown, _ = self.served("look up velocity position in my book")
+        self.assertNotIn("explain", shown)
+        before = len(proxy.root.store.get_all_episodes())
+        for said in ("explain that", "explain that: why is the lorry harder to stop?",
+                     "what does that mean?"):
+            with self.subTest(said=said):
+                reply, meta = self.served(said)                  # the model is not called
+                self.assertEqual(reply, L.NOT_EXPLAINED + L.AND_MORE)
+                self.assertEqual(meta["mode"], "library")
+                self.assertNotIn("explains", meta)
+        self.assertEqual(len(proxy.root.store.get_all_episodes()), before)
+        self.assertIn("From your own document", self.served("more")[0])   # "more" walks on
+        # ... and at the end of a document she does not offer what is not there
+        self.assertEqual(self.served("explain that")[0], L.NOT_EXPLAINED)
+
+    def test_off_in_the_build_with_no_passage_shown_it_is_hers_as_before(self):
+        L.EXPLAINS = False
+        n = len(SCRIPT["requests"])
+        self.ask("explain that")
+        self.assertEqual(len(SCRIPT["requests"]), n + 1)
+
     def test_his_own_question_about_the_passage_is_what_she_is_asked(self):
         self.read_in()
         self.served("look up momentum in my book")
@@ -517,7 +566,7 @@ class AtTheProxy(_Proxy):
     def test_the_built_in_library_is_not_retold(self):
         self.served("How much bleach do I add to a gallon of water?")
         reply, meta = self.served("explain that")
-        self.assertEqual(reply, L.NOT_RETOLD)
+        self.assertEqual(reply, L.NOT_RETOLD + L.AND_MORE)
         self.assertEqual(meta["mode"], "library")
         self.assertIn("Caution", self.served("more")[0])                 # and "more" still works
 

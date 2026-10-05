@@ -97,9 +97,8 @@ observer. Nothing was added."*).
 ## A document of the steward's, tried on a copy (build log 62)
 
 The steward can add documents of his own from the console (*Documents*); she
-shows passages of them word for word and, asked to *"explain that"*, puts
-one passage in her own words. To see what she makes of a document without
-putting it on her shelf or a word of it into her memory:
+shows passages of them word for word. To see what she makes of a document
+without putting it on her shelf or a word of it into her memory:
 
 ```bash
 sudo -u aetherseed /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/shelf_check.py \
@@ -109,14 +108,21 @@ sudo -u aetherseed /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/
 
 It copies her memory as the soak does, runs a second proxy on the copy
 (port 8013) with a shelf of its own, adds the document there, and for each
-entry of `--asks` sends *"look up … in my book"* and then *"explain that"*
-(with the entry's own question, when it has one). `--plain` is a list of
+entry of `--asks` sends *"look up … in my book"*. `--plain` is a list of
 plain questions, to see which the document now answers unasked.
-`report.txt` in the run's folder is made to be read by a person: each
-passage as it was shown, and under it her words about it. An explanation is
-stored — as unverified — in the **copy**; her own memory and shelf are not
-touched. `shelf-asks-physics.json` and `shelf-plain-physics.json` are the
-questions of build log 62, for Crowell's *Conceptual Physics*.
+`report.txt` in the run's folder is made to be read by a person.
+
+**`--explain`** — *"explain that"*, her own words about one passage, is built
+and **off in the build**: read by hand on 5 Oct, 7 of 18 explanations of a
+physics book were right and 9 said something the passage does not, and
+Andreas said *"leave it off"*. `--explain` turns it on for the copy's proxy
+only and asks it after each passage (with the entry's own question, when it
+has one); the report sets her words under the passage they are about. An
+explanation is stored — as unverified — in the **copy**. That is how a later
+model is to be measured before anyone turns it on: the same eighteen
+passages, read by a person. `shelf-asks-physics.json` and
+`shelf-plain-physics.json` are the questions of build log 62, for Crowell's
+*Conceptual Physics*.
 
 ## The offline proof (build log 56)
 
