@@ -101,6 +101,16 @@ RuntimeDirectoryMode=0700
 # as a 317 mm ribbon down the middle of a 1600 mm screen. The right number
 # depends on where the viewer actually stands and is a judgement to be made in
 # front of it, not from here.
+#
+# THE SCALE IS THE UNIT'S OWN (build log 63). The pilot units stand in front
+# of monitors, not that television: asked on 5 Oct 2026 what Stella's screen
+# needs, Andreas said 1.5. So 3 is what a unit runs at that has been told
+# nothing, and /etc/aetherseed/kiosk.env - one line, AETHERSEED_SCALE=1.5 -
+# says otherwise for that unit. This file stays the same on every unit; the
+# cartridge records the scale a unit runs at beside it (kiosk.scale).
+Environment=AETHERSEED_SCALE=3
+EnvironmentFile=-/etc/aetherseed/kiosk.env
+
 # WAIT FOR THE CONSOLE BEFORE OPENING THE BROWSER (build log 53). After=
 # aetherseed-gui.service only means "after that unit was started" - its server
 # may not be listening yet, and a kiosk browser that gets no page does not ask
@@ -133,7 +143,7 @@ ExecStart=/usr/bin/labwc -C /opt/aetherseed/kiosk/labwc -s "/usr/bin/chromium \
     --ozone-platform=wayland \
     --kiosk \
     --app=http://127.0.0.1:2077/ \
-    --force-device-scale-factor=3 \
+    --force-device-scale-factor=${AETHERSEED_SCALE} \
     --no-first-run --no-default-browser-check \
     --disable-features=Translate,AutofillServerCommunication \
     --disable-background-networking \

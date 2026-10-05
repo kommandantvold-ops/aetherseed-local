@@ -164,6 +164,10 @@ collect() {
   # unit without it is a different and worse device.
   emit service.gui.enabled          "$(systemctl is-enabled aetherseed-gui 2>/dev/null || echo unknown)"
   emit service.kiosk.enabled        "$(systemctl is-enabled aetherseed-kiosk 2>/dev/null || echo unknown)"
+  # The scale the screen runs at is the unit's own (build log 63): 3 unless
+  # /etc/aetherseed/kiosk.env says otherwise. Recorded, so that two units of
+  # one build that differ in it differ here, on a line that says in what.
+  emit kiosk.scale "$( (grep -hs '^AETHERSEED_SCALE=' /etc/aetherseed/kiosk.env || echo AETHERSEED_SCALE=3) | tail -1 | cut -d= -f2)"
   # What restarts the screen when the console is not on it (build log 53).
   emit service.kiosk_watch.enabled  "$(systemctl is-enabled aetherseed-kiosk-watch 2>/dev/null || echo unknown)"
   emit service.getty_tty2.enabled   "$(systemctl is-enabled getty@tty2 2>/dev/null || echo unknown)"

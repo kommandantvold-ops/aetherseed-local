@@ -226,7 +226,8 @@ labwc, in app mode, pointed at it.
 - **Scaled for the screen it is on.** The development unit drives a 72-inch
   television (1600 × 900 mm at 3840 × 2160), so the kiosk runs at
   `--force-device-scale-factor=3`. A monitor at arm's length wants less; this
-  is a judgement to make in front of the screen.
+  is a judgement to make in front of the screen, and the unit's own to hold:
+  one line in `/etc/aetherseed/kiosk.env` (`docs/INSTALL.md`, step 9).
 
 ### Replies stream, and carry the correct tag
 

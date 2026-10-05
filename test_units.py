@@ -102,6 +102,21 @@ class TestNoPersonInTheBuild(unittest.TestCase):
         self.assertIn("WantedBy=multi-user.target", d)
         self.assertFalse(any(l.startswith("User=") for l in d))   # root: it restarts a unit
 
+    def test_the_scale_of_the_screen_is_the_units_own(self):
+        # build log 63: Stella's monitor wants 1.5, Lyra's television 3. One
+        # unit file for every unit; a unit that was told nothing runs at 3.
+        d = unit("aetherseed-kiosk.service")
+        self.assertIn("Environment=AETHERSEED_SCALE=3", d)
+        self.assertIn("EnvironmentFile=-/etc/aetherseed/kiosk.env", d)     # "-": it may be absent
+        self.assertLess(d.index("Environment=AETHERSEED_SCALE=3"),
+                        d.index("EnvironmentFile=-/etc/aetherseed/kiosk.env"))   # the file wins
+        flags = [l for l in d if "--force-device-scale-factor" in l and not l.startswith("#")]
+        self.assertEqual([l.strip() for l in flags],
+                         ["--force-device-scale-factor=${AETHERSEED_SCALE} \\"])
+        sh = os.path.join(os.path.dirname(SERVICES), "tools", "cartridge.sh")
+        with open(sh, encoding="utf-8") as f:
+            self.assertIn("emit kiosk.scale", f.read())
+
     def test_the_kiosk_runs_as_its_own_account_with_its_own_profile(self):
         d = unit("aetherseed-kiosk.service")
         self.assertIn("User=aetherseed-kiosk", d)

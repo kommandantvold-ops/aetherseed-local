@@ -262,8 +262,9 @@ class TheStewardCreditTag(unittest.TestCase):
 
 class OnlyTheUnitsOwnScreenIsTheWitness(unittest.TestCase):
     """Build log 54: the console listens beyond loopback, for a phone on the
-    unit's own Wi-Fi. Its polls must not stand in for the screen's, and quantum
-    rest is still asked for at the unit."""
+    unit's own Wi-Fi. Its polls must not stand in for the screen's. Quantum
+    rest was asked for at the unit only, until build log 63 (Andreas, 5 Oct
+    2026: "I need a way to initiate quantum rest from the phone or laptop")."""
 
     @staticmethod
     def _own_address():
@@ -291,6 +292,7 @@ class OnlyTheUnitsOwnScreenIsTheWitness(unittest.TestCase):
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         d = tempfile.mkdtemp(prefix="seen-")
         saved, serve.CONSOLE_SEEN = serve.CONSOLE_SEEN, os.path.join(d, "console-seen")
+        saved_rest, serve.SHUTDOWN_REQUEST = serve.SHUTDOWN_REQUEST, os.path.join(d, "shutdown-request")
 
         def req(host, method, path):
             c = http.client.HTTPConnection(host, port, timeout=10)
@@ -302,11 +304,21 @@ class OnlyTheUnitsOwnScreenIsTheWitness(unittest.TestCase):
             self.assertEqual(req(addr, "GET", "/"), 200)                    # the page
             self.assertEqual(req(addr, "GET", "/aetherseed/status"), 502)   # relayed
             self.assertFalse(os.path.exists(serve.CONSOLE_SEEN))
-            self.assertEqual(req(addr, "POST", "/aetherseed/shutdown"), 403)
+            # quantum rest from a screen that is not the unit's own (63): an
+            # unconfirmed request files nothing, a confirmed one does
+            self.assertEqual(req(addr, "POST", "/aetherseed/shutdown"), 400)
+            self.assertFalse(os.path.exists(serve.SHUTDOWN_REQUEST))
+            c = http.client.HTTPConnection(addr, port, timeout=10)
+            c.request("POST", "/aetherseed/shutdown", body=b'{"confirm": "shut down"}',
+                      headers={"Content-Type": "application/json"})
+            r = c.getresponse(); r.read(); c.close()
+            self.assertEqual(r.status, 202)
+            self.assertTrue(os.path.exists(serve.SHUTDOWN_REQUEST))
             self.assertEqual(req("127.0.0.1", "GET", "/aetherseed/status"), 502)
             self.assertTrue(os.path.exists(serve.CONSOLE_SEEN))
         finally:
             serve.CONSOLE_SEEN = saved
+            serve.SHUTDOWN_REQUEST = saved_rest
             srv.shutdown(); srv.server_close()
             shutil.rmtree(d, ignore_errors=True)
 

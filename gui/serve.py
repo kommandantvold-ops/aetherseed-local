@@ -282,13 +282,13 @@ class Console(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _shutdown(self):
-        # From the device itself only: quantum rest is asked for at the unit,
-        # not from a phone on its Wi-Fi (build log 54 - the server no longer
-        # binds to loopback alone, so this check is the whole of that rule).
-        if self.client_address[0] not in ("127.0.0.1", "::1"):
-            _tally("refused")
-            self._json(403, {"error": "shutdown is only possible on the device"})
-            return
+        # From any screen that reaches the console (build log 63). Andreas,
+        # 5 Oct 2026: "I need a way to initiate quantum rest from the phone
+        # or laptop". Step 54 had it at the unit only; a phone on the unit's
+        # own Wi-Fi is the steward's second screen, and whoever is on that
+        # network holds its passkey. Nothing else reaches this server: the
+        # firewall admits the console port on loopback and on the unit's own
+        # Wi-Fi, not on a cable network (services/nftables.conf).
         # JSON with an explicit confirmation: a stray form post or a link cannot
         # send a JSON content type cross-origin without a preflight.
         if not (self.headers.get("Content-Type") or "").startswith("application/json"):
@@ -309,7 +309,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
             print(f"[gui] shutdown requested but could not be filed: {e!r}", flush=True)
             self._json(503, {"error": "shutdown is not available on this unit"})
             return
-        print("[gui] shutdown requested from the console", flush=True)
+        print("[gui] shutdown requested from %s" % ("the unit's own screen" if self.client_address[0]
+              in ("127.0.0.1", "::1") else "a screen on the unit's Wi-Fi"), flush=True)
         self._json(202, {"shutting_down": True})
 
     def _upload(self):

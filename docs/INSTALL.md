@@ -301,11 +301,21 @@ console, brought up labwc and Chromium and loaded the console, and its browser
 profile was gone when it stopped. If the screen stays black, Ctrl+Alt+F2 and
 `journalctl -b -u aetherseed-kiosk`.
 
-The screen: `--force-device-scale-factor=3` in the kiosk unit is fitted to
-Lyra's 72-inch television (18e, 19e), and the kiosk's keyboard layout (`gb`,
-`pc105`) is in `kiosk/labwc/environment` (34a). Both are part of the
-cartridge: changing either for another screen or keyboard is a different
-build, and should be recorded as one.
+The screen: the kiosk runs at scale 3, fitted to Lyra's 72-inch television
+(18e, 19e), unless the unit says otherwise (step 63). A monitor at arm's
+length wants less — one line, and the unit file stays the build's:
+
+```bash
+sudo install -d -m 755 /etc/aetherseed
+echo "AETHERSEED_SCALE=1.5" | sudo tee /etc/aetherseed/kiosk.env     # Stella's, 5 Oct
+sudo systemctl restart aetherseed-kiosk
+```
+
+The cartridge records the scale a unit runs at (`kiosk.scale`), so two units
+of one build that differ in it differ on that line and say in what. The
+kiosk's keyboard layout (`gb`, `pc105`) is in `kiosk/labwc/environment`
+(34a) and is part of the cartridge: changing it for another keyboard is a
+different build, and should be recorded as one.
 
 ## 10. Verify the cartridge
 
@@ -357,7 +367,9 @@ passkey the steward chooses. A phone or laptop that joins it opens the console
 at **`http://10.42.0.1:2077`** — the same page as the unit's own screen.
 The phone will say the network has no internet; that is right, it leads to the
 console and nowhere else. The console is **not** reachable on the cable
-network, and quantum rest is still asked for at the unit.
+network. Quantum rest can be asked for from the phone as from the unit's own
+screen (step 63 — Andreas, 5 Oct: *"I need a way to initiate quantum rest
+from the phone or laptop"*; until then it was at the unit only).
 
 **The rule (step 60).** Andreas: *"I want the wifi update, but with only
 transmission when lan is disconnected."* While a network cable has a link the
