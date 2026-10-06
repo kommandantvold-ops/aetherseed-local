@@ -35,9 +35,9 @@ sys.path.insert(0, os.path.join(HERE, "tools"))
 # Import the proxy without building a real store in ~/.aetherseed: its
 # module-level AetherRoot() is stubbed for the import only (as test_reply does),
 # and every test puts a real one, in a temporary directory, in its place.
-_NAMES = {"aetherroot": ["AetherRoot"], "aetherspark": ["AetherSpark"],
+_NAMES = {"aetherroot": ["AetherRoot"], "aetherspark": ["AetherSpark", "SafetyGate"],
           "trust_evolution": ["TrustEvolution"],
-          "intent_detection": ["detect_intent", "execute_intent"]}
+          "intent_detection": ["detect_intent", "execute_intent", "in_workspace"]}
 _SAVED = {n: sys.modules.get(n) for n in _NAMES}
 for _name, _attrs in _NAMES.items():
     _m = types.ModuleType(_name)

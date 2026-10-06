@@ -140,9 +140,12 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
                 self.assertEqual(self._req("POST", path, b"{}")[0], 502)
         self.assertEqual(set(serve.PROXIED_POST),
                          {"/api/chat", "/aetherseed/setup", "/aetherseed/steward",
-                          "/aetherseed/shelf/remove"},        # the steward's own shelf (62)
+                          "/aetherseed/shelf/remove",         # the steward's own shelf (62)
+                          # the training loop's buttons; who her steward is (64)
+                          "/aetherseed/training", "/aetherseed/steward-name"},
                          "a new POST route reaches the proxy only by being added here on purpose")
         self.assertIn("/aetherseed/shelf", serve.PROXIED_GET)
+        self.assertIn("/aetherseed/training", serve.PROXIED_GET)
         # guided correction's list takes a query string, matched on its path (50)
         self.assertEqual(self._req("GET", "/aetherseed/memories?limit=5&q=cat")[0], 502)
         self.assertEqual(self._req("GET", "/aetherseed/memories")[0], 502)
@@ -185,7 +188,7 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self.assertEqual(serve._counts["refused"], before["refused"] + 1)
         self.assertLessEqual(set(serve._counts),
                              {"page", "status", "record", "rings", "chat", "setup", "refused",
-                              "memories", "steward", "upload", "shelf"},
+                              "memories", "steward", "upload", "shelf", "training"},
                              "the heartbeat keeps counts by route and nothing else")
 
 

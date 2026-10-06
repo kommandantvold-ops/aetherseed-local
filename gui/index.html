@@ -166,6 +166,24 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
 .card .row.left{justify-content:flex-start}
 .card .row.left .send{margin-left:0}
 .card .help.how{margin:14px 0 0}
+.card .help.second{margin:14px 0 6px}
+
+/* The training loop (build log 64): played, paused and watched from here. */
+.bar{height:8px; border-radius:4px; background:var(--surface-2); border:1px solid var(--line); overflow:hidden; margin:10px 0 0}
+.bar i{display:block; height:100%; width:0; background:var(--accent)}
+.train .now{font-size:15px; color:var(--ink); margin:12px 0 0}
+.train h2{font-size:14px; font-weight:600; margin:18px 0 6px}
+.levels{display:grid; grid-template-columns:repeat(auto-fit, minmax(104px, 1fr)); gap:6px; margin:8px 0 0}
+.levels .lv{border:1px solid var(--line); border-radius:var(--radius); padding:6px 8px; font-size:12px; color:var(--ink-3); background:var(--surface-2)}
+.levels .lv b{display:block; font-size:15px; color:var(--ink); font-weight:600}
+.levels .lv.pass{border-color:var(--accent)} .levels .lv.fail{border-color:var(--brass)}
+.levels .lv.cur{background:var(--accent-soft)}
+.round{border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px; margin:8px 0 0; background:var(--surface-2)}
+.round .head{font-size:13px; color:var(--ink-2)}
+.round .said{font-size:14px; color:var(--ink); margin:8px 0 0}
+.who{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 4px}
+.who input{flex:1 1 160px; min-width:0; font-size:15px}
+.who span{font-size:13px; color:var(--ink-2)}
 </style>
 </head>
 <body>
@@ -178,6 +196,7 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
     <button type="button" class="chip" id="rings">–</button>
     <span class="chip" id="modelChip">–</span>
     <button id="shelfBtn"></button>
+    <button id="trainBtn"></button>
     <button id="recordBtn"></button>
     <button id="offBtn"></button>
   </div>
@@ -252,6 +271,31 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
   </div>
 </div>
 
+<!-- The training loop (build log 64): homework at each trust level, played and
+     paused from here - the unit's own screen, or a phone on its Wi-Fi. -->
+<div class="setup" id="training" hidden>
+  <div class="card wide train">
+    <div class="top"><h1 id="trainTitle"></h1><button type="button" id="trainClose"></button></div>
+    <p class="help" id="trainHelp"></p>
+    <form class="who" id="whoForm">
+      <span id="whoLabel"></span>
+      <input id="whoInput" maxlength="24" autocomplete="off" spellcheck="false">
+      <button type="submit" id="whoSave"></button>
+    </form>
+    <p class="err" id="whoError" hidden></p>
+    <p class="state" id="trainState"></p>
+    <div class="bar"><i id="trainBar"></i></div>
+    <p class="now" id="trainNow" hidden></p>
+    <p class="state" id="trainLast" hidden></p>
+    <div class="levels" id="trainLevels"></div>
+    <p class="err" id="trainError" hidden></p>
+    <div class="row left" id="trainActs"></div>
+    <p class="state aside" id="trainReal"></p>
+    <div id="trainRounds"></div>
+    <div id="trainHistory"></div>
+  </div>
+</div>
+
 <div class="setup" id="setup" hidden>
   <div class="card">
     <div id="stepLang">
@@ -262,6 +306,8 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
       <h1 id="nameTitle"></h1>
       <p class="help" id="nameHelp"></p>
       <input id="nameInput" maxlength="24" autocomplete="off" spellcheck="false">
+      <p class="help second" id="stewardHelp"></p>
+      <input id="stewardInput" maxlength="24" autocomplete="off" spellcheck="false">
       <p class="err" id="nameError" hidden></p>
       <div class="row">
         <button type="button" id="backBtn"></button>
@@ -319,6 +365,7 @@ const T = {
     memUsed: 'remembered as it is',
     memAside: 'remembered with a tag: unverified — an earlier answer that may be wrong',
     memFiction: 'remembered with a tag: fiction',
+    passedInTraining: 'Passed a check in training.',
     correctedInTraining: (r, x) => `Corrected in training: ${r}.` + (x ? ` The answer key says: “${x}”` : ''),
     seenAs: (tag) => `The tag in front of it when it comes back: ${tag}`,
     right: 'It’s right', wrong: 'Something’s wrong', undo: 'Undo', cancel: 'Cancel',
@@ -353,6 +400,42 @@ const T = {
     notLibrary: 'not from the library — say “look it up” to search it',
     explains: (x) => `her own words about the passage above${x ? ' (' + x + ')' : ''} — not the document’s; check them against it`,
     explainsPart: 'she was given only the first part of it',
+    // the training loop (build log 64)
+    train: 'Training', trainTitle: 'Training',
+    trainHelp: (n) => `Homework for ${n || 'the companion'}: questions about itself and tasks for its tools, at each trust level in turn. Every answer is checked against a key. What it gets wrong is corrected in its memory, and asked again next round. After each round it says what it will do differently. A run lasts about four hours; you can pause it and go on.`,
+    whoLabel: 'Its steward is called', whoSave: 'Save', whoNone: 'your name',
+    whoSaved: 'Saved.',
+    stewardHelp: 'Your own name, if it should know who its steward is. You can leave this empty.',
+    trIdle: 'No run is going.',
+    trState: (st, run) => `Run ${run} · ${st}`,
+    trStatus: { running: 'running', paused: 'paused', stopping: 'stopping after this question',
+                finished: 'finished', stopped: 'stopped', idle: 'not started' },
+    trWhere: (round, level, pos, of) => `round ${round} · ${level}, lent · question ${pos} of ${of}`,
+    trTime: (a, b) => `${a} of ${b}`,
+    trDur: (sec) => { const m = Math.round(sec / 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`; },
+    trNow: (topic, by) => `Now: ${topic}` + (by === 'unit' ? ' (the unit answers)' : ''),
+    trLastOk: (topic) => `Last: right — ${topic}`,
+    trLastBad: (topic, why) => `Last: wrong — ${topic}. The check says: ${why}.`,
+    trAgain: ' (asked again after a correction)',
+    trPlay: 'Play — a four-hour run', trPause: 'Pause', trGoOn: 'Go on', trStop: 'Stop this run',
+    trStopSure: 'Stop this run? What it has learned so far is kept.', trYes: 'Stop it', trNo: 'No',
+    trReal: (lvl) => `Its real trust level is ${lvl}. A run lends the higher levels for the length of a question and does not change the real one: that changes only when you say.`,
+    trRoundsTitle: 'Rounds of this run',
+    trRound: (n, r, a) => `Round ${n} · ${r} of ${a} right`,
+    trEarned: (lvl) => lvl ? `would have earned: ${lvl}` : 'would have earned no level',
+    trBar: (pct) => `A level counts as passed at ${pct}% and over, with every level under it.`,
+    trReflection: (n) => `${n || 'It'} said afterwards:`,
+    trNoReflection: 'It said nothing afterwards.',
+    trRetries: (r, a) => `Asked again after a correction: ${r} of ${a} right.`,
+    trTotal: (r, a) => `${r} of ${a} right so far`, trDone: (r, a) => `${r} of ${a} right`,
+    trHistory: 'Earlier runs',
+    trRunLine: (run, st, dur, r, a, best) => `Run ${run} · ${st} · ${dur} · ${r} of ${a} right` + (best ? ` · best round would have earned ${best}` : ''),
+    trNote: { restarted: 'The unit restarted during this run. Press “Go on” to continue where it stopped.' },
+    trFailed: 'That did not work.', trNoRead: 'Could not read the training state.',
+    trErrors: { required: 'Write a name.', too_long: 'At most 24 characters.',
+                characters: 'Letters, digits, spaces, hyphens and apostrophes only.',
+                no_letter: 'A name needs at least one letter.',
+                same_as_companion: 'The steward cannot have the companion’s own name.' },
     shelf: 'Documents', shelfTitle: 'Your documents',
     shelfHelp: (n) => `Documents you add are kept on this unit and become part of ${n || 'the companion'}’s library. Nothing is sent anywhere.`,
     shelfAdd: 'Add a document', shelfKinds: (mb) => `A PDF or a plain text file, up to ${mb} MB.`,
@@ -423,6 +506,7 @@ const T = {
     memUsed: 'huskes som det er',
     memAside: 'huskes med merke: ubekreftet — et tidligere svar som kan være feil',
     memFiction: 'huskes med merke: fiksjon',
+    passedInTraining: 'Besto en sjekk i trening.',
     correctedInTraining: (r, x) => `Rettet i trening: ${r}.` + (x ? ` Fasiten sier: «${x}»` : ''),
     seenAs: (tag) => `Merket som står foran når det kommer tilbake: ${tag}`,
     right: 'Det stemmer', wrong: 'Noe er feil', undo: 'Angre', cancel: 'Avbryt',
@@ -457,6 +541,42 @@ const T = {
     notLibrary: 'ikke fra biblioteket — si «slå det opp» for å søke der',
     explains: (x) => `hennes egne ord om avsnittet over${x ? ' (' + x + ')' : ''} — ikke dokumentets; sjekk dem mot det`,
     explainsPart: 'hun fikk bare den første delen av det',
+    // treningsløkka (byggelogg 64)
+    train: 'Trening', trainTitle: 'Trening',
+    trainHelp: (n) => `Lekser for ${n || 'følgesvennen'}: spørsmål om den selv og oppgaver for verktøyene, på hvert tillitsnivå etter tur. Hvert svar sjekkes mot en fasit. Det den svarer feil på, rettes i minnet og spørres på nytt i neste runde. Etter hver runde sier den hva den vil gjøre annerledes. En økt varer omtrent fire timer; du kan sette den på pause og fortsette.`,
+    whoLabel: 'Forvalteren heter', whoSave: 'Lagre', whoNone: 'navnet ditt',
+    whoSaved: 'Lagret.',
+    stewardHelp: 'Ditt eget navn, hvis den skal vite hvem forvalteren er. Du kan la dette stå tomt.',
+    trIdle: 'Ingen økt er i gang.',
+    trState: (st, run) => `Økt ${run} · ${st}`,
+    trStatus: { running: 'pågår', paused: 'på pause', stopping: 'stopper etter dette spørsmålet',
+                finished: 'ferdig', stopped: 'stoppet', idle: 'ikke startet' },
+    trWhere: (round, level, pos, of) => `runde ${round} · ${level}, utlånt · spørsmål ${pos} av ${of}`,
+    trTime: (a, b) => `${a} av ${b}`,
+    trDur: (sec) => { const m = Math.round(sec / 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} t ${String(m % 60).padStart(2, '0')} min`; },
+    trNow: (topic, by) => `Nå: ${topic}` + (by === 'unit' ? ' (enheten svarer)' : ''),
+    trLastOk: (topic) => `Sist: riktig — ${topic}`,
+    trLastBad: (topic, why) => `Sist: feil — ${topic}. (${why})`,
+    trAgain: ' (spurt på nytt etter en rettelse)',
+    trPlay: 'Start — en økt på fire timer', trPause: 'Pause', trGoOn: 'Fortsett', trStop: 'Stopp denne økta',
+    trStopSure: 'Stoppe denne økta? Det den har lært så langt, beholdes.', trYes: 'Stopp', trNo: 'Nei',
+    trReal: (lvl) => `Det virkelige tillitsnivået er ${lvl}. En økt låner ut de høyere nivåene så lenge et spørsmål varer, og endrer ikke det virkelige: det endres bare når du sier det.`,
+    trRoundsTitle: 'Rundene i denne økta',
+    trRound: (n, r, a) => `Runde ${n} · ${r} av ${a} riktige`,
+    trEarned: (lvl) => lvl ? `ville ha gitt: ${lvl}` : 'ville ikke ha gitt noe nivå',
+    trBar: (pct) => `Et nivå regnes som bestått fra ${pct} % og opp, sammen med alle nivåene under.`,
+    trReflection: (n) => `${n || 'Den'} sa etterpå:`,
+    trNoReflection: 'Den sa ingenting etterpå.',
+    trRetries: (r, a) => `Spurt på nytt etter en rettelse: ${r} av ${a} riktige.`,
+    trTotal: (r, a) => `${r} av ${a} riktige så langt`, trDone: (r, a) => `${r} av ${a} riktige`,
+    trHistory: 'Tidligere økter',
+    trRunLine: (run, st, dur, r, a, best) => `Økt ${run} · ${st} · ${dur} · ${r} av ${a} riktige` + (best ? ` · beste runde ville ha gitt ${best}` : ''),
+    trNote: { restarted: 'Enheten startet på nytt under denne økta. Trykk «Fortsett» for å gå videre der den stoppet.' },
+    trFailed: 'Det gikk ikke.', trNoRead: 'Kunne ikke lese treningsstatusen.',
+    trErrors: { required: 'Skriv et navn.', too_long: 'Høyst 24 tegn.',
+                characters: 'Bare bokstaver, tall, mellomrom, bindestrek og apostrof.',
+                no_letter: 'Et navn må ha minst én bokstav.',
+                same_as_companion: 'Forvalteren kan ikke ha følgesvennens eget navn.' },
     shelf: 'Dokumenter', shelfTitle: 'Dine dokumenter',
     shelfHelp: (n) => `Dokumenter du legger til, blir liggende på denne enheten og blir en del av biblioteket til ${n || 'følgesvennen'}. Ingenting sendes noe sted.`,
     shelfAdd: 'Legg til et dokument', shelfKinds: (mb) => `En PDF eller en ren tekstfil, opptil ${mb} MB.`,
@@ -505,6 +625,7 @@ function applyLanguage() {
   $('memoryLabel').textContent = s.memory;
   $('recordBtn').textContent = s.record;
   $('shelfBtn').textContent = s.shelf;
+  $('trainBtn').textContent = s.train;
   $('offBtn').textContent = s.off;
   $('intro1').textContent = s.intro1;
   $('intro2').textContent = s.intro2;
@@ -872,7 +993,8 @@ function actions(box, item, redraw) {
   const s = t();
   box.querySelectorAll('.state.steward, .acts, .guide').forEach((e) => e.remove());
   const st = item.steward || {};
-  if (st.support) box.append(el('p', 'state ok steward', s.supported(st.support.trust_points)));
+  if (st.support) box.append(el('p', 'state ok steward',
+    st.support.by === 'training' ? s.passedInTraining : s.supported(st.support.trust_points)));
   if (st.correction) {
     // Whose correction it is (build log 64): the steward's own, or the
     // training loop's answer key - which is never shown as his words.
@@ -1123,7 +1245,166 @@ $('treeClose').onclick = () => { $('tree').hidden = true; };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('tree').hidden) $('tree').hidden = true;
   if (e.key === 'Escape' && !$('shelf').hidden) $('shelfClose').click();
+  if (e.key === 'Escape' && !$('training').hidden) $('trainClose').click();
 });
+
+// ---- the training loop (build log 64) ----------------------------------------
+// Andreas, 6 Oct 2026: "pausable and playable from the phone gui so I can see
+// the progress and run it multiple times". The page shows what the proxy
+// says and sends four words back: start, pause, resume, stop. Everything
+// here is set as text, never markup - a reflection is the model's own words.
+let trainTimer = null;
+let trainAsking = false;     // "Stop this run?" is on the screen: a poll must not wipe it
+
+async function trainSend(action) {
+  const s = t();
+  $('trainError').hidden = true;
+  try {
+    const r = await fetch('/aetherseed/training', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }) });
+    const d = await r.json();
+    if (!r.ok) { $('trainError').textContent = d.error || s.trFailed; $('trainError').hidden = false; }
+    drawTraining(d);
+  } catch {
+    $('trainError').textContent = s.trFailed; $('trainError').hidden = false;
+  }
+}
+
+function levelBoxes(s, scores, current, bar) {
+  const box = el('div', 'levels');
+  for (const lvl of Object.keys(scores || {})) {
+    const sc = scores[lvl], node = el('div', 'lv');
+    node.append(el('b', null, s.tiers[lvl] || lvl),
+                document.createTextNode(sc.asked ? `${sc.right} / ${sc.asked}` : '–'));
+    if (sc.asked && lvl !== current) node.classList.add(sc.right / sc.asked >= bar ? 'pass' : 'fail');
+    if (lvl === current) node.classList.add('cur');
+    box.append(node);
+  }
+  return box;
+}
+
+function drawTraining(d) {
+  const s = t(), st = d.status || 'idle', live = st === 'running' || st === 'paused' || st === 'stopping';
+  const state = $('trainState');
+  if (!d.run) state.textContent = s.trIdle;
+  else {
+    const parts = [s.trState(s.trStatus[st] || st, d.run)];
+    if (live && d.round) parts.push(s.trWhere(d.round, s.tiers[d.level] || d.level || '–',
+                                              Math.min((d.position || 0) + 1, d.of || 0), d.of || 0));
+    if (d.budget) parts.push(s.trTime(s.trDur(d.elapsed || 0), s.trDur(d.budget)));
+    if (d.asked) parts.push(live ? s.trTotal(d.right || 0, d.asked) : s.trDone(d.right || 0, d.asked));
+    state.textContent = parts.join(' · ');
+  }
+  $('trainBar').style.width = (d.budget ? Math.min(100, 100 * (d.elapsed || 0) / d.budget) : 0) + '%';
+  const now = $('trainNow'), last = $('trainLast');
+  now.hidden = !(st === 'running' && d.doing);
+  if (!now.hidden) now.textContent = s.trNow(d.doing.topic, d.doing.by);
+  last.hidden = !(live && d.last);
+  if (!last.hidden) {
+    last.className = 'state ' + (d.last.ok ? 'ok' : 'fix');
+    last.textContent = (d.last.ok ? s.trLastOk(d.last.topic) : s.trLastBad(d.last.topic, d.last.why))
+      + (d.last.retry ? s.trAgain : '');
+  }
+  if (d.note && /restarted/.test(d.note)) { $('trainError').textContent = s.trNote.restarted; $('trainError').hidden = false; }
+
+  // the round in hand, level by level
+  const cur = $('trainLevels');
+  cur.replaceChildren();
+  if (live && d.scores) cur.append(...levelBoxes(s, d.scores, d.level, d.pass_bar || 0.8).children);
+  const rounds = d.rounds || [];
+  // buttons
+  const acts = $('trainActs');
+  const btn = (text, fn, cls) => { const b = el('button', cls || null, text); b.type = 'button'; b.onclick = fn; acts.append(b); return b; };
+  if (!(st === 'running' || st === 'paused')) trainAsking = false;
+  if (!trainAsking) {
+    acts.replaceChildren();
+    if (st === 'running') { btn(s.trPause, () => trainSend('pause'), 'send'); }
+    if (st === 'paused') { btn(s.trGoOn, () => trainSend('resume'), 'send'); }
+    if (st === 'running' || st === 'paused') {
+      btn(s.trStop, () => {
+        trainAsking = true;
+        acts.replaceChildren(el('span', 'state fix', s.trStopSure));
+        btn(s.trYes, () => { trainAsking = false; trainSend('stop'); });
+        btn(s.trNo, () => { trainAsking = false; loadTraining(); });
+      });
+    }
+    if (!live) btn(s.trPlay, () => trainSend('start'), 'send');
+  }
+  $('trainReal').textContent = d.real_level ? s.trReal(s.tiers[d.real_level] || d.real_level) : '';
+
+  // rounds of this run, newest first: scores, what it would have earned, what she said
+  const out = $('trainRounds'); out.replaceChildren();
+  if (rounds.length) {
+    out.append(el('h2', null, s.trRoundsTitle));
+    out.append(el('p', 'state aside', s.trBar(Math.round((d.pass_bar || 0.8) * 100))));
+    if (d.retries && d.retries.asked) out.append(el('p', 'state aside', s.trRetries(d.retries.right, d.retries.asked)));
+    for (const r of rounds.slice().reverse()) {
+      const box = el('div', 'round');
+      box.append(el('div', 'head', `${s.trRound(r.round, r.right, r.asked)} · ${s.trEarned(s.tiers[r.earned] || r.earned)}`));
+      box.append(levelBoxes(s, r.scores, null, d.pass_bar || 0.8));
+      box.append(el('p', 'state aside', r.reflection ? s.trReflection(name) : s.trNoReflection));
+      if (r.reflection) box.append(el('p', 'said', r.reflection));
+      out.append(box);
+    }
+  }
+  const hist = $('trainHistory'); hist.replaceChildren();
+  const earlier = (d.history || []).filter((h) => !(live && h.run === d.run));
+  if (earlier.length) {
+    hist.append(el('h2', null, s.trHistory));
+    for (const h of earlier) {
+      hist.append(el('p', 'state aside', s.trRunLine(h.run, s.trStatus[h.status] || h.status,
+        s.trDur(h.elapsed || 0), h.right || 0, h.asked || 0, s.tiers[h.earned_best] || h.earned_best)));
+    }
+  }
+}
+
+async function loadTraining() {
+  const s = t();
+  clearTimeout(trainTimer);
+  try {
+    const r = await fetch('/aetherseed/training');
+    if (!r.ok) throw new Error(String(r.status));
+    drawTraining(await r.json());
+  } catch {
+    $('trainState').textContent = s.trNoRead;
+  }
+  if (!$('training').hidden) trainTimer = setTimeout(loadTraining, 4000);
+}
+
+$('trainBtn').onclick = () => {
+  if (!name) return;
+  const s = t();
+  $('trainTitle').textContent = s.trainTitle;
+  $('trainClose').textContent = s.close;
+  $('trainHelp').textContent = s.trainHelp(name);
+  $('whoLabel').textContent = s.whoLabel;
+  $('whoSave').textContent = s.whoSave;
+  $('whoInput').placeholder = s.whoNone;
+  $('whoInput').value = stewardName || '';
+  $('whoError').hidden = true; $('trainError').hidden = true;
+  $('training').hidden = false;
+  $('trainClose').focus();
+  loadTraining();
+};
+$('trainClose').onclick = () => { $('training').hidden = true; clearTimeout(trainTimer); status(); };
+$('whoForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const s = t(), err = $('whoError');
+  err.hidden = true;
+  try {
+    const r = await fetch('/aetherseed/steward-name', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: $('whoInput').value.trim() }) });
+    const d = await r.json();
+    if (!r.ok) { err.className = 'err'; err.textContent = s.trErrors[d.code] || d.error || s.trFailed; err.hidden = false; return; }
+    stewardName = (d.companion && d.companion.steward) || null;
+    $('whoInput').value = stewardName || '';
+    err.className = 'state ok'; err.textContent = s.whoSaved; err.hidden = false;
+  } catch {
+    err.className = 'err'; err.textContent = s.trFailed; err.hidden = false;
+  }
+};
 
 // ---- first run --------------------------------------------------------------
 function showSetup(languages) {
@@ -1153,6 +1434,8 @@ function chooseLanguage(code) {
   const s = T[code] || T.en;
   $('nameTitle').textContent = s.nameTitle;
   $('nameHelp').textContent = s.nameHelp;
+  $('stewardHelp').textContent = s.stewardHelp;
+  $('stewardInput').placeholder = s.whoNone;
   $('backBtn').textContent = s.back;
   $('nameGo').textContent = s.go;
   $('nameError').hidden = true;
@@ -1172,10 +1455,14 @@ $('stepName').onsubmit = async (e) => {
   try {
     const r = await fetch('/aetherseed/setup', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: value, language: setupLang })
+      body: JSON.stringify({ name: value, language: setupLang,
+                             steward: $('stewardInput').value.trim() })
     });
     const d = await r.json();
-    if (!r.ok) { err.textContent = s.errors[d.code] || d.error || s.errors.network; err.hidden = false; return; }
+    if (!r.ok) {
+      err.textContent = (d.field === 'steward' ? s.trErrors[d.code] : s.errors[d.code]) || d.error || s.errors.network;
+      err.hidden = false; return;
+    }
     applyCompanion(d.companion);
     $('setup').hidden = true;
     send.disabled = false; input.disabled = false; input.focus();
@@ -1186,8 +1473,10 @@ $('stepName').onsubmit = async (e) => {
   }
 };
 
+let stewardName = null;
 function applyCompanion(c) {
   name = c && c.configured ? c.name : null;
+  stewardName = (c && c.steward) || null;
   lang = (c && c.language) || 'en';
   applyLanguage();
 }
@@ -1217,7 +1506,7 @@ async function status() {
     const d = await (await fetch('/aetherseed/status')).json();
     const c = d.companion || { configured: false };
     if (c.configured) {
-      if (c.name !== name || c.language !== lang) applyCompanion(c);
+      if (c.name !== name || c.language !== lang || (c.steward || null) !== stewardName) applyCompanion(c);
     } else {
       name = null;
       showSetup(d.languages);

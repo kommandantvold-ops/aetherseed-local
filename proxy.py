@@ -24,12 +24,14 @@ import threading
 import time
 import sys
 import os
+import hmac
+import secrets
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aetherroot import AetherRoot
-from aetherspark import AetherSpark, TRUST_PERMISSIONS
+from aetherspark import AetherSpark, SafetyGate, TRUST_PERMISSIONS
 from trust_evolution import TrustEvolution
-from intent_detection import detect_intent, execute_intent
+from intent_detection import detect_intent, execute_intent, in_workspace
 from logic.gate_answers import is_level_question, level_text, refusal_text, todo_text
 
 # ============================================================
@@ -51,7 +53,8 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 # tokens, different final paragraph).
 from logic.prompt_builder import charter
 from logic import companion
-from logic.speaker import validate_speaker, STEWARD, is_steward
+from logic.speaker import validate_speaker, STEWARD, TRAINER, is_steward
+from logic import training
 from logic import steward
 from logic import library as lib
 from logic import own_shelf
@@ -116,6 +119,113 @@ def _settings():
     """(name, language) - no name, English, until the steward has chosen."""
     c = companion.load(COMPANION_FILE)
     return (c["name"], c["language"]) if c else (None, companion.DEFAULT_LANGUAGE)
+
+
+# ---- THE TRAINING LOOP (build log 64; logic/training.py) -------------------
+# A turn of the loop comes in through /api/chat like any other - the real
+# path, not a copy - carrying this header. The token is made when the proxy
+# starts, lives in this process only, and is written nowhere: only the loop,
+# which runs inside the proxy, can say it. Such a turn is the Trainer's, runs
+# at the level lent for its stage, works in the loop's own workspace, and
+# moves her real trust by nothing.
+TRAINING_DIR = os.path.expanduser("~/.aetherseed/training")
+TRAINING_HEADER = "X-Aetherseed-Training"
+_TRAINING_TOKEN = secrets.token_hex(24)
+_TRAINING_LOOP = None
+_TRAINING_LOCK = threading.Lock()
+
+
+class _Gated:
+    """What execute_intent() needs of AetherSpark: its gate."""
+
+    def __init__(self, gate):
+        self.gate = gate
+
+
+def _training_ask(say, level):
+    """One turn of homework, sent the way the console sends one."""
+    body = json.dumps({"stream": True, "model": MODEL, "training": {"level": level},
+                       "messages": [{"role": "user", "content": say}]}).encode("utf-8")
+    req = urllib.request.Request(
+        "http://127.0.0.1:%d/api/chat" % PROXY_PORT, data=body, method="POST",
+        headers={"Content-Type": "application/json", TRAINING_HEADER: _TRAINING_TOKEN})
+    r = {"status": None, "reply": "", "meta": {}, "error": None}
+    try:
+        # Read to the end: the turn is stored after its last line is sent.
+        with urllib.request.urlopen(req, timeout=400) as resp:
+            r["status"] = resp.status
+            for raw in resp:
+                try:
+                    d = json.loads(raw)
+                except Exception:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                r["reply"] += (d.get("message") or {}).get("content") or ""
+                if d.get("done"):
+                    r["meta"] = d.get("aetherseed") or {}
+                    if d.get("done_reason") == "error":
+                        r["error"] = str(d.get("error") or "generation failed")[:200]
+    except urllib.error.HTTPError as e:
+        r["status"], r["error"] = e.code, "HTTP %s" % e.code
+    except Exception as e:
+        r["error"] = repr(e)[:200]
+    return r
+
+
+def _training_mark(say, ok, truth):
+    """Put the check's verdict on her memory of the turn just asked: passed,
+    or corrected from the answer key - never in the steward's name."""
+    row = root.store.conn.execute(
+        "SELECT id FROM episodes WHERE speaker = ? AND user_msg = ? ORDER BY id DESC LIMIT 1",
+        (TRAINER, say)).fetchone()
+    if not row:
+        return "not remembered"
+    turn = row[0]
+    if root.store.steward_notes(target="turn", target_ids=[turn]):
+        return "not remembered"            # the newest such turn is an older, marked one
+    log = os.path.join(os.path.dirname(PROVENANCE_LOG), "corrections.log")
+    if ok:
+        steward.passed_in_training(root.store, turn, log_path=log)
+        return {"turn": turn, "passed": True}
+    steward.correct(root.store, "turn", turn, "part", text=truth, log_path=log,
+                    by=steward.TRAINING)
+    return {"turn": turn, "corrected": True}
+
+
+def _training_backup(path):
+    """Her memory as it is before a run changes it, copied whole."""
+    import sqlite3
+    if os.path.exists(path):
+        os.remove(path)
+    dst = sqlite3.connect(path)
+    try:
+        root.store.conn.backup(dst)
+    finally:
+        dst.close()
+
+
+def training_loop():
+    global _TRAINING_LOOP
+    with _TRAINING_LOCK:
+        if _TRAINING_LOOP is None:
+            _TRAINING_LOOP = training.Loop(
+                TRAINING_DIR, ask=_training_ask, mark=_training_mark,
+                backup=_training_backup,
+                settings=lambda: {"name": _settings()[0], "steward": _steward()},
+                real_level=lambda: spark.gate.trust_level)
+        return _TRAINING_LOOP
+
+
+# Tools whose output is served as the whole answer (logic/exact_tools.py).
+EXACT_TOOLS = frozenset({"calculate", "count", "count_word", "compare"})
+
+
+def _steward():
+    """What this unit's steward is called, or None (build log 64). The unit's
+    own setting; the build names nobody."""
+    c = companion.load(COMPANION_FILE)
+    return (c or {}).get("steward") or None
 
 
 # ---- memory the node failed to keep ---------------------------------------
@@ -674,7 +784,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         model still gets the question with the right line in its context.
         """
         try:
-            from logic.knowledge import exact_entry_for, load_knowledge
+            from logic.knowledge import (exact_entry_for, load_knowledge,
+                                         is_steward_question, steward_text)
+            # Who her steward is, from the unit's own setting (build log 64).
+            # Only when a name has been set: without one the question goes on
+            # as before, and eco.steward says what a steward is.
+            if is_steward_question(user_msg):
+                named = _steward()
+                if named:
+                    print("[knowledge] steward named from the unit's setting "
+                          "(model not called)", flush=True)
+                    self._serve_plain(model, steward_text(named), source="knowledge",
+                                      mode="known")
+                    return True
             entry = exact_entry_for(user_msg)
             if entry is None:
                 return False
@@ -856,7 +978,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         """
         passage = lib.to_explain(hit)
         c_name, c_lang = _settings()
-        system_prompt = (charter(c_name, c_lang) + "\n" + EXPLAIN_NOTE + "\n" + DATA_NOTE
+        system_prompt = (charter(c_name, c_lang, _steward()) + "\n" + EXPLAIN_NOTE + "\n" + DATA_NOTE
                          + "\n\n[WORKSPACE DATA]\n" + sanitize_injected(passage)
                          + "\n[END WORKSPACE DATA]")
         question = (ask or "").strip() or EXPLAIN_ASK
@@ -978,12 +1100,40 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         print("[shelf] a document was removed", flush=True)
         self._send_json({"ok": True, "documents": own_shelf.listing()})
 
+    def _lesson(self, body: bytes):
+        """None - or, for a turn of the training loop, the level lent to it,
+        a gate at that level and the loop's own workspace (build log 64)."""
+        token = self.headers.get(TRAINING_HEADER) or ""
+        if not token or not hmac.compare_digest(token.encode("utf-8", "replace"),
+                                                _TRAINING_TOKEN.encode()):
+            return None
+        try:
+            level = (json.loads(body).get("training") or {}).get("level")
+        except Exception:
+            return None
+        if level not in TRUST_PERMISSIONS:
+            return None
+        gate = SafetyGate({"trust_level": level,
+                           "audit_log": os.path.join(TRAINING_DIR, "spark_audit.log")})
+        return {"level": level, "gate": gate,
+                "workspace": os.path.join(TRAINING_DIR, "workspace")}
+
     def _proxy_chat_augmented(self, body: bytes):
+        lesson = self._lesson(body)
+        if lesson is None:
+            return self._chat_turn(body)
+        with in_workspace(lesson["workspace"]):
+            return self._chat_turn(body, lesson)
+
+    def _chat_turn(self, body: bytes, lesson=None):
         try:
             data = json.loads(body)
         except json.JSONDecodeError:
             self._proxy_passthrough("POST", body)
             return
+        # The gate this turn is checked at: the unit's own - or, for a turn of
+        # the training loop, one at the level lent for its stage.
+        gate = lesson["gate"] if lesson else getattr(spark, "gate", None)
 
         messages = data.get("messages", [])
         # The served model unless the caller names one (every caller in this
@@ -1014,7 +1164,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # the steward's mouth, which is the defect this field exists to end.
         # Checked before any route, so no answer is given to a turn whose
         # speaker could not be recorded. See logic/speaker.py.
-        speaker, speaker_err = validate_speaker(data.get("speaker"), _settings()[0])
+        speaker, speaker_err = validate_speaker(data.get("speaker"), _settings()[0],
+                                                _steward())
+        if lesson:
+            # The loop's turns are the Trainer's - a name no caller can
+            # declare (logic/speaker.py), so homework is never the steward's.
+            speaker, speaker_err = TRAINER, None
         if speaker_err:
             self._send_json({"error": "speaker refused", "reason": speaker_err},
                             status=400)
@@ -1033,6 +1188,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if is_record_question(user_msg):
             self._answer_from_the_record(model, user_msg)
             return
+
+        # ---- HER TAGS AND CORRECTIONS ----
+        # Counted and quoted from the notes themselves, model not called
+        # (build log 64): what her steward corrected, what training did.
+        if steward.is_corrections_question(user_msg):
+            try:
+                text = steward.corrections_text(root.store)
+            except Exception as e:
+                text = None
+                print(f"[steward] corrections not read: {e!r}", flush=True)
+            if text:
+                print("[steward] tags and corrections answered from the notes "
+                      "(model not called)", flush=True)
+                self._serve_plain(model, text, source="record", mode="record")
+                return
 
         # ---- THE CONTACT ADDRESS ----
         # Answered from the build, model not called, for the same reason the
@@ -1063,7 +1233,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 earned = trust.get_trust_level_name()
             except Exception:
                 pass
-            text = level_text(spark.gate.trust_level, earned)
+            text = level_text(gate.trust_level, earned)
+            if lesson:
+                text = (f"My trust level is {gate.trust_level}, lent to me for "
+                        f"this training turn.")
             print("[gate] trust level answered from the gate (model not called)",
                   flush=True)
             self._serve_plain(model, text, source="gate", mode="gate", used_tools=True)
@@ -1073,7 +1246,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         intent = detect_intent(user_msg)
         workspace_data = ""
         if intent:
-            result = execute_intent(intent, spark)
+            result = execute_intent(intent, _Gated(gate))
             # A refusal is told as a refusal, model not called (build log 49).
             # In the ecosystem soak the gate refused every write at observer
             # and nothing was written - but the model, handed the refusal as
@@ -1082,10 +1255,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # not stored as an episode and not scored.
             if result and result.startswith("[DENIED]"):
                 text = refusal_text(intent["intent"], intent["tier"],
-                                    spark.gate.trust_level, TRUST_PERMISSIONS)
+                                    gate.trust_level, TRUST_PERMISSIONS)
                 print(f"[gate] {intent['intent']} refused, told as refused "
                       f"(model not called)", flush=True)
                 self._serve_plain(model, text, source="gate", mode="gate",
+                                  used_tools=True)
+                return
+            # The exact tools (build log 64): a sum, a count, a comparison.
+            # What the tool says IS the answer - word for word, model not
+            # called; shown the right figure, this model retypes another.
+            if intent["intent"] in EXACT_TOOLS and result:
+                print(f"[tools] {intent['intent']} answered by the unit "
+                      f"(model not called)", flush=True)
+                self._serve_plain(model, result, source="tool", mode="tool",
                                   used_tools=True)
                 return
             # The to-do list is shown as it is, model not called (build log 51):
@@ -1109,7 +1291,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # the model as fiction, and it wrote "doxicyclene").
         a_story = request_mode == FICTION and not mode_reason.startswith("asks a what-if")
         library_line = False
-        if not intent and not reading and not a_story:
+        # Not for homework either: "more" and "look it up" follow the steward's
+        # last question, and a turn of the loop must not become it.
+        if not intent and not reading and not a_story and not lesson:
             if self._answer_from_the_library(model, user_msg, speaker):
                 return
             # She answers this one herself. It is remembered as the question
@@ -1123,12 +1307,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     library_line = lib.library().says_it_all(user_msg)
             except Exception as e:
                 print(f"[library] no line: {e!r}", flush=True)
-        else:
+        elif not lesson:
             ProxyHandler._library_asked["q"] = None
 
         # ---- BUILD SYSTEM PROMPT ----
         c_name, c_lang = _settings()
-        system_prompt = charter(c_name, c_lang)
+        system_prompt = charter(c_name, c_lang, _steward())
 
         # AetherRoot: inject memory context
         if request_mode == FICTION:
@@ -1388,9 +1572,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             stored_ok = False
             if not failed_to_invent:
                 try:
-                    root.store_interaction(user_msg, ai_content,
-                                           resonance=resonance, mode=stored_mode,
-                                           speaker=speaker)
+                    if lesson:
+                        # homework is remembered, and waits for no ring
+                        root.store_interaction(user_msg, ai_content,
+                                               resonance=resonance, mode=stored_mode,
+                                               speaker=speaker, rings=False)
+                    else:
+                        root.store_interaction(user_msg, ai_content,
+                                               resonance=resonance, mode=stored_mode,
+                                               speaker=speaker)
                     stored_ok = True
                 except Exception as e:
                     global STORE_FAILURES
@@ -1432,8 +1622,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "answer": ai_content[:160],
                 "speaker": speaker,
                 "reading": reading,
+                **({"training": lesson["level"]} if lesson else {}),
             })
 
+            if lesson:
+                # Her real trust is not moved by homework, up or down
+                # (Andreas, 6 Oct 2026: "Granted for training only").
+                return
             try:
                 # What was in front of the model this turn decides whether a
                 # clean decline earns (step 46): none of the steward's facts,
@@ -1463,6 +1658,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # hailo-ollama so an ollama client still works unchanged.
         if self.path == "/aetherseed/shelf":
             self._shelf_listing()
+            return
+        if self.path == "/aetherseed/training":
+            self._send_json(training_loop().status())
             return
         if self.path == "/aetherseed/status":
             try:
@@ -1646,12 +1844,60 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 req = {}
             saved, err = companion.save(COMPANION_FILE, req.get("name"),
-                                        req.get("language"))
+                                        req.get("language"), req.get("steward"))
             if err:
                 self._send_json(err, status=400)
                 return
+            # The steward's name is a person's: the journal says only whether
+            # there is one (37: what is said stays out of it).
             print(f"[companion] set up: name={saved['name']!r} "
-                  f"language={saved['language']}", flush=True)
+                  f"language={saved['language']} "
+                  f"steward={'named' if saved.get('steward') else 'not named'}", flush=True)
+            self._send_json({"companion": companion.public(saved)})
+            return
+
+        if self.path == "/aetherseed/training":
+            # Play, pause, go on, stop - from the console (build log 64).
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            action = req.get("action") if isinstance(req, dict) else None
+            loop = training_loop()
+            if action == "start":
+                minutes = req.get("minutes")
+                ok, why = loop.start(int(minutes) * 60 if isinstance(minutes, int)
+                                     and not isinstance(minutes, bool) else training.RUN_SECONDS)
+            elif action == "pause":
+                ok, why = loop.pause()
+            elif action == "resume":
+                ok, why = loop.resume()
+            elif action == "stop":
+                ok, why = loop.stop()
+            else:
+                self._send_json({"error": "unknown action", "code": "action"}, status=400)
+                return
+            print(f"[training] {action}: {'ok' if ok else why}", flush=True)
+            out = loop.status()
+            if not ok:
+                out["error"] = why
+            self._send_json(out, status=200 if ok else 409)
+            return
+
+        if self.path == "/aetherseed/steward-name":
+            # Who her steward is (build log 64): set, changed or - with an
+            # empty name - forgotten, on a companion that is already set up.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            saved, err = companion.set_steward(COMPANION_FILE,
+                                               req.get("name") if isinstance(req, dict) else None)
+            if err:
+                self._send_json(err, status=400)
+                return
+            print(f"[companion] steward {'named' if saved.get('steward') else 'no longer named'}",
+                  flush=True)
             self._send_json({"companion": companion.public(saved)})
             return
 

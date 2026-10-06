@@ -18,7 +18,7 @@ _CHARTER_RULES = (
 )
 
 
-def charter(name: str = None, language: str = "en") -> str:
+def charter(name: str = None, language: str = "en", steward: str = None) -> str:
     """The charter, with the companion's own name and language.
 
     The name used to be hard-coded as "Horizon", which is the name of something
@@ -36,7 +36,14 @@ def charter(name: str = None, language: str = "en") -> str:
         if clean and not err:
             who = "You are %s, a local AI companion" % clean
     text = (who + " running on a Raspberry Pi with a Hailo NPU. "
-            "You are small, local, and honest.\n" + _CHARTER_RULES)
+            "You are small, local, and honest.\n")
+    # Who its steward is (build log 64): the unit's own setting, validated
+    # like the companion's name - it too is untrusted input into the prompt.
+    if steward:
+        s_clean, s_err = validate_name(steward)
+        if s_clean and not s_err:
+            text += "Your steward is %s.\n" % s_clean
+    text += _CHARTER_RULES
     lang = LANGUAGES.get(language)
     if not lang or not lang.get("offered"):
         lang = LANGUAGES["en"]           # a dormant language never reaches the prompt

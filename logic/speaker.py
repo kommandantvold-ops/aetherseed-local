@@ -56,7 +56,13 @@ RESERVED = frozenset({
     "steward", "owner", "user", "ai", "assistant", "system", "you", "me", "i",
     "known", "episode", "pattern", "fiction", "memory", "record",
     "companion", "unknown", "nobody", "everyone",
+    # The training loop's own voice (build log 64). Only the loop may speak
+    # as it - the proxy stores its turns under this name itself - so a caller
+    # cannot dress a turn up as homework.
+    "trainer", "training",
 })
+
+TRAINER = "Trainer"   # stored for a turn of the training loop
 
 ERRORS = {
     "not_text": "a speaker must be a name",
@@ -68,7 +74,7 @@ def _fold(s):
     return unicodedata.normalize("NFC", s).casefold().strip()
 
 
-def validate_speaker(raw, companion_name=None):
+def validate_speaker(raw, companion_name=None, steward_name=None):
     """What to store for a turn. Returns (speaker, None) or (None, error_code).
 
     Absent (None) means the caller declared nothing: that is the console, and
@@ -86,6 +92,10 @@ def validate_speaker(raw, companion_name=None):
     if folded in RESERVED:
         return None, "reserved"
     if companion_name and folded == _fold(companion_name):
+        return None, "reserved"
+    # The steward's own name (build log 64): the console's turns are the
+    # steward's already, and nobody else may declare themselves to be him.
+    if steward_name and folded == _fold(steward_name):
         return None, "reserved"
     return name, None
 

@@ -32,6 +32,11 @@ LADDER = ("observer", "reader", "writer", "builder", "collaborator", "autonomous
 _WHAT = {
     "todo_add": ("add to your to-do list", "Nothing was added."),
     "note_write": ("write notes", "Nothing was written."),
+    # the exact tools (build log 64)
+    "calculate": ("calculate for you", "Nothing was calculated."),
+    "count": ("count through a file", "Nothing was counted."),
+    "count_word": ("count through a file", "Nothing was counted."),
+    "compare": ("compare files", "Nothing was compared."),
 }
 
 

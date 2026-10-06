@@ -119,7 +119,8 @@ class ExplicitRequestsStillWork(unittest.TestCase):
             "Open file ideas": ("file_read", ("ideas",)),
             "What’s in plan.md?": ("file_read", ("plan.md",)),
             "add a to-do: buy milk": ("todo_add", ("buy milk",)),
-            "New task: call Martin": ("todo_add", ("call martin",)),
+            # build log 64: what is written keeps its capitals
+            "New task: call Martin": ("todo_add", ("call Martin",)),
             "Add 'water the plants' to my to-do list": ("todo_add", ("water the plants",)),
             "add buy bread to my todo list": ("todo_add", ("buy bread",)),
             "Show my to-do list": ("todo_read", ()),
@@ -160,8 +161,12 @@ class ExplicitRequestsStillWork(unittest.TestCase):
         tiers = {d["intent"]: d["tier"] for d in INTENT_PATTERNS}
         self.assertEqual(tiers["todo_add"], 2)
         self.assertEqual(tiers["note_write"], 2)
+        # build log 64: the exact tools are builder's, tier 3 - and nothing else is
+        exact = ("calculate", "count", "count_word", "compare")
+        for i in exact:
+            self.assertEqual(tiers[i], 3, i)
         self.assertTrue(all(t == 1 for i, t in tiers.items()
-                            if i not in ("todo_add", "note_write")))
+                            if i not in ("todo_add", "note_write") + exact))
 
     def test_every_keyword_is_word_bounded(self):
         # "spread" must never be "read"; every pattern starts at a boundary or

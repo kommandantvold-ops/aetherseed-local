@@ -944,7 +944,7 @@ class AetherRoot:
             if ep_mode not in allowed:
                 continue
             note = turn_notes.get(ep["id"]) or {}
-            tag = memory_tag(ep_mode, note.get("correct"), bool(note.get("support")))
+            tag = memory_tag(ep_mode, note.get("correct"), note.get("support") or False)
             all_memories.append({
                 "embedding": ep["embedding"],
                 "resonance": ep["resonance"],
@@ -966,7 +966,7 @@ class AetherRoot:
             })
         for sem in semantics:
             note = ring_notes.get(sem["id"]) or {}
-            tag = memory_tag("factual", note.get("correct"), bool(note.get("support")))
+            tag = memory_tag("factual", note.get("correct"), note.get("support") or False)
             if sem.get("ring_no") is not None:
                 # A ring: the chosen part, then - labelled - her own sentence
                 # about it (logic/rings.py).
@@ -1127,8 +1127,15 @@ class AetherRoot:
 
     def store_interaction(self, user_msg: str, ai_msg: str,
                           resonance: float = 0.5, mode: str = "factual",
-                          speaker: str = ""):
-        """Store a conversation turn and update internal state."""
+                          speaker: str = "", rings: bool = True):
+        """Store a conversation turn and update internal state.
+
+        rings=False (build log 64): a turn of the training loop. It is
+        remembered and comes back like any other; it does not wait for a ring.
+        A ring is twenty turns of conversation, and a four-hour run of drill
+        would close some twenty-five of them and bury the ones her steward's
+        own words made. Marked as already taken, so it never counts toward
+        the next ring and never joins one."""
         # Embed and store
         combined = f"{user_msg} {ai_msg}"
         embedding = self.embedder.embed(combined)
@@ -1143,6 +1150,8 @@ class AetherRoot:
             mode=mode,
             speaker=speaker
         )
+        if not rings:
+            self.store.mark_consolidated([episode_id])
 
         # Drift willingness based on interaction resonance.
         #

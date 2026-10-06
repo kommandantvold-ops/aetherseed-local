@@ -42,6 +42,7 @@ means: nothing is erased, everything is reversible, attributed and recorded.
 """
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 from logic.facts import validate_fact
@@ -164,6 +165,22 @@ def support(store, trust, target, target_id, log_path=None):
 TRAINING = "training"
 
 
+def passed_in_training(store, target_id, log_path=None):
+    """Mark a turn of the training loop as having passed the loop's check
+    (build log 64). Not the steward's support: it adds no trust, and it comes
+    back to her as "[Passed a check in training]", never "[Marked right by
+    your steward]". Returns the note's id, or None if it is marked already."""
+    target_id, _ = _target(store, "turn", target_id)
+    if _active(store, "turn", target_id):
+        return None
+    note_id = store.add_steward_note("turn", target_id, "support", trust_points=0,
+                                     by=TRAINING)
+    _log(log_path, {"action": "support", "target": "turn", "target_id": target_id,
+                    "note": note_id, "trust_points": 0,
+                    "by": "the training loop's check"})
+    return note_id
+
+
 def correct(store, target, target_id, reason, text="", facts_max=250,
             trust=None, log_path=None, by="steward"):
     """by: 'steward' (the console) or TRAINING - the training loop's answer
@@ -250,3 +267,60 @@ def undo(store, trust, note_id, log_path=None):
         ep = store.episode(note["target_id"])
         out["mode"] = ep["mode"] if ep else None
     return out
+
+
+# ---------------------------------------------------------------------------
+# "What have you been corrected on?" (build log 64)
+# ---------------------------------------------------------------------------
+# Andreas, 6 Oct 2026: "Lyra should be able to see the tags and the
+# corrections made by the steward." She sees them where they matter - in
+# front of the memory, in the prompt. Asked about them, she answers from the
+# notes themselves, counted and quoted by the unit: a model asked to sum up
+# its own corrections is the least reliable narrator of them (the same reason
+# the record is read from the file).
+_CORRECTION_QUESTIONS = [re.compile(p, re.I) for p in (
+    r"^\s*what\s+(?:have|has)\s+(?:you|your\s+steward|i)\s+(?:been\s+)?corrected(?:\s+(?:on|about|in\s+you))?\s*[?.!]*\s*$",
+    r"^\s*what\s+did\s+(?:i|your\s+steward)\s+correct\s*[?.!]*\s*$",
+    r"^\s*(?:show|list|tell)\s+(?:me\s+)?(?:your|the|my)\s+corrections\s*[?.!]*\s*$",
+    r"^\s*what\s+corrections\s+(?:have\s+you\s+(?:had|got|been\s+given)|do\s+you\s+have)\s*[?.!]*\s*$",
+    r"^\s*how\s+many\s+of\s+your\s+memories\s+(?:are\s+tagged|carry\s+a\s+tag|have\s+(?:a\s+tag|tags))\s*[?.!]*\s*$",
+    r"^\s*(?:what|which)\s+tags\s+do\s+your\s+memories\s+(?:carry|have)\s*[?.!]*\s*$",
+)]
+LATEST_SHOWN = 3
+
+
+def is_corrections_question(text):
+    t = (text or "").strip()
+    return bool(t) and len(t) <= 80 and any(p.search(t) for p in _CORRECTION_QUESTIONS)
+
+
+def _n(n, one, many):
+    return "%d %s" % (n, one if n == 1 else many)
+
+
+def corrections_text(store):
+    """Her tags and corrections, counted from the store. No model."""
+    turns = store.get_episode_count(False)
+    fiction = store.get_episode_count(False, modes=("fiction",))
+    unverified = store.get_episode_count(False, modes=("unverified",))
+    notes = store.steward_notes(target=None)
+    def how_many(action, by_training):
+        return sum(1 for n in notes if n["action"] == action
+                   and ((n.get("by") or "steward") == TRAINING) == by_training)
+    out = ["I remember %s. %s: %d fiction, %d unverified." % (
+        _n(turns, "turn", "turns"),
+        _n(fiction + unverified, "carries a tag", "carry a tag"), fiction, unverified)]
+    out.append("Corrected by my steward: %d. Marked right by my steward: %d."
+               % (how_many("correct", False), how_many("support", False)))
+    out.append("Corrected in training, from the answer key: %d. Passed a check in "
+               "training: %d." % (how_many("correct", True), how_many("support", True)))
+    latest = [n for n in notes if n["action"] == "correct"][-LATEST_SHOWN:]
+    if latest:
+        out.append("The latest corrections:")
+        for n in reversed(latest):
+            who = "in training" if (n.get("by") or "steward") == TRAINING else "by my steward"
+            what = ("what is true: %s" % n["text"]) if n.get("text") \
+                else REASONS.get(n.get("reason"), "it is wrong")
+            where = "turn %d" % n["target_id"] if n["target"] == "turn" else "a ring"
+            out.append("- %s, %s - %s" % (where, who, what))
+    return "\n".join(out)

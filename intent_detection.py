@@ -20,6 +20,32 @@ from typing import Optional, Dict, List, Tuple
 
 WORKSPACE = os.path.expanduser("~/aetherseed-workspace")
 
+# The training loop works in a workspace of its own (build log 64): its
+# homework writes to-dos and notes, and none of that may land among the
+# steward's files. Set for one turn, in that turn's thread only; everything
+# else - every turn from the console - sees WORKSPACE as before.
+import contextvars
+_WORKSPACE_FOR_THIS_TURN = contextvars.ContextVar("aetherseed_workspace", default=None)
+
+
+def workspace() -> str:
+    return _WORKSPACE_FOR_THIS_TURN.get() or WORKSPACE
+
+
+class in_workspace:
+    """with in_workspace(path): ...  - the tools reach `path` instead, here."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __enter__(self):
+        self._token = _WORKSPACE_FOR_THIS_TURN.set(self.path)
+        return self
+
+    def __exit__(self, *exc):
+        _WORKSPACE_FOR_THIS_TURN.reset(self._token)
+        return False
+
 
 # ============================================================
 # INTENT PATTERNS
@@ -162,6 +188,49 @@ INTENT_PATTERNS = [
         "description": "Search for files",
         "tier": 1,
     },
+    # The exact tools (build log 64; logic/exact_tools.py): tier 3, builder.
+    # Asked for by name - "calculate", "count", "compare" - and answered by
+    # the unit word for word, model not called. "calculate" must be followed
+    # by arithmetic and nothing else ("calculate the odds" is a question).
+    {
+        "intent": "calculate",
+        "patterns": [
+            r"^\s*(?:please\s+|can\s+you\s+|could\s+you\s+)?(?:calculate|compute|work\s+out|evaluate)\s*:?\s+(.+?)\s*$",
+        ],
+        "accept": lambda captures: _arithmetic(captures[0]),
+        "description": "Calculate exactly",
+        "tier": 3,
+    },
+    {
+        "intent": "count_word",
+        "patterns": [
+            r"\bhow\s+(?:many\s+times|often)\s+(?:does|is)\s+(?:the\s+word\s+)?['\"‘“]?([\w-]+)['\"’”]?\s+(?:appear|occur|come\s+up|used|said|written|found)?\s*in\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+            r"\bcount\s+(?:the\s+word\s+|the\s+times\s+)?['\"‘“]([\w-]+)['\"’”]\s+(?:is\s+|appears\s+)?in\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+            r"\bcount\s+the\s+word\s+([\w-]+)\s+in\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+        ],
+        "description": "Count a word in a workspace file",
+        "tier": 3,
+    },
+    {
+        "intent": "count",
+        "patterns": [
+            r"\bcount\s+(?:the\s+|all\s+the\s+)?(?:words|lines|characters|letters)(?:\s*(?:,|and)\s*(?:words|lines|characters))*\s+(?:in|of)\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+            r"\bhow\s+many\s+(?:words|lines|characters)\s+(?:are\s+(?:there\s+)?in|is\s+in|in|does)\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+            r"\b(?:word|line)\s+count\s+(?:of|for)\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+            r"\bhow\s+(?:long|big)\s+is\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+        ],
+        "description": "Count the lines, words and characters of a workspace file",
+        "tier": 3,
+    },
+    {
+        "intent": "compare",
+        "patterns": [
+            r"\b(?:compare|diff)\s+(?:the\s+|my\s+)?(?:files?\s+)?" + _Q + _NAME_EXT + r"['\"’”]?\s*(?:and|with|to|against|,)?\s*(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+            r"\b(?:are|is)\s+(?:the\s+|my\s+)?(?:files?\s+)?" + _Q + _NAME_EXT + r"['\"’”]?\s+(?:and|the\s+same\s+as|equal\s+to|identical\s+to)\s+(?:the\s+|my\s+)?(?:file\s+)?" + _Q + _NAME_EXT,
+        ],
+        "description": "Compare two workspace files",
+        "tier": 3,
+    },
     # Log viewing
     {
         "intent": "log_read",
@@ -179,6 +248,14 @@ INTENT_PATTERNS = [
 # INTENT DETECTOR
 # ============================================================
 
+_KEEPS_CAPITALS = frozenset({"todo_add", "note_write"})
+
+
+def _arithmetic(text: str) -> bool:
+    from logic.exact_tools import looks_like_arithmetic
+    return looks_like_arithmetic(text)
+
+
 def detect_intent(message: str) -> Optional[Dict]:
     """Detect the primary intent from a user message.
     Returns the intent dict with any captured groups, or None."""
@@ -187,13 +264,27 @@ def detect_intent(message: str) -> Optional[Dict]:
     for intent_def in INTENT_PATTERNS:
         for pattern in intent_def["patterns"]:
             match = re.search(pattern, lower)
+            if match and intent_def.get("accept") \
+                    and not intent_def["accept"](match.groups()):
+                continue
             if match:
+                captures = match.groups()
+                # What is WRITTEN keeps the steward's capitals (build log
+                # 64): matched on the lowered message, a to-do "Call Martin"
+                # went into the file as "call martin". Where lowering does
+                # not move a letter, the same span of the message as typed
+                # is what is written. A file's name stays lowered, as before.
+                stripped = message.strip()
+                if intent_def["intent"] in _KEEPS_CAPITALS and len(stripped) == len(lower):
+                    captures = tuple(
+                        stripped[match.start(i):match.end(i)] if g is not None else None
+                        for i, g in enumerate(captures, 1))
                 return {
                     "intent": intent_def["intent"],
                     "description": intent_def["description"],
                     "tier": intent_def["tier"],
                     "match": match.group(0),
-                    "captures": match.groups(),
+                    "captures": captures,
                     "original": message,
                 }
     return None
@@ -255,6 +346,26 @@ def execute_intent(intent: Dict, spark) -> Optional[str]:
     elif name == "log_read":
         return _read_file("logs/growth.log")
 
+    # The exact tools: what comes back IS the answer (proxy: served, model
+    # not called).
+    elif name == "calculate":
+        from logic.exact_tools import calculate
+        return calculate(captures[0] if captures else "")
+
+    elif name == "count":
+        from logic.exact_tools import count
+        return count(workspace(), captures[0] if captures else None)
+
+    elif name == "count_word":
+        from logic.exact_tools import count
+        return count(workspace(), captures[1] if len(captures) > 1 else None,
+                     word=captures[0] if captures else None)
+
+    elif name == "compare":
+        from logic.exact_tools import compare
+        return compare(workspace(), captures[0] if captures else None,
+                       captures[1] if len(captures) > 1 else None)
+
     return None
 
 
@@ -264,7 +375,7 @@ def execute_intent(intent: Dict, spark) -> Optional[str]:
 
 def _list_workspace() -> str:
     """List workspace contents recursively (2 levels)."""
-    ws = Path(WORKSPACE)
+    ws = Path(workspace())
     if not ws.exists():
         return "[Workspace not found]"
 
@@ -287,11 +398,11 @@ def _read_file(filename: str) -> str:
     if not filename:
         return "[ERROR] No filename specified."
 
-    path = Path(WORKSPACE) / filename
+    path = Path(workspace()) / filename
     # Security: resolve and check it's within workspace
     try:
         resolved = path.resolve()
-        if not str(resolved).startswith(str(Path(WORKSPACE).resolve())):
+        if not str(resolved).startswith(str(Path(workspace()).resolve())):
             return "[ERROR] Path outside workspace."
     except Exception:
         return "[ERROR] Invalid path."
@@ -321,7 +432,7 @@ def _summarize_request(filename: str) -> str:
 
 def _append_todo(item: str) -> str:
     """Add an item to todo.txt."""
-    path = Path(WORKSPACE) / "todo.txt"
+    path = Path(workspace()) / "todo.txt"
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"- {item.strip()}\n")
@@ -332,7 +443,7 @@ def _append_todo(item: str) -> str:
 
 def _write_note(content: str) -> str:
     """Write a timestamped note."""
-    notes_dir = Path(WORKSPACE) / "notes"
+    notes_dir = Path(workspace()) / "notes"
     notes_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -349,7 +460,7 @@ def _write_note(content: str) -> str:
 
 def _list_notes() -> str:
     """List all notes."""
-    notes_dir = Path(WORKSPACE) / "notes"
+    notes_dir = Path(workspace()) / "notes"
     if not notes_dir.exists():
         return "No notes yet."
 
@@ -369,7 +480,7 @@ def _search_files(query: str) -> str:
     if not query:
         return "[ERROR] No search query."
 
-    ws = Path(WORKSPACE)
+    ws = Path(workspace())
     matches = list(ws.rglob(f"*{query}*"))[:20]
 
     if not matches:

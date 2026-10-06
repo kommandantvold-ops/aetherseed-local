@@ -11,6 +11,18 @@ Two settings, both of which reach the model's prompt:
     name        what the companion is called
     language    what it speaks
 
+and since build log 64 a third, optional one:
+
+    steward     what its steward is called
+
+Andreas, 6 Oct 2026: "Lyra should know who her steward is (me)". The name is
+the UNIT'S, never the build's: it is entered on the unit, kept in this file
+beside the companion's own, and no person's name is written anywhere in the
+application (test_units.TestNoPersonInTheBuild). It is DECLARED, like a
+speaker (logic/speaker.py): nothing on the device can tell who is at the
+screen. What it changes is one line of the charter - "Your steward is <name>."
+- and one answer, "Who is your steward?", given by the unit word for word.
+
 Both are therefore UNTRUSTED INPUT INTO THE SYSTEM PROMPT, which is the fourth
 path of that kind this project has had to close (a file, the model's control
 tokens, the model's own prose; see the build log, step 14c). A name like
@@ -85,6 +97,7 @@ ERRORS = {
     "characters": "letters, digits, spaces, hyphens and apostrophes only",
     "no_letter": "a name needs at least one letter",
     "unknown_language": "unknown language",
+    "same_as_companion": "the steward cannot have the companion's own name",
 }
 
 
@@ -131,24 +144,76 @@ def load(path):
     lang, _ = validate_language(d.get("language"))
     if not name or not lang:
         return None
-    return {"name": name, "language": lang, "set_at": d.get("set_at")}
+    # A steward's name that would not pass today is dropped, not trusted: the
+    # companion is still set up, it just does not know the name.
+    steward, _ = validate_name(d.get("steward")) if d.get("steward") else (None, None)
+    return {"name": name, "language": lang, "set_at": d.get("set_at"),
+            "steward": steward}
 
 
-def save(path, name, language):
-    """Validate and write atomically. Returns (settings, None) or (None, error)."""
+def _steward_name(raw, companion_name):
+    """(name or None, error_code). Empty means "not given". The steward cannot
+    carry the companion's own name: "Your steward is Lyra" to Lyra is the
+    confusion about whom she serves that build log 35 measured."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, None
+    s, err = validate_name(raw)
+    if err:
+        return None, err
+    if companion_name and s.casefold() == companion_name.casefold():
+        return None, "same_as_companion"
+    return s, None
+
+
+def _write(path, d):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def save(path, name, language, steward=None):
+    """Validate and write atomically. Returns (settings, None) or (None, error).
+
+    `steward` is optional. Not given, a name the unit already holds is kept:
+    setting the companion up again must not make it forget its steward."""
     n, err = validate_name(name)
     if err:
         return None, {"field": "name", "code": err, "error": ERRORS[err]}
     lang, err = validate_language(language)
     if err:
         return None, {"field": "language", "code": err, "error": ERRORS[err]}
+    s, err = _steward_name(steward, n)
+    if err:
+        return None, {"field": "steward", "code": err, "error": ERRORS[err]}
+    if s is None:
+        s = ((load(path) or {}).get("steward")) or None
+        if s and s.casefold() == n.casefold():
+            s = None
     d = {"name": n, "language": lang, "set_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False)
-    os.replace(tmp, path)
+    if s:
+        d["steward"] = s
+    _write(path, d)
+    d.setdefault("steward", None)
     return d, None
+
+
+def set_steward(path, steward):
+    """Set, change or (with an empty name) forget the steward's name on a
+    companion that is already set up. Returns (settings, None) or (None, error)."""
+    c = load(path)
+    if not c:
+        return None, {"field": "name", "code": "required", "error": "not set up yet"}
+    s, err = _steward_name(steward, c["name"])
+    if err:
+        return None, {"field": "steward", "code": err, "error": ERRORS[err]}
+    d = {"name": c["name"], "language": c["language"], "set_at": c.get("set_at")}
+    if s:
+        d["steward"] = s
+    _write(path, d)
+    c["steward"] = s
+    return c, None
 
 
 def public(settings):
@@ -157,6 +222,7 @@ def public(settings):
         "configured": settings is not None,
         "name": settings["name"] if settings else None,
         "language": settings["language"] if settings else None,
+        "steward": settings.get("steward") if settings else None,
     }
 
 

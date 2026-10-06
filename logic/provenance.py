@@ -217,6 +217,10 @@ def visible_modes(request_mode: str):
 # about the line, not a request.
 UNVERIFIED_LABEL = "[Unverified - an earlier answer of yours that may be wrong]"
 SUPPORTED_LABEL = "[Marked right by your steward]"
+# A turn of the training loop whose answer passed the loop's check (build log
+# 64). The words say what happened and no more: a check passed. The check
+# reads for words of the answer key; it is not the steward calling it right.
+PASSED_LABEL = "[Passed a check in training]"
 CORRECTION_REASONS = {
     "never": "this never happened",
     "part": "part of it is wrong",
@@ -231,7 +235,7 @@ TAG_NOTE = ("Some memory lines carry a tag. [Unverified] and [Corrected] lines a
             "Where a correction says what is true, answer with that.")
 
 
-def memory_tag(mode: str, correction=None, supported: bool = False) -> str:
+def memory_tag(mode: str, correction=None, supported=False) -> str:
     """The tag a remembered turn carries in the prompt ("" for plain fact).
 
     correction: the active note on the turn, if it was corrected - its
@@ -253,7 +257,9 @@ def memory_tag(mode: str, correction=None, supported: bool = False) -> str:
     if mode == UNVERIFIED:
         return UNVERIFIED_LABEL
     if supported:
-        return SUPPORTED_LABEL
+        # the note itself, or True: whose mark it is decides what it says
+        by = supported.get("by") if isinstance(supported, dict) else "steward"
+        return PASSED_LABEL if by == "training" else SUPPORTED_LABEL
     return ""
 
 

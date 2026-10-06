@@ -45,7 +45,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # or corrects a turn or a ring. The console's only way to change what the
 # companion remembers; the proxy checks and records every one.
 PROXIED_POST = ("/api/chat", "/aetherseed/setup", "/aetherseed/steward",
-                "/aetherseed/shelf/remove")
+                "/aetherseed/shelf/remove",
+                # build log 64: the training loop's buttons, and who her steward is
+                "/aetherseed/training", "/aetherseed/steward-name")
 
 # THE STEWARD'S OWN SHELF (build log 62). Andreas, 5 Oct 2026: "a file upload
 # button in the gui, that adds documents to the library/workspace". The body
@@ -96,7 +98,7 @@ def _console_seen():
 # string (?before=&q=&limit=), so it is matched on its path alone.
 # /aetherseed/shelf: the steward's own documents and how far each is read (62).
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", "/api/tags",
-               "/aetherseed/shelf")
+               "/aetherseed/shelf", "/aetherseed/training")
 PROXIED_GET_QUERY = ("/aetherseed/memories",)
 
 # The page's own script is pinned by the hash of its bytes.
@@ -156,7 +158,7 @@ CSP = None      # set in __main__, once index.html is known to exist
 HEARTBEAT_SECONDS = int(os.environ.get("AETHERSEED_GUI_HEARTBEAT", "300"))
 
 _counts = {"page": 0, "status": 0, "record": 0, "rings": 0, "chat": 0, "setup": 0,
-           "refused": 0, "upload": 0, "shelf": 0}
+           "refused": 0, "upload": 0, "shelf": 0, "training": 0}
 _counts_lock = threading.Lock()
 
 
@@ -179,11 +181,11 @@ def _heartbeat():
                 _counts[k] = 0
         if sum(seen.values()):
             print("[gui] %ds  page=%d status=%d record=%d rings=%d chat=%d setup=%d "
-                  "refused=%d upload=%d shelf=%d"
+                  "refused=%d upload=%d shelf=%d training=%d"
                   % (HEARTBEAT_SECONDS, seen["page"], seen["status"],
                      seen["record"], seen["rings"], seen["chat"],
                      seen["setup"], seen["refused"], seen.get("upload", 0),
-                     seen.get("shelf", 0)), flush=True)
+                     seen.get("shelf", 0), seen.get("training", 0)), flush=True)
         else:
             print("[gui] %ds  idle" % HEARTBEAT_SECONDS, flush=True)
 
@@ -261,7 +263,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
             _tally("status" if self.path.endswith("/status")
                    else "record" if self.path.endswith("/record")
                    else "rings" if self.path.endswith("/rings")
-                   else "shelf" if self.path.endswith("/shelf") else "page")
+                   else "shelf" if self.path.endswith("/shelf")
+                   else "training" if self.path.endswith("/training") else "page")
             self._relay("GET")
             return
         if self.path == "/":
@@ -346,7 +349,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
             return
         _tally("setup" if self.path == "/aetherseed/setup"
-               else "steward" if self.path == "/aetherseed/steward"
+               else "steward" if self.path in ("/aetherseed/steward", "/aetherseed/steward-name")
+               else "training" if self.path == "/aetherseed/training"
                else "shelf" if self.path.startswith("/aetherseed/shelf") else "chat")
         n = int(self.headers.get("Content-Length", 0))
         self._relay("POST", self.rfile.read(n) if n else b"")

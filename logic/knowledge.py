@@ -87,7 +87,7 @@ from typing import Dict, List, Optional
 
 __all__ = ["Knowledge", "load_knowledge", "KNOWN_PREFIX", "CONTACT_ENTRY",
            "is_contact_question", "FOUNDERS_ENTRY", "is_founders_question",
-           "exact_entry_for", "UNIT_PREFIX", "SCORE_THRESHOLD", "WEIGHT_FLOOR",
+           "exact_entry_for", "is_steward_question", "steward_text", "UNIT_PREFIX", "SCORE_THRESHOLD", "WEIGHT_FLOOR",
            "MAX_LINES", "MAX_TEXT_CHARS"]
 
 # The third kind of line in the block, beside [Episode] and [Pattern]. Not a
@@ -316,6 +316,37 @@ def is_founders_question(user_msg: str) -> bool:
         return False
     raw = (user_msg or "").strip().lower()
     return "?" in raw or raw.startswith(_FOUNDER_ASKING)
+
+
+# ---------------------------------------------------------------------------
+# The third: who her steward is (build log 64)
+# ---------------------------------------------------------------------------
+# Andreas, 6 Oct 2026: "Lyra should know who her steward is (me)". The name is
+# the unit's own setting (logic/companion.py), never the build's, so the
+# answer is put together here from that setting: a 3B model copying a proper
+# noun it has seen once is the founders' failure again. Narrow, like the
+# others: the question, and nothing else in the message.
+_STEWARD_QUESTIONS = [re.compile(p, re.I) for p in (
+    r"^\s*(?:so\s+|and\s+|ok(?:ay)?,?\s+)?who(?:'s|’s|\s+is)\s+your\s+steward\s*[?.!]*\s*$",
+    r"^\s*what(?:'s|’s|\s+is)\s+(?:your\s+steward(?:'s|’s)\s+name|the\s+name\s+of\s+your\s+steward)\s*[?.!]*\s*$",
+    r"^\s*(?:do\s+you\s+know\s+)?who\s+(?:looks\s+after|takes\s+care\s+of)\s+you\s*[?.!]*\s*$",
+    r"^\s*(?:can\s+you\s+)?(?:tell\s+me|name)\s+(?:who\s+)?your\s+steward(?:\s+is)?\s*[?.!]*\s*$",
+)]
+
+
+def is_steward_question(user_msg: str) -> bool:
+    t = (user_msg or "").strip()
+    if not t or len(t) > 80:
+        return False
+    return any(p.search(t) for p in _STEWARD_QUESTIONS)
+
+
+def steward_text(name: str) -> str:
+    """What she says for "Who is your steward?" when the unit holds a name.
+    The second sentence is eco.steward's; the name is the unit's."""
+    return ("My steward is %s: the person who looks after me on this device. "
+            "What my steward tells me is kept word for word, and I earn my "
+            "steward's trust; I am not owned." % name)
 
 
 def exact_entry_for(user_msg: str) -> Optional[str]:

@@ -27,9 +27,9 @@ sys.path.insert(0, HERE)
 
 # Stub only the heavy modules; honesty_check is real. Whatever was in
 # sys.modules before is put back afterwards, not merely popped (step 15h).
-_NAMES = {"aetherroot": ["AetherRoot"], "aetherspark": ["AetherSpark"],
+_NAMES = {"aetherroot": ["AetherRoot"], "aetherspark": ["AetherSpark", "SafetyGate"],
           "trust_evolution": ["TrustEvolution"],
-          "intent_detection": ["detect_intent", "execute_intent"]}
+          "intent_detection": ["detect_intent", "execute_intent", "in_workspace"]}
 _SAVED = {n: sys.modules.get(n) for n in _NAMES}
 for _name, _attrs in _NAMES.items():
     _m = types.ModuleType(_name)
@@ -39,6 +39,7 @@ for _name, _attrs in _NAMES.items():
             store_episode=lambda **_: 1, store_interaction=lambda *_, **__: None,
             get_status=lambda: {"episodes": 0, "willingness_mean": 0.0}))
     sys.modules[_name] = _m
+sys.modules["aetherspark"].TRUST_PERMISSIONS = {"observer": [1], "reader": [1, 2]}
 
 import proxy  # noqa: E402
 
@@ -332,7 +333,8 @@ class TestFirstRun(_Handler):
     def test_the_chosen_name_reaches_the_charter(self):
         status, body = self._post("/aetherseed/setup", {"name": "Lyra", "language": "en"})
         self.assertEqual(status, 200)
-        self.assertEqual(body["companion"], {"configured": True, "name": "Lyra", "language": "en"})
+        self.assertEqual(body["companion"], {"configured": True, "name": "Lyra",
+                                             "language": "en", "steward": None})
         self._ask("What is the capital of Norway?", ["Oslo", "."])
         system = SCRIPT["last_request"]["messages"][0]["content"]
         self.assertTrue(system.startswith("You are Lyra, a local AI companion"))
