@@ -94,7 +94,7 @@ _DECLINES = re.compile(
     # as she said it on a copy, 6 Oct 2026: "I'm not capable of directly
     # accessing the internet", "I'm not aware of the latest news", "I
     # couldn't find a study"
-    r"not\s+(?:capable|aware)|(?:could\s+not|couldn['’]?t)\s+find|"
+    r"not\s+(?:capable|aware|able)|(?:could\s+not|couldn['’]?t)\s+find|"
     r"(?:no|n['’]?t\s+have)\s+(?:real[- ]time\s+)?access)",
     re.I)
 
