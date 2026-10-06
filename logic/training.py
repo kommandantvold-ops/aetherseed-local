@@ -783,6 +783,18 @@ class Loop:
         return t
 
     def _work(self):
+        try:
+            self._rounds()
+        except Exception as e:
+            # A fault in the loop itself must not leave a run that says
+            # "running" with nothing running: it is paused, and says why.
+            with self.lock:
+                if self.state.get("status") in ("running", "stopping"):
+                    self.state["status"] = "paused"
+                    self.state["note"] = "paused by a fault in the loop: %r" % (e,)
+                    self._save()
+
+    def _rounds(self):
         while True:
             reflect = False
             with self.lock:

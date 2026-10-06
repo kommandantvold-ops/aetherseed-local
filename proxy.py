@@ -133,6 +133,9 @@ TRAINING_HEADER = "X-Aetherseed-Training"
 _TRAINING_TOKEN = secrets.token_hex(24)
 _TRAINING_LOOP = None
 _TRAINING_LOCK = threading.Lock()
+# The newest turn in her memory before the question in hand was asked: only a
+# turn after it can be the one the check's verdict belongs to.
+_TRAINING_FLOOR = {"id": 0}
 
 
 class _Gated:
@@ -150,6 +153,11 @@ def _training_ask(say, level):
         "http://127.0.0.1:%d/api/chat" % PROXY_PORT, data=body, method="POST",
         headers={"Content-Type": "application/json", TRAINING_HEADER: _TRAINING_TOKEN})
     r = {"status": None, "reply": "", "meta": {}, "error": None}
+    try:
+        _TRAINING_FLOOR["id"] = root.store.conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM episodes").fetchone()[0]
+    except Exception:
+        _TRAINING_FLOOR["id"] = 1 << 62            # unknown: mark nothing
     try:
         # Read to the end: the turn is stored after its last line is sent.
         with urllib.request.urlopen(req, timeout=400) as resp:
@@ -177,13 +185,13 @@ def _training_mark(say, ok, truth):
     """Put the check's verdict on her memory of the turn just asked: passed,
     or corrected from the answer key - never in the steward's name."""
     row = root.store.conn.execute(
-        "SELECT id FROM episodes WHERE speaker = ? AND user_msg = ? ORDER BY id DESC LIMIT 1",
-        (TRAINER, say)).fetchone()
+        "SELECT id FROM episodes WHERE speaker = ? AND user_msg = ? AND id > ? "
+        "ORDER BY id DESC LIMIT 1", (TRAINER, say, _TRAINING_FLOOR["id"])).fetchone()
     if not row:
-        return "not remembered"
+        return "not remembered"            # this turn was not stored: nothing to mark
     turn = row[0]
     if root.store.steward_notes(target="turn", target_ids=[turn]):
-        return "not remembered"            # the newest such turn is an older, marked one
+        return "not remembered"
     log = os.path.join(os.path.dirname(PROVENANCE_LOG), "corrections.log")
     if ok:
         steward.passed_in_training(root.store, turn, log_path=log)

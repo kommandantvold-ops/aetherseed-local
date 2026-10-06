@@ -415,6 +415,22 @@ class TheLoop(unittest.TestCase):
         levels = [l for l, _ in first]
         self.assertEqual(levels, sorted(levels, key=T.LADDER.index))
 
+    def test_a_fault_in_the_loop_pauses_the_run_and_says_so(self):
+        pupil = _Pupil(self.dir)
+        calls = []
+
+        def mark(say, ok, truth):
+            calls.append(say)
+            return {"passed": ok}
+        loop = T.Loop(self.dir, ask=pupil.ask, mark=mark, clock=_Clock(),
+                      settings=lambda: 1 / 0)          # the unit's settings cannot be read
+        loop.start(seconds=60)
+        s = self.wait(loop, "paused")
+        self.assertIn("paused by a fault in the loop", s["note"])
+        self.assertIn("ZeroDivisionError", s["note"])
+        self.assertTrue(loop.stop()[0])
+        self.assertEqual(self.wait(loop, "stopped")["status"], "stopped")
+
     def test_a_run_does_not_start_if_her_memory_cannot_be_backed_up(self):
         def no_backup(path):
             raise OSError("disk full")
@@ -606,6 +622,13 @@ class AtTheProxy(_Proxy):
         self.lesson("What is Mustardseed?", "observer")
         self.assertTrue(proxy._training_mark("What is Mustardseed?", True, "")["passed"])
         self.assertEqual(proxy._training_mark("Never asked", True, ""), "not remembered")
+        # a verdict belongs to the turn just asked, never to an older one of the same words
+        SCRIPT["chunks"] = ["I", " run", " llama3.2:3b", "."]
+        self.lesson("What is AetherRoot?", "observer")
+        proxy._TRAINING_FLOOR["id"] = proxy.root.store.conn.execute(
+            "SELECT MAX(id) FROM episodes").fetchone()[0]
+        self.assertEqual(proxy._training_mark("What is AetherRoot?", True, ""), "not remembered")
+        self.assertEqual(proxy.root.store.steward_notes(target="turn", target_ids=[3]), [])
 
         self.assertEqual(proxy.root.store.fact_count(active_only=True), 0,
                          "the key's words are not kept as a steward's fact")
@@ -625,7 +648,7 @@ class AtTheProxy(_Proxy):
         self.assertEqual(meta["mode"], "record")
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
         self.assertEqual(reply.split("\n"), [
-            "I remember 4 turns. 1 carries a tag: 0 fiction, 1 unverified.",
+            "I remember 5 turns. 1 carries a tag: 0 fiction, 1 unverified.",
             "Corrected by my steward: 0. Marked right by my steward: 0.",
             "Corrected in training, from the answer key: 1. Passed a check in training: 1.",
             "The latest corrections:",
