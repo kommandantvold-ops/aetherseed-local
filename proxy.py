@@ -145,9 +145,11 @@ class _Gated:
         self.gate = gate
 
 
-def _training_ask(say, level):
-    """One turn of homework, sent the way the console sends one."""
-    body = json.dumps({"stream": True, "model": MODEL, "training": {"level": level},
+def _training_ask(say, level, keep=True):
+    """One turn of homework, sent the way the console sends one. keep=False:
+    asked and checked, and not put in her memory (logic/training.py)."""
+    body = json.dumps({"stream": True, "model": MODEL,
+                       "training": {"level": level, "remember": bool(keep)},
                        "messages": [{"role": "user", "content": say}]}).encode("utf-8")
     req = urllib.request.Request(
         "http://127.0.0.1:%d/api/chat" % PROXY_PORT, data=body, method="POST",
@@ -1120,14 +1122,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                                 _TRAINING_TOKEN.encode()):
             return None
         try:
-            level = (json.loads(body).get("training") or {}).get("level")
+            asked = json.loads(body).get("training") or {}
+            level = asked.get("level")
         except Exception:
             return None
         if level not in TRUST_PERMISSIONS:
             return None
         gate = SafetyGate({"trust_level": level,
                            "audit_log": os.path.join(TRAINING_DIR, "spark_audit.log")})
-        return {"level": level, "gate": gate,
+        return {"level": level, "gate": gate, "remember": asked.get("remember") is not False,
                 "workspace": os.path.join(TRAINING_DIR, "workspace")}
 
     def _proxy_chat_augmented(self, body: bytes):
@@ -1582,7 +1585,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             failed_to_invent = (request_mode == FICTION and declined)
 
             stored_ok = False
-            if not failed_to_invent:
+            # A homework turn about what a file held at that moment is tested
+            # and not remembered (build log 64d): come back later, it is told
+            # as the state of the workspace now.
+            not_kept = bool(lesson) and not lesson["remember"]
+            if not_kept:
+                print("[training] a tool task: checked, not remembered", flush=True)
+            elif not failed_to_invent:
                 try:
                     if lesson:
                         # homework is remembered, and waits for no ring

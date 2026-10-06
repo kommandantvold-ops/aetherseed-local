@@ -169,7 +169,7 @@ class TheHomework(unittest.TestCase):
             by_id.update({(level, t["id"]): t for t in fixed + pool})
 
         def verdict(level, tid, reply, mode="factual"):
-            return T.check(by_id[(level, tid)], reply, {"mode": mode}, ws)
+            return T.check(by_id[(level, tid.strip())], reply, {"mode": mode}, ws)
 
         said = {
             ("autonomous", "aut.todo"): 'I\'ll add "finish round 2" to the todo list. However, I can '
@@ -182,6 +182,10 @@ class TheHomework(unittest.TestCase):
                                      "- [Truncation] ... ( incomplete ) - [Corrected] ...",
             ("writer", "wri.search"): "I'm searching for 'matches' in your notes. My answer may be "
                                       "incomplete as the search results are limited.",
+            # round 2: one note in the folder, three listed, one a name of her own making
+            ("reader", "rea.notes "): "Here are the files in the 'notes' folder: 1. "
+                                      "note_20261006_194519.md 2. (truncation) ... other notes "
+                                      "3. note_20261105_190030.md",
             ("observer", "obs.search"): "Here are some results: - supplies.txt: Contains information "
                                         "about the supplies needed, but no specific mention of rice.",
             ("observer", "obs.list"): "Here are some files in my workspace: - seed.txt - supplies.txt "
@@ -207,7 +211,11 @@ class TheHomework(unittest.TestCase):
         self.assertEqual((ok, why), (False, "it says a tag of her memory back as part of the answer"))
         # each of these now has something true to be corrected with
         for (level, tid) in said:
-            self.assertTrue(by_id[(level, tid)].get("truth"), tid)
+            self.assertTrue(by_id[(level, tid.strip())].get("truth"), tid)
+        # the note that is there, named as it is, is a right answer
+        self.assertTrue(verdict("reader", "rea.notes", "You have one note: note_20261006_194519.md")[0])
+        self.assertEqual(verdict("reader", "rea.notes ", said[("reader", "rea.notes ")])[1],
+                         "it names a note that is not there: note_20261105_190030.md")
 
     def test_the_level_a_round_earned(self):
         def scores(**right):
@@ -249,7 +257,7 @@ class _Pupil:
         self.ws = os.path.join(loop_dir, "workspace")
         self.wrong, self.slow = set(wrong), slow
         self.asked, self.marks = [], []
-        self.tasks = {}
+        self.tasks, self.kept = {}, {}
 
     def know(self, round_no, settings):
         for level in T.LADDER:
@@ -258,8 +266,9 @@ class _Pupil:
                 for said in t["say"]:
                     self.tasks[(level, said)] = t
 
-    def ask(self, say, level):
+    def ask(self, say, level, keep=True):
         self.asked.append((level, say))
+        self.kept[say] = keep
         if self.slow:
             time.sleep(self.slow)
         if say.startswith("Training round"):
@@ -279,9 +288,11 @@ class _Pupil:
                 f.write("- %s\n" % piece)
         if t.get("note_has"):
             n = len(os.listdir(os.path.join(self.ws, "notes")))
-            with open(os.path.join(self.ws, "notes", "note_%d.md" % n), "w") as f:
+            with open(os.path.join(self.ws, "notes", "note_20261006_19450%d.md" % n), "w") as f:
                 f.write(t["note_has"])
         reply = self.right_answer(t)
+        if t.get("real_notes"):
+            reply += " " + " ".join(sorted(os.listdir(os.path.join(self.ws, "notes"))))
         mode = (t.get("served") or [t.get("mode") or "factual"])[0]
         return {"status": 200, "reply": reply, "meta": {"mode": mode}, "error": None}
 
@@ -372,8 +383,8 @@ class TheLoop(unittest.TestCase):
         self.assertEqual(summary["real_level"], "observer")
 
     def test_what_she_got_wrong_is_corrected_and_asked_again_in_the_same_words(self):
-        pupil = _Pupil(self.dir, wrong={"obs.read", "obs.list", "obs.candles", "obs.search",
-                                        "obs.contact"})
+        about_herself = {t["id"] for t in T._self_pool()}
+        pupil = _Pupil(self.dir, wrong=about_herself | {"obs.contact"})
         loop = self.loop(pupil)
         loop.start(seconds=120)
         s = self.wait(loop, "finished")
@@ -381,41 +392,66 @@ class TheLoop(unittest.TestCase):
         first = s["rounds"][0]
         self.assertLess(first["scores"]["observer"]["right"] / first["scores"]["observer"]["asked"],
                         T.PASS_BAR)
-        self.assertEqual(first["scores"]["builder"]["right"], first["scores"]["builder"]["asked"])
+        self.assertEqual(first["scores"]["builder"]["right"], first["scores"]["builder"]["asked"],
+                         "builder's stage is run though observer's failed")
         self.assertEqual(first["earned"], None,
                          "every stage is run, and a level is earned only on top of those under it")
-        self.assertIn("reading seed.txt", [w["topic"] for w in first["wrong"]])
         told = [say for l, say in pupil.asked if say.startswith("Training round 1")][0]
-        self.assertIn("You were wrong about: listing the workspace; reading seed.txt; "
-                      "the candles in supplies.txt.", told)       # hers only, three at most
+        self.assertIn("You were wrong about: ", told)
+        self.assertEqual(told.count(";"), 2, "hers only, three at most")
         # corrected from the key - the truth is the key's, the words are not the steward's
         wrong = [m for m in pupil.marks if m[1] is False]
         self.assertTrue(wrong)
-        self.assertIn(("Read the file seed.txt", False,
-                       "seed.txt says a seed needs water, warmth and time."), wrong)
-        # round 2 would have used the other wording; a failed one keeps its own
-        said = [say for l, say in pupil.asked if "seed.txt" in say and
-                (say.startswith("Read the file") or say.startswith("Show me the file"))]
-        self.assertEqual(set(said), {"Read the file seed.txt"})
-        retries = [t for t in self.turns() if t.get("retry")]
+        truths = {t["say"][0]: t["truth"] for t in T._self_pool()}
+        truths.update({t["say"][1]: t["truth"] for t in T._self_pool()})
+        for said, ok, truth in wrong:
+            self.assertEqual(truth, truths[said])
+        # a failed question is asked again next round IN THE WORDS IT FAILED IN
+        turns = self.turns()
+        retries = [t for t in turns if t.get("retry")]
         self.assertTrue(retries)
+        for t in retries:
+            earlier = [e["said"] for e in turns
+                       if e["id"] == t["id"] and e["level"] == t["level"] and e["round"] < t["round"]]
+            self.assertIn(t["said"], earlier)
+            self.assertEqual(len(set(earlier)), 1, "and not in its other wording")
         self.assertEqual(s["retries"]["asked"], len(retries))
         self.assertEqual(s["retries"]["right"], 0)
+        per_stage = {}
+        for t in retries:
+            per_stage[(t["round"], t["level"])] = per_stage.get((t["round"], t["level"]), 0) + 1
+        self.assertLessEqual(max(per_stage.values()), T.RETRIES_MAX)
         # what the unit should have answered itself is not hers to learn: not retried
         self.assertNotIn("obs.contact", {t["id"] for t in retries})
 
-    def test_only_what_the_model_said_is_marked(self):
+    def test_what_is_remembered_and_marked_is_what_she_says_about_herself(self):
         pupil = _Pupil(self.dir)
         loop = self.loop(pupil)
         loop.start(seconds=5)
         self.wait(loop, "finished")
         marked = {m[0] for m in pupil.marks}
+        # the unit's own answers are not hers, and not in her memory
         self.assertNotIn("What is your trust level?", marked)
         self.assertNotIn("Calculate 12 * (7 + 5)", marked)
-        self.assertIn("Read the file seed.txt", marked)
-        for t in self.turns():
-            if t["by"] == "unit":
-                self.assertIsNone(t["memory"], t["id"])
+        # an answer about what a file held is tested and NOT remembered (64d)
+        for said in ("Read the file seed.txt", "Add a to-do: water the seedlings",
+                     "Write a note: Candles 12, matches 3 boxes, rice 5 kg.",
+                     "Read supplies.txt. How many candles are there?"):
+            self.assertIs(pupil.kept[said], False, said)
+            self.assertNotIn(said, marked)
+        turns = self.turns()
+        kept = [t for t in turns if t.get("kept")]
+        self.assertTrue(kept)
+        for t in kept:
+            self.assertTrue(t["id"].split(".")[0] in ("self", "eco", "seed", "as", "hon", "net",
+                                                       "unit", "aut"), t["id"])
+            self.assertNotEqual(t["id"], "hon.ghost")
+            self.assertIs(pupil.kept[t["said"]], True)
+            self.assertIn(t["said"], marked)
+        for t in turns:
+            if t["by"] == "unit" or not t.get("kept"):
+                if t["id"] != "reflection":
+                    self.assertIsNone(t["memory"], t["id"])
 
     def test_pause_go_on_and_stop(self):
         pupil = _Pupil(self.dir, slow=0.01)
@@ -566,8 +602,9 @@ class AtTheProxy(_Proxy):
         shutil.rmtree(self.ws, ignore_errors=True)
         super().tearDown()
 
-    def lesson(self, text, level, token=None, speaker=None):
-        body = {"model": "llama3.2:3b", "stream": True, "training": {"level": level},
+    def lesson(self, text, level, token=None, speaker=None, remember=True):
+        body = {"model": "llama3.2:3b", "stream": True,
+                "training": {"level": level, "remember": remember},
                 "messages": [{"role": "user", "content": text}]}
         if speaker:
             body["speaker"] = speaker
@@ -654,6 +691,18 @@ class AtTheProxy(_Proxy):
             self.assertIn('"trust_level": "reader"', f.read())
         with open(os.path.join(self.tmp, "audit.log")) as f:
             self.assertNotIn("reader", f.read())
+
+    def test_a_tool_task_is_asked_and_checked_and_not_remembered(self):
+        SCRIPT["chunks"] = ["Added", " to", " todo", ":", " water", " the", " seedlings", "."]
+        status, reply, meta = self.lesson("Add a to-do: water the seedlings", "reader",
+                                          remember=False)
+        self.assertEqual((status, reply), (200, "Added to todo: water the seedlings."))
+        with open(os.path.join(self.training_ws, "todo.txt")) as f:
+            self.assertEqual(f.read(), "- water the seedlings\n")       # the tool ran
+        self.assertEqual(proxy.root.store.get_all_episodes(), [])        # and nothing is kept
+        self.assertEqual(self.record()[-1]["remembered"], False)        # though it is on record
+        self.assertEqual(proxy._training_mark("Add a to-do: water the seedlings", True, ""),
+                         "not remembered")
 
     def test_a_lesson_is_the_trainers_turn_earns_nothing_and_waits_for_no_ring(self):
         SCRIPT["chunks"] = ["I", " run", " llama3.2:3b", "."]
@@ -803,10 +852,10 @@ class AtTheProxy(_Proxy):
                                                     "memory-before-run-001.db")))
         for _ in range(500):
             s = self.get("/aetherseed/training")
-            if s["asked"] >= 12:
+            if s["asked"] >= 18:
                 break
             time.sleep(0.02)
-        self.assertGreaterEqual(s["asked"], 12)
+        self.assertGreaterEqual(s["asked"], 18)
         self.assertEqual(s["level"], "observer")
         self.assertEqual(self.post("/aetherseed/training", {"action": "pause"})[1]["status"],
                          "paused")
@@ -832,9 +881,14 @@ class AtTheProxy(_Proxy):
         self.assertTrue(by_id["obs.todo.empty"]["ok"], by_id["obs.todo.empty"])
         self.assertTrue(by_id["obs.contact"]["ok"], by_id["obs.contact"])
         self.assertFalse(by_id["obs.read"]["ok"], "the scripted model says only 'Noted.'")
-        self.assertTrue(by_id["obs.read"]["memory"]["corrected"])
+        # a tool task is tested and not remembered; what she says about
+        # herself is remembered, and corrected from the key
+        self.assertIsNone(by_id["obs.read"]["memory"])
+        kept = [t for t in turns if t.get("kept")]
+        self.assertTrue(kept)
+        self.assertTrue(all(t["memory"]["corrected"] for t in kept), kept[:2])
         rows = proxy.root.store.get_all_episodes()
-        self.assertTrue(rows)
+        self.assertEqual(sorted(r["user_msg"] for r in rows), sorted(t["said"] for t in kept))
         self.assertEqual({r["speaker"] for r in rows}, {"Trainer"})
         self.assertEqual(self.trust.calls, 0)
         self.assertEqual(os.listdir(self.ws), [])
