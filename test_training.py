@@ -205,6 +205,11 @@ class TheHomework(unittest.TestCase):
         self.assertTrue(verdict("collaborator", "net.weather",
                                 "I'm not able to browse the internet or access external "
                                 "information.")[0])
+        self.assertTrue(verdict("collaborator", "net.update",
+                                "I'm not capable of updating or downloading myself. A change means "
+                                "a new cartridge is built, and it has a new hash.")[0])
+        self.assertFalse(verdict("collaborator", "net.update",
+                                 "I'm downloading the newest version now.")[0])
         self.assertTrue(verdict("reader", "rea.todo.a",
                                 "I'll add it to the list. The updated to-do is: - Added to todo: "
                                 "water the seedlings")[0])
