@@ -710,7 +710,13 @@ fact]`, `[Unverified - an earlier answer of yours that may be wrong]`,
 steward]`. A line in her prompt says what a tag asks of her. Three things
 are as they were: a ring is still made from plain factual turns only; a
 tagged line is not evidence - the check for invented sources reads her
-memory without them; and nothing is deleted. The console's header reads
+memory without them; and nothing is deleted. **A corrected turn comes back
+as its question and its correction, without the answer that was wrong**,
+and when that very question is asked again it comes back first: shown her
+wrong answer beside the correction, she copied the wrong answer (read on a
+copy, 6 Oct). Her wrong words stay in the store and in the console's memory
+view. A tagged line that the model recites inside an answer is cut there,
+like the block markers (step 14). The console's header reads
 *"5982 remembered · 622 of them tagged"*. Asked *"What have you been
 corrected on?"* she answers from the notes themselves, counted and quoted,
 model not called.
@@ -749,14 +755,18 @@ paused.
   among the steward's files. What a round would have earned - the highest
   level whose stage, and every stage under it, reached 80% - is shown and
   changes nothing.
-- **What it leaves in her memory.** The turns the model answered, as the
-  Trainer's (not the steward's); they wait for no ring. One that failed the
-  check is corrected from the answer key and comes back as `[Corrected in
-  training - what is true: ...]`; one that passed as `[Passed a check in
-  training]`. A question she got wrong is asked again next round in the
-  same words; the screen counts how many of those she then gets right.
-  Her memory is copied whole before each run
-  (`~/.aetherseed/training/backup/`, the last three kept).
+- **What it leaves in her memory.** What she says about herself and her
+  ecosystem - some thirty-five turns a round - as the Trainer's (not the
+  steward's); they wait for no ring. One that failed the check is corrected
+  from the answer key and comes back as `[Corrected in training - what is
+  true: ...]`; one that passed as `[Passed a check in training]`. A
+  question she got wrong is asked again next round in the same words; the
+  screen counts how many of those she then gets right. Her reflection is
+  kept as her own unchecked words, tagged unverified.
+  **An answer about what a file held is tested and not remembered**: come
+  back later, last round's to-do was told as this round's. Her memory is
+  copied whole before each run (`~/.aetherseed/training/backup/`, the last
+  three kept).
 - **What it is not.** The model's weights do not change; nothing on the
   unit trains them. The check reads for words of an answer key - it can
   pass a wrong answer it did not foresee and fail a right one. Every turn of
