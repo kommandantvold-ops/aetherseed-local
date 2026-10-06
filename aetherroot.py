@@ -53,8 +53,11 @@ DEFAULT_CONFIG = {
 # Provenance modes by what memory does with them (logic/provenance.py).
 # Literal strings, not imports: aetherroot must load without logic/ on the path.
 CONSOLIDATES = ("factual",)              # may feed a ring
-REMEMBERED = ("factual", "fiction")      # counted as remembered on the console
-SET_ASIDE = ("unverified",)              # kept in the record, never used
+# Nothing is set aside since build log 64 (Andreas, 6 Oct 2026): every turn is
+# remembered, and one that is not plain fact carries its tag (logic/provenance).
+REMEMBERED = ("factual", "fiction", "unverified")
+TAGGED = ("fiction", "unverified")       # remembered, and shown with a tag
+SET_ASIDE = ()                           # kept for the callers that still ask
 
 
 # ============================================================
@@ -197,6 +200,14 @@ class MemoryStore:
             if col not in sem:
                 self.conn.execute(f"ALTER TABLE semantic ADD COLUMN {col} {decl}")
         self.conn.commit()
+        # Who made a note (build log 64): 'steward' from the console, as every
+        # note before the column was; 'training' when the training loop's
+        # answer key corrected a turn.
+        notes = {r[1] for r in self.conn.execute("PRAGMA table_info(steward_notes)")}
+        if "by" not in notes:
+            self.conn.execute(
+                "ALTER TABLE steward_notes ADD COLUMN by TEXT NOT NULL DEFAULT 'steward'")
+            self.conn.commit()
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -269,7 +280,8 @@ class MemoryStore:
                 fact_id     INTEGER,
                 prior_mode  TEXT NOT NULL DEFAULT '',
                 trust_points REAL NOT NULL DEFAULT 0,
-                undone_at   TEXT
+                undone_at   TEXT,
+                by          TEXT NOT NULL DEFAULT 'steward'
             );
 
             CREATE TABLE IF NOT EXISTS identity (
@@ -528,7 +540,7 @@ class MemoryStore:
     # ---- the steward's notes (logic/steward.py) --------------------------------
 
     _NOTE_COLS = ("id", "created_at", "target", "target_id", "action", "reason",
-                  "text", "fact_id", "prior_mode", "trust_points", "undone_at")
+                  "text", "fact_id", "prior_mode", "trust_points", "undone_at", "by")
 
     def steward_notes(self, target: Optional[str] = None, target_ids=None,
                       active_only: bool = True) -> List[Dict]:
@@ -557,14 +569,24 @@ class MemoryStore:
 
     def add_steward_note(self, target: str, target_id: int, action: str,
                          reason: str = "", text: str = "", fact_id=None,
-                         prior_mode: str = "", trust_points: float = 0) -> int:
+                         prior_mode: str = "", trust_points: float = 0,
+                         by: str = "steward") -> int:
         cur = self.conn.execute(
             "INSERT INTO steward_notes (created_at, target, target_id, action, reason, "
-            "text, fact_id, prior_mode, trust_points) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "text, fact_id, prior_mode, trust_points, by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (datetime.now(timezone.utc).isoformat(), target, int(target_id), action,
-             reason or "", text or "", fact_id, prior_mode or "", float(trust_points)))
+             reason or "", text or "", fact_id, prior_mode or "", float(trust_points),
+             by or "steward"))
         self.conn.commit()
         return cur.lastrowid
+
+    def notes_by_target(self, target: str) -> Dict[int, Dict]:
+        """{target_id: {"correct": note|None, "support": note|None}} of the
+        active notes on turns or on rings - what retrieval tags a line with."""
+        out: Dict[int, Dict] = {}
+        for n in self.steward_notes(target=target):
+            out.setdefault(n["target_id"], {"correct": None, "support": None})[n["action"]] = n
+        return out
 
     def undo_steward_note(self, note_id: int):
         self.conn.execute("UPDATE steward_notes SET undone_at = ? WHERE id = ?",
@@ -768,6 +790,18 @@ def _dedupe_by_question(ranked, want):
     answers holds nothing else, and whatever got in first is then repeated
     forever - right in step 24, wrong in step 29.
     """
+    # Since build log 64 nothing is set aside, so one question's turns can
+    # include an answer that was corrected. That one is kept in place of the
+    # best-ranked: it carries what is true, and the warning with it. Failing
+    # that, a turn that is plain fact is kept before one that is only tagged.
+    def standing(mem):
+        return 0 if mem.get("corrected") else (2 if mem.get("tagged") else 1)
+
+    best = {}
+    for mem in ranked:
+        key = mem.get("key")
+        if key is not None and (key not in best or standing(mem) < standing(best[key])):
+            best[key] = mem
     out, seen = [], set()
     for mem in ranked:
         key = mem.get("key")
@@ -775,6 +809,7 @@ def _dedupe_by_question(ranked, want):
             if key in seen:
                 continue
             seen.add(key)
+            mem = best[key]
         out.append(mem)
         if len(out) >= want:
             break
@@ -839,9 +874,14 @@ class AetherRoot:
         `request_mode` is what the CURRENT request asked for, and it decides
         what the past is allowed to say into it:
 
-            a factual request sees only factual episodes
-            a fiction request sees factual + fiction, the fiction labelled
-            'unverified' is never retrieved by either
+            UNTIL BUILD LOG 64: a factual request saw only factual
+            episodes, a fiction request factual + labelled fiction, and
+            'unverified' was retrieved by neither.
+
+            SINCE BUILD LOG 64 (Andreas, 6 Oct 2026: "None of Lyras memories
+            should be set aside, all memories should be properly tagged"):
+            every request sees every mode, and what is not plain fact comes
+            back with a tag in front of it (logic.provenance.memory_tag).
 
         That rule is the whole point of the module. Without it a story written
         on Tuesday re-enters Friday's prompt indistinguishable from something
@@ -852,7 +892,7 @@ class AetherRoot:
         and 'fiction' turns were summarised into [Pattern] lines that a factual
         request then retrieved. test_rings.py holds the regression.
         """
-        from logic.provenance import visible_modes, FICTION, FICTION_LABEL
+        from logic.provenance import visible_modes, memory_tag
         from logic.speaker import label_for
         from logic.rings import ring_line, is_recollection, rings_for_question
 
@@ -889,12 +929,13 @@ class AetherRoot:
         # Get episodic + semantic memories
         episodes = self.store.get_all_episodes()
         semantics = self.store.get_all_semantic()
-        # A ring the steward corrected from the console is not used while the
-        # correction stands (guided correction, logic/steward.py). It stays in
-        # the table and on the ring tree, marked; undone, it comes back.
-        set_aside = self.store.set_aside_ring_ids()
-        if set_aside:
-            semantics = [m for m in semantics if m.get("id") not in set_aside]
+        # NOTHING IS SET ASIDE (build log 64). Every turn and every ring may
+        # come back; what the steward - or the training loop's answer key -
+        # said of one comes back with it, as its tag (logic/provenance.py).
+        # Until this step a corrected ring was left out here and a turn that
+        # was not plain fact never reached a factual request.
+        turn_notes = self.store.notes_by_target("turn")
+        ring_notes = self.store.notes_by_target("ring")
 
         # Combine and format for retrieval
         all_memories = []
@@ -902,22 +943,30 @@ class AetherRoot:
             ep_mode = ep.get("mode", "factual")
             if ep_mode not in allowed:
                 continue
-            label = (FICTION_LABEL + " ") if ep_mode == FICTION else ""
+            note = turn_notes.get(ep["id"]) or {}
+            tag = memory_tag(ep_mode, note.get("correct"), bool(note.get("support")))
             all_memories.append({
                 "embedding": ep["embedding"],
                 "resonance": ep["resonance"],
                 "timestamp": ep["timestamp"],
                 # The speaker goes where "User" always stood: the model reads
                 # who said it in front of what was said (logic/speaker.py).
-                "text": (f"{label}[Episode] {label_for(ep.get('speaker'))}: "
+                "text": (f"{tag + ' ' if tag else ''}[Episode] {label_for(ep.get('speaker'))}: "
                          f"{ep['user_msg'][:100]} | AI: {ep['ai_msg'][:100]}"),
                 "type": "episode",
+                # Not plain fact: shown with its tag, and not evidence for the
+                # honesty check. A turn the steward only marked right is fact.
+                "tagged": bool(tag) and (ep_mode != "factual" or bool(note.get("correct"))),
+                # Carries what is true: of one question's turns, the one kept.
+                "corrected": bool(note.get("correct")),
                 # What question this turn answers. Retrieval keeps only the best
                 # episode per key, so one question asked twenty times cannot
                 # fill the window with its own echoes. See _dedupe_by_question.
                 "key": _question_key(ep.get("user_msg")),
             })
         for sem in semantics:
+            note = ring_notes.get(sem["id"]) or {}
+            tag = memory_tag("factual", note.get("correct"), bool(note.get("support")))
             if sem.get("ring_no") is not None:
                 # A ring: the chosen part, then - labelled - her own sentence
                 # about it (logic/rings.py).
@@ -925,12 +974,14 @@ class AetherRoot:
                                  sem.get("own_words") or "")
             else:
                 text = f"[Pattern] {sem['content'][:200]}"   # from before rings
+            sem["_tag"] = tag
             all_memories.append({
                 "embedding": sem["embedding"],
                 "resonance": sem["resonance_avg"],
                 "timestamp": sem["updated_at"],
-                "text": text,
+                "text": (tag + " " if tag else "") + text,
                 "type": "semantic",
+                "tagged": bool(note.get("correct")),
                 "ring_no": sem.get("ring_no"),
             })
 
@@ -982,16 +1033,19 @@ class AetherRoot:
         fact_ids = (report or {}).get("facts") or []
         fact_srcs = (report or {}).get("fact_sources") or []
         fact_txts = (report or {}).get("fact_texts") or []
-        items = ([(t, "known", None) for t in known]
-                 + [(t, "fact", i) for i, t in enumerate(facts)]
-                 + [(ring_line(r["ring_no"], r["content"][:200], r.get("own_words") or ""),
-                     "asked", r["ring_no"]) for r in asked]
+        items = ([(t, "known", None, False) for t in known]
+                 + [(t, "fact", i, False) for i, t in enumerate(facts)]
+                 + [((r.get("_tag") + " " if r.get("_tag") else "")
+                     + ring_line(r["ring_no"], r["content"][:200], r.get("own_words") or ""),
+                     "asked", r["ring_no"], bool((ring_notes.get(r["id"]) or {}).get("correct")))
+                    for r in asked]
                  + [(m["text"], "ring" if m.get("ring_no") is not None else "memory",
-                     m.get("ring_no")) for m in top])
+                     m.get("ring_no"), bool(m.get("tagged"))) for m in top])
         lines = ["[MEMORY CONTEXT]"]
+        trusted = []                 # the same block without its tagged lines
         total_chars = 0
-        shown = {"known": 0, "facts": [], "rings": []}
-        for text, kind, ref in items:
+        shown = {"known": 0, "facts": [], "rings": [], "tagged": 0}
+        for text, kind, ref, tagged in items:
             line = f"- {text}"
             if total_chars + len(line) > max_chars:
                 if kind == "asked":
@@ -999,6 +1053,10 @@ class AetherRoot:
                 break
             lines.append(line)
             total_chars += len(line)
+            if tagged:
+                shown["tagged"] += 1
+            else:
+                trusted.append(line)
             if kind == "known":
                 shown["known"] += 1
             elif kind == "fact":
@@ -1015,6 +1073,14 @@ class AetherRoot:
             report["fact_texts"] = [fact_txts[i] for i in shown["facts"] if i < len(fact_txts)]
             report["rings"] = shown["rings"]
             report["known"] = shown["known"]
+            # Lines shown with a tag - fiction, unverified, corrected - and
+            # the block without them. A tagged line is hers to see and not to
+            # lean on: an invented source she once wrote must not, by standing
+            # in her memory, make the same invention look backed the next time
+            # (26e). The honesty check and the trust scorer read `trusted`.
+            report["tagged"] = shown["tagged"]
+            report["trusted_context"] = "\n".join(
+                ["[MEMORY CONTEXT]"] + trusted + ["[END MEMORY CONTEXT]"]) if trusted else ""
 
         return "\n".join(lines)
 
@@ -1130,10 +1196,11 @@ class AetherRoot:
         unconsolidated = self.store.get_episode_count(unconsolidated_only=True,
                                                       modes=CONSOLIDATES)
         # 'episodes' stays the row count - tools/soak.py watches it for writes.
-        # What the console shows is these two: fiction is kept and labelled, so
-        # it is remembered; 'unverified' is kept in the record and never used.
+        # What the console shows: every turn is remembered (build log 64), and
+        # "tagged" counts those that come back with a tag - fiction, unverified.
         remembered = self.store.get_episode_count(False, modes=REMEMBERED)
-        set_aside = self.store.get_episode_count(False, modes=SET_ASIDE)
+        set_aside = 0                # nothing is, since build log 64
+        tagged = self.store.get_episode_count(False, modes=TAGGED)
         semantics = len(self.store.get_all_semantic())
         identity = self.store.get_identity()
         probes = self.store.get_probe_history()
@@ -1143,6 +1210,8 @@ class AetherRoot:
             "unconsolidated": unconsolidated,
             "remembered": remembered,
             "set_aside": set_aside,
+            # Remembered, and shown to her with a tag: fiction and unverified.
+            "tagged": tagged,
             "rings": self._ring_status(unconsolidated),
             "facts": self.store.fact_count(active_only=True),
             "semantic_memories": semantics,

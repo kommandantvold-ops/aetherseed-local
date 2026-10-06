@@ -57,7 +57,17 @@ class TestConsolidationReadsFactualOnly(_Root):
         self.assertGreaterEqual(closed, 1)
         ctx = self.root.retrieve_context("tell me about secretword3 and alpha",
                                          request_mode="factual")
-        self.assertNotIn("secretword", ctx)
+        # Since build log 64 nothing is set aside: such a turn may come back
+        # as itself, under its tag. What F1 forbids still stands - no ring and
+        # no pattern carries its words, where no tag could follow them.
+        from logic.provenance import UNVERIFIED_LABEL
+        for line in ctx.split("\n"):
+            if "secretword" in line:
+                self.assertTrue(line.startswith("- " + UNVERIFIED_LABEL), line)
+                self.assertNotIn("[Ring]", line)
+                self.assertNotIn("[Pattern]", line)
+        for sem in self.root.store.get_all_semantic():
+            self.assertNotIn("secretword", sem["content"])
 
     def test_fiction_words_never_reach_a_factual_prompt(self):
         _turns(self.root, 13, mode="fiction", word="dragonword")
@@ -89,8 +99,11 @@ class TestConsolidationReadsFactualOnly(_Root):
 
     def test_mode_constants_match_provenance(self):
         self.assertEqual((provenance.FACTUAL,), aetherroot.CONSOLIDATES)
-        self.assertEqual((provenance.FACTUAL, provenance.FICTION), aetherroot.REMEMBERED)
-        self.assertEqual((provenance.UNVERIFIED,), aetherroot.SET_ASIDE)
+        # build log 64: nothing is set aside; fiction and unverified are
+        # remembered and tagged
+        self.assertEqual(set(provenance.VALID_MODES), set(aetherroot.REMEMBERED))
+        self.assertEqual((provenance.FICTION, provenance.UNVERIFIED), aetherroot.TAGGED)
+        self.assertEqual((), aetherroot.SET_ASIDE)
 
 
 class TestRings(_Root):
@@ -139,17 +152,19 @@ class TestRings(_Root):
 class TestCounter(_Root):
     """F3 / 4b."""
 
-    def test_remembered_and_set_aside(self):
+    def test_everything_is_remembered_and_what_is_tagged_is_counted(self):
+        # until build log 64: 13 remembered, 20 set aside
         _turns(self.root, 13)
         _turns(self.root, 20, mode="unverified", word="secretword", start=14)
         s = self.root.get_status()
-        self.assertEqual((33, 13, 20), (s["episodes"], s["remembered"], s["set_aside"]))
+        self.assertEqual((33, 33, 0, 20),
+                         (s["episodes"], s["remembered"], s["set_aside"], s["tagged"]))
 
-    def test_fiction_counts_as_remembered(self):
+    def test_fiction_counts_as_remembered_and_tagged(self):
         _turns(self.root, 3)
         _turns(self.root, 2, mode="fiction", word="dragonword", start=4)
         s = self.root.get_status()
-        self.assertEqual((5, 0), (s["remembered"], s["set_aside"]))
+        self.assertEqual((5, 0, 2), (s["remembered"], s["set_aside"], s["tagged"]))
 
 
 

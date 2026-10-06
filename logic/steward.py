@@ -16,10 +16,14 @@ does not reason - so the correction is STRUCTURED:
   3. what will change - shown before it is confirmed (the console's job)
 
 WHAT A CORRECTION DOES - and nothing more:
-  - a turn: its mode becomes 'unverified', the existing "never used as
-    memory" (it drops out of retrieval and out of every future ring); the mode
-    it had is kept in the note, so undo puts it back;
-  - a ring: it is left out of retrieval while the note stands;
+  - a turn: its mode becomes 'unverified' (so it feeds no future ring); the
+    mode it had is kept in the note, so undo puts it back. SINCE BUILD LOG 64
+    IT IS NOT SET ASIDE: Andreas, 6 Oct 2026 - "None of Lyras memories should
+    be set aside, all memories should be properly tagged, and Lyra should be
+    able to see the tags and the corrections made by the steward." A
+    corrected turn still comes back to her, with the correction in front of
+    it: "[Corrected by your steward - what is true: ...]";
+  - a ring: the same - it comes back tagged while the note stands;
   - what the steward wrote is kept as a fact, word for word, attributed -
     it comes back as "[Steward told you] ...", never as something the companion
     knows itself (logic/facts.py);
@@ -41,6 +45,7 @@ import os
 from datetime import datetime, timezone
 
 from logic.facts import validate_fact
+from logic.provenance import memory_tag
 
 REASONS = {
     "never": "this never happened",
@@ -84,7 +89,8 @@ def _now():
 def _log(path, entry):
     if not path:
         return
-    entry = dict(entry, at=_now().isoformat(timespec="seconds"), by="steward (console)")
+    entry = dict(entry, at=_now().isoformat(timespec="seconds"))
+    entry.setdefault("by", "steward (console)")
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
@@ -127,8 +133,16 @@ def status_for(store, target, ids):
 
 
 def public(note):
-    return {k: note[k] for k in ("id", "created_at", "action", "reason", "text",
-                                 "trust_points")} if note else None
+    """A note as the console shows it. A correction also carries "tag": the
+    words that stand in front of the memory when it comes back to her, so the
+    steward reads what she reads (build log 64)."""
+    if not note:
+        return None
+    out = {k: note.get(k) for k in ("id", "created_at", "action", "reason", "text",
+                                    "trust_points", "by")}
+    if note.get("action") == "correct":
+        out["tag"] = memory_tag("", correction=note)
+    return out
 
 
 def support(store, trust, target, target_id, log_path=None):
@@ -147,8 +161,16 @@ def support(store, trust, target, target_id, log_path=None):
             "capped": points < SUPPORT_POINTS}
 
 
+TRAINING = "training"
+
+
 def correct(store, target, target_id, reason, text="", facts_max=250,
-            trust=None, log_path=None):
+            trust=None, log_path=None, by="steward"):
+    """by: 'steward' (the console) or TRAINING - the training loop's answer
+    key (build log 64). The key is the steward's homework, not words he typed:
+    what it says is true rides on the corrected turn's tag ("[Corrected in
+    training - what is true: ...]") and is NOT kept as one of his facts - it
+    would come back as "[Steward told you]", which he did not."""
     target_id, row = _target(store, target, target_id)
     if reason not in REASONS:
         raise StewardError("bad_reason")
@@ -163,7 +185,7 @@ def correct(store, target, target_id, reason, text="", facts_max=250,
         text, source, err = validate_fact(text, source)
         if err:
             raise StewardError(err, "what is true: " + err)
-        if store.fact_count(active_only=True) >= facts_max:
+        if by == "steward" and store.fact_count(active_only=True) >= facts_max:
             raise StewardError("too_many_facts")
 
     # A support of the same memory goes: it cannot be right and wrong at once.
@@ -171,16 +193,20 @@ def correct(store, target, target_id, reason, text="", facts_max=250,
     for n in _active(store, target, target_id, "support"):
         withdrawn += _undo(store, trust, n, log_path)
 
-    fact_id = store.add_fact(text, source, entered_by="steward") if text else None
+    fact_id = (store.add_fact(text, source, entered_by="steward")
+               if text and by == "steward" else None)
     prior = ""
     if target == "turn":
         prior = row["mode"]
         store.set_episode_mode(target_id, UNVERIFIED)
     note_id = store.add_steward_note(target, target_id, "correct", reason=reason,
-                                     text=text, fact_id=fact_id, prior_mode=prior)
-    _log(log_path, {"action": "correct", "target": target, "target_id": target_id,
-                    "note": note_id, "reason": reason, "text": text, "fact": fact_id,
-                    "mode_before": prior, "mode_after": UNVERIFIED if target == "turn" else ""})
+                                     text=text, fact_id=fact_id, prior_mode=prior, by=by)
+    entry = {"action": "correct", "target": target, "target_id": target_id,
+             "note": note_id, "reason": reason, "text": text, "fact": fact_id,
+             "mode_before": prior, "mode_after": UNVERIFIED if target == "turn" else ""}
+    if by != "steward":
+        entry["by"] = "the training loop's answer key"
+    _log(log_path, entry)
     return {"note": public(store.steward_note(note_id)), "fact_id": fact_id,
             "support_withdrawn": withdrawn}
 

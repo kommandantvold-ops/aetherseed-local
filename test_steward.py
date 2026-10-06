@@ -79,7 +79,7 @@ class _Store(unittest.TestCase):
 
 class Correcting(_Store):
 
-    def test_a_wrong_turn_stops_being_used_and_what_is_true_is_kept_as_theirs(self):
+    def test_a_wrong_turn_carries_its_correction_and_what_is_true_is_kept_as_theirs(self):
         out = S.correct(self.store, "turn", self.moon, "part", "I live in Kristiansand.",
                         log_path=self.log)
         self.assertEqual(self.store.episode(self.moon)["mode"], "unverified")
@@ -87,12 +87,43 @@ class Correcting(_Store):
         self.assertEqual(fact["text"], "I live in Kristiansand.")
         self.assertEqual(fact["entered_by"], "steward")
         self.assertEqual(fact["source"], "Steward's correction of turn %d" % self.moon)
-        ctx = self.root.retrieve_context("where do I live")
-        self.assertNotIn("moon", ctx)
+        report = {}
+        ctx = self.root.retrieve_context("where do I live", report=report)
+        # Until build log 64 the wrong turn stopped being used. It comes back
+        # now - "Lyra should be able to see ... the corrections made by the
+        # steward" - and never without the correction on its own line.
+        line = next(l for l in ctx.split("\n") if "moon" in l)
+        self.assertTrue(line.startswith(
+            "- [Corrected by your steward - what is true: I live in Kristiansand.] [Episode]"), line)
+        self.assertNotIn("moon", report["trusted_context"])
         self.assertIn(FACT_TAG + " I live in Kristiansand.", ctx)
         line = self.log_lines()[-1]
         self.assertEqual((line["action"], line["mode_before"], line["by"]),
                          ("correct", "factual", "steward (console)"))
+
+    def test_the_training_loops_answer_key_is_not_the_stewards_voice(self):
+        # build log 64: the key is his homework, not words he typed
+        before = self.store.fact_count()
+        out = S.correct(self.store, "turn", self.moon, "part", "The steward lives by the sea.",
+                        log_path=self.log, by=S.TRAINING)
+        self.assertIsNone(out["fact_id"])
+        self.assertEqual(self.store.fact_count(), before)                # no "[Steward told you]"
+        self.assertEqual(out["note"]["by"], "training")
+        ctx = self.root.retrieve_context("where do I live")
+        line = next(l for l in ctx.split("\n") if "moon" in l)
+        self.assertTrue(line.startswith(
+            "- [Corrected in training - what is true: The steward lives by the sea.]"), line)
+        self.assertNotIn(FACT_TAG + " The steward lives by the sea.", ctx)
+        self.assertEqual(self.log_lines()[-1]["by"], "the training loop's answer key")
+        S.undo(self.store, self.trust, out["note"]["id"])
+        self.assertEqual(self.store.episode(self.moon)["mode"], "factual")
+
+    def test_a_turn_he_marked_right_says_so(self):
+        from logic.provenance import SUPPORTED_LABEL
+        S.support(self.store, self.trust, "turn", self.moon)
+        ctx = self.root.retrieve_context("where do I live")
+        line = next(l for l in ctx.split("\n") if "moon" in l)
+        self.assertTrue(line.startswith("- " + SUPPORTED_LABEL), line)
 
     def test_undo_puts_it_back(self):
         out = S.correct(self.store, "turn", self.moon, "part", "I live in Kristiansand.",
@@ -139,16 +170,24 @@ class Correcting(_Store):
             S.correct(self.store, "turn", self.moon, "never")
         self.assertEqual(e.exception.code, "already_corrected")
 
-    def test_a_corrected_ring_leaves_retrieval_until_undone(self):
+    def test_a_corrected_ring_comes_back_with_its_correction_until_undone(self):
+        # Until build log 64 a corrected ring left retrieval. Nothing is set
+        # aside now: she sees the ring and, in front of it, what he said of it.
         q = "tell me about the garden and the bees"
         self.assertIn("the garden and the bees", self.root.retrieve_context(q))
         out = S.correct(self.store, "ring", self.ring, "about", "It was about the orchard.")
-        self.assertNotIn("[Ring] 1", self.root.retrieve_context(q))
-        self.assertEqual(self.store.set_aside_ring_ids(), {self.ring})
+        report = {}
+        ctx = self.root.retrieve_context(q, report=report)
+        line = next(l for l in ctx.split("\n") if "[Ring] 1" in l)
+        self.assertTrue(line.startswith(
+            "- [Corrected by your steward - what is true: It was about the orchard.] [Ring] 1"), line)
+        self.assertNotIn("[Ring] 1", report["trusted_context"])
+        self.assertEqual(self.store.set_aside_ring_ids(), {self.ring})     # still marked
         fact = [f for f in self.store.facts() if f["id"] == out["fact_id"]][0]
         self.assertEqual(fact["source"], "Steward's correction of ring 1")
         S.undo(self.store, self.trust, out["note"]["id"])
-        self.assertIn("the garden and the bees", self.root.retrieve_context(q))
+        line = next(l for l in self.root.retrieve_context(q).split("\n") if "[Ring] 1" in l)
+        self.assertTrue(line.startswith("- [Ring] 1"), line)
 
     def test_a_ring_id_that_is_not_a_ring(self):
         emb = self.root.embedder.embed("an old pattern")

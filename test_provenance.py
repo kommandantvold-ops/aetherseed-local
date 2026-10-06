@@ -101,9 +101,13 @@ class TestResolveMode(unittest.TestCase):
     def test_an_unknown_mode_falls_back_to_factual_not_to_nothing(self):
         self.assertEqual(resolve_mode("nonsense", 0), FACTUAL)
 
-    def test_unverified_is_invisible_to_every_request(self):
+    def test_nothing_is_set_aside_from_any_request(self):
+        # Build log 64 - Andreas, 6 Oct 2026: "None of Lyras memories should
+        # be set aside, all memories should be properly tagged". Until then
+        # 'unverified' came back to no request and fiction to a fiction
+        # request only; the tag is what stands in their place.
         for m in (FACTUAL, FICTION):
-            self.assertNotIn(UNVERIFIED, visible_modes(m))
+            self.assertEqual(set(visible_modes(m)), {FACTUAL, FICTION, UNVERIFIED})
 
 
 class TestRetrievalRule(unittest.TestCase):
@@ -129,9 +133,12 @@ class TestRetrievalRule(unittest.TestCase):
             pass
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_a_factual_request_never_sees_the_story(self):
+    def test_a_factual_request_sees_the_story_and_is_told_it_is_one(self):
+        # It was kept from a factual request until build log 64. Now it comes
+        # back, and never without its label on the same line.
         ctx = self.root.retrieve_context("tell me about whales", request_mode=FACTUAL)
-        self.assertNotIn("sang to the harbour", ctx)
+        line = next(l for l in ctx.split("\n") if "sang to the harbour" in l)
+        self.assertTrue(line.startswith("- " + FICTION_LABEL), line)
 
     def test_a_fiction_request_may_see_it_but_it_is_labelled(self):
         ctx = self.root.retrieve_context(
@@ -139,20 +146,57 @@ class TestRetrievalRule(unittest.TestCase):
         self.assertIn("sang to the harbour", ctx)
         self.assertIn(FICTION_LABEL, ctx)
 
-    def test_the_fabricated_doi_is_invisible_to_both(self):
+    def test_the_fabricated_doi_comes_back_tagged_and_is_no_evidence(self):
+        from logic.provenance import UNVERIFIED_LABEL
         for m in (FACTUAL, FICTION):
-            ctx = self.root.retrieve_context("that paper doi", request_mode=m)
-            self.assertNotIn("10.1038", ctx, m)
+            report = {}
+            ctx = self.root.retrieve_context("that paper doi", request_mode=m, report=report)
+            line = next(l for l in ctx.split("\n") if "10.1038" in l)
+            self.assertTrue(line.startswith("- " + UNVERIFIED_LABEL), line)
+            # ... and the context the honesty check is given does not hold it:
+            # her own invention, standing in her memory, must not make the same
+            # invention look backed the next time (26e)
+            self.assertGreaterEqual(report["tagged"], 1)
+            self.assertNotIn("10.1038", report["trusted_context"])
+            self.assertIn("Oslo", self.root.retrieve_context(
+                "capital of norway", request_mode=m, report=report) and report["trusted_context"])
 
     def test_factual_memory_still_reaches_a_factual_request(self):
         ctx = self.root.retrieve_context("capital of norway", request_mode=FACTUAL)
         self.assertIn("Oslo", ctx)
 
-    def test_the_default_request_mode_is_the_strict_one(self):
-        # A caller that forgets to pass a mode must get the SAFE behaviour,
-        # not the permissive one.
+    def test_a_caller_that_names_no_mode_still_gets_the_tags(self):
+        # There is no strict and no permissive mode any more: every request
+        # sees every turn. What a caller must never get is a tagless one.
         ctx = self.root.retrieve_context("whales")
-        self.assertNotIn("sang to the harbour", ctx)
+        line = next(l for l in ctx.split("\n") if "sang to the harbour" in l)
+        self.assertIn(FICTION_LABEL, line)
+
+    def test_a_plain_fact_carries_no_tag(self):
+        ctx = self.root.retrieve_context("capital of norway", request_mode=FACTUAL)
+        line = next(l for l in ctx.split("\n") if "Oslo" in l)
+        self.assertTrue(line.startswith("- [Episode]"), line)
+
+    def test_what_a_tag_says(self):
+        from logic.provenance import memory_tag, UNVERIFIED_LABEL, SUPPORTED_LABEL
+        self.assertEqual(memory_tag(FACTUAL), "")
+        self.assertEqual(memory_tag(FICTION), FICTION_LABEL)
+        self.assertEqual(memory_tag(UNVERIFIED), UNVERIFIED_LABEL)
+        self.assertEqual(memory_tag(FACTUAL, supported=True), SUPPORTED_LABEL)
+        # a correction outranks the mode, and says who made it and what is true
+        self.assertEqual(memory_tag(UNVERIFIED, {"reason": "detail", "text": "The cat is called Pixel.",
+                                                 "by": "steward"}),
+                         "[Corrected by your steward - what is true: The cat is called Pixel.]")
+        self.assertEqual(memory_tag(UNVERIFIED, {"reason": "never", "text": "", "by": "steward"}),
+                         "[Corrected by your steward: this never happened]")
+        # the training loop's answer key is never shown as the steward's words
+        t = memory_tag(UNVERIFIED, {"reason": "part", "text": "AetherSpark holds the tools.",
+                                    "by": "training"})
+        self.assertEqual(t, "[Corrected in training - what is true: AetherSpark holds the tools.]")
+        self.assertNotIn("steward", t)
+        long = memory_tag(UNVERIFIED, {"reason": "part", "text": "word " * 80, "by": "steward"})
+        self.assertLess(len(long), 200)
+        self.assertTrue(long.endswith("...]"))
 
     def test_the_mode_survives_a_round_trip_through_sqlite(self):
         eps = self.root.store.get_all_episodes()

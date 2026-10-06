@@ -127,10 +127,14 @@ class OperatorCorrection(unittest.TestCase):
 class WhatTheCorrectionMeansToRetrieval(unittest.TestCase):
     """The point of the mode change: the answer never comes back as context."""
 
-    def test_unverified_is_invisible_to_both_request_modes(self):
-        from logic.provenance import visible_modes
-        self.assertNotIn("unverified", visible_modes("factual"))
-        self.assertNotIn("unverified", visible_modes("fiction"))
+    def test_unverified_is_tagged_not_hidden(self):
+        # Until build log 64 a turn the operator marked 'unverified' came back
+        # to no request. Andreas, 6 Oct 2026: nothing is set aside - it comes
+        # back with its tag (test_provenance.py holds what the tag says).
+        from logic.provenance import visible_modes, memory_tag, UNVERIFIED_LABEL
+        self.assertIn("unverified", visible_modes("factual"))
+        self.assertIn("unverified", visible_modes("fiction"))
+        self.assertEqual(memory_tag("unverified"), UNVERIFIED_LABEL)
 
 
 if __name__ == "__main__":

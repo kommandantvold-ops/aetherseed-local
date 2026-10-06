@@ -636,8 +636,10 @@ Unasked she shows a passage of it only by the rule of §15.
 *"explain that"* — or *"explain that: why is it negative?"* — would give the
 model that one passage and his question, and nothing else: no memory, no
 ring; the answer labelled on the console as her own words about the passage,
-and stored as unverified (in the record, never retrieved into a later
-prompt, never in a ring — Andreas, 5 Oct: *"set aside"*). Shown what was
+and stored as unverified (never in a ring — Andreas, 5 Oct: *"set aside"*;
+since step 64, when nothing is set aside any more, it can come back into a
+later prompt only under the tag *"[Unverified - an earlier answer of yours
+that may be wrong]"*). Shown what was
 read by hand (below), he said: ***"leave it off"***. So in this build she
 answers *"explain that"* after a passage as she does for the built-in
 library, which is never retold: the passage stays word for word. It is on

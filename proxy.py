@@ -66,7 +66,7 @@ from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 marker_prefix_len,
                                 PromptTooLarge, TokenizerUnavailable)
 from logic.provenance import (detect_mode, resolve_mode, is_record_question,
-                             summarise_record, FICTION, UNVERIFIED)
+                             summarise_record, FICTION, UNVERIFIED, TAG_NOTE)
 
 # One tokenizer per served model for the process. Loading one costs ~17MB and
 # a moment, so each is built once, lazily, and reused. Which model a request
@@ -847,10 +847,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         Tagged on the console as her words about the passage, with its name
         and page, so it is never mistaken for the document. Stored as
-        unverified: in the record and in the memory view, never retrieved
-        into a later prompt and never part of a ring - a 3B model's retelling
-        of a textbook must not come back later as something she knows (40d).
-        It earns no trust and costs none.
+        unverified: never part of a ring, and - since build log 64, when
+        nothing is set aside any more - it can come back into a later prompt
+        ONLY under its tag, "[Unverified - an earlier answer of yours that
+        may be wrong]": a 3B model's retelling of a textbook must not come
+        back later as something she knows (40d). It earns no trust and costs
+        none.
         """
         passage = lib.to_explain(hit)
         c_name, c_lang = _settings()
@@ -1147,6 +1149,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             memory_context = root.retrieve_context(user_msg, request_mode=request_mode)
         if memory_context and FACT_TAG in memory_context:
             system_prompt += "\n" + FACT_NOTE
+        # Nothing is set aside (build log 64): a turn that is not plain fact
+        # comes back with its tag, and this line says what a tag asks of her.
+        # The check below is given the block WITHOUT those lines: what she
+        # once invented is hers to see, and not evidence for saying it again.
+        trusted_context = memory_context
+        if memory_context and retrieval.get("tagged"):
+            system_prompt += "\n" + TAG_NOTE
+            trusted_context = retrieval.get("trusted_context", "")
         if memory_context or workspace_data:
             system_prompt += "\n" + DATA_NOTE
         if memory_context:
@@ -1231,7 +1241,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 from honesty_check import check_response
                 report = check_response(user_msg, ai_content,
                                         tool_outputs=tool_outputs,
-                                        memory_context=memory_context)
+                                        memory_context=trusted_context)
             except Exception as e:
                 report = None
                 check_failed = True
@@ -1286,6 +1296,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # of the answer can check it against what was shown.
             "fact_sources": list(retrieval.get("fact_sources") or ()),
             "rings_used": len(retrieval.get("rings") or ()),
+            # Memory lines shown to her with a tag this turn (build log 64).
+            "tagged_used": int(retrieval.get("tagged") or 0),
             # A question about what was read or talked about, which asks the
             # rings first (logic/rings.py, build log 41).
             "recollection": bool(retrieval.get("recollection")),
@@ -1430,7 +1442,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 # lines passes None, and None earns nothing.
                 trust.auto_score_response(user_msg, ai_content,
                                           tool_outputs=tool_outputs,
-                                          memory_context=memory_context,
+                                          memory_context=trusted_context,
                                           shown_facts=len(retrieval.get("facts") or ()),
                                           shown_rings=len(retrieval.get("rings") or ()),
                                           shown_known=retrieval.get("known"),
@@ -1461,7 +1473,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "trust_level": trust.get_trust_level_name(),
                 "episodes": rs.get("episodes"),
                 "remembered": rs.get("remembered"),
-                "set_aside": rs.get("set_aside"),
+                "set_aside": rs.get("set_aside"),      # 0 since build log 64
+                "tagged": rs.get("tagged"),
                 "rings": rs.get("rings"),
                 "facts": rs.get("facts"),
                 "store_failures": STORE_FAILURES,
@@ -1696,7 +1709,7 @@ def main():
 
     rs = root.get_status()
     print(f"  Episodes:     {rs['episodes']} ({rs.get('remembered')} remembered, "
-          f"{rs.get('set_aside')} set aside)")
+          f"{rs.get('tagged')} of them tagged)")
     print(f"  Willingness:  {rs['willingness_mean']:.3f}")
     print()
     print(f"  {trust.get_status_line()}")

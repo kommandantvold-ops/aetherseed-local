@@ -142,9 +142,9 @@ def main(argv=None):
             say("%-8s %-44s %s" % ("SHOWN" if mode == "library" else "hers", q, first))
         after = eco.get(base, "/aetherseed/status")
         write({"kind": "status", "before": before, "after": after})
-        say("\nthe copy: %s -> %s episodes; remembered %s -> %s; set aside %s -> %s"
+        say("\nthe copy: %s -> %s episodes; remembered %s -> %s; tagged %s -> %s"
             % (before.get("episodes"), after.get("episodes"), before.get("remembered"),
-               after.get("remembered"), before.get("set_aside"), after.get("set_aside")))
+               after.get("remembered"), before.get("tagged"), after.get("tagged")))
     finally:
         proc.terminate()
         try:

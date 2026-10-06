@@ -516,12 +516,16 @@ class AtTheProxy(_Proxy):
         self.assertEqual(meta["explains"]["title"], "physics notes")
         self.assertEqual(meta["mode"], "unverified")
         self.assertFalse(meta["memory_used"])
-        # ... and kept where memory never reads it
+        # ... and kept as unverified. Until build log 64 that meant memory
+        # never read it; nothing is set aside now, so it can come back - only
+        # ever under its tag, and never into a ring.
+        from logic.provenance import UNVERIFIED_LABEL
         after = proxy.root.store.get_all_episodes()
         self.assertEqual(len(after), before + 1)
-        self.assertEqual(proxy.root.get_status()["remembered"], 1)       # the dog, only
-        self.assertNotIn("hard a thing is to stop",
-                         proxy.root.retrieve_context("What is momentum?") or "")
+        self.assertEqual(proxy.root.get_status()["tagged"], 1)
+        for line in (proxy.root.retrieve_context("What is momentum?") or "").split("\n"):
+            if "hard a thing is to stop" in line:
+                self.assertTrue(line.startswith("- " + UNVERIFIED_LABEL), line)
 
     def test_off_in_the_build_a_passage_of_his_stays_word_for_word(self):
         L.EXPLAINS = False

@@ -283,16 +283,17 @@ const T = {
     sub: 'local companion', checking: 'checking', up: 'on device', down: 'unreachable',
     trust: 'trust', memory: 'memory', record: 'What have you gotten wrong?',
     intro1: 'Everything here runs on this device. Nothing is sent anywhere.',
-    intro2: 'Answers are bounded and their provenance is shown — fiction is labelled and is never used to answer a question of fact.',
+    intro2: 'Answers are bounded and their provenance is shown — everything is remembered, and what is fiction, unverified or corrected carries a tag saying so.',
     placeholder: (n) => `Talk to ${n}…`, send: 'Send',
     hint: 'Enter to send · Shift+Enter for a new line',
     you: 'you', recordWho: 'the record — read from the log, not written by the model',
     fiction: 'Fiction, at your request',
-    unverified: 'Unverified source — not used as memory',
-    unchecked: 'Not checked for invented sources — not used as memory',
-    stewardUnbacked: 'Credits its steward with something it was not shown — not used as memory',
+    unverified: 'Unverified source — remembered with that tag',
+    unchecked: 'Not checked for invented sources — remembered with that tag',
+    stewardUnbacked: 'Credits its steward with something it was not shown — remembered as unverified',
     usedMemory: 'used memory', usedTools: 'used tools',
-    remembered: (r, a) => a ? `${r} remembered · ${a} set aside` : `${r} remembered`,
+    usedTagged: (n) => n === 1 ? 'was shown 1 tagged memory' : `was shown ${n} tagged memories`,
+    remembered: (r, a) => a ? `${r} remembered · ${a} of them tagged` : `${r} remembered`,
     told: (n) => `${n} from its steward`,
     usedFacts: 'used what its steward told it', usedRing: 'used a ring',
     rings: (n) => n === 0 ? 'no rings yet' : n === 1 ? '1 ring' : `${n} rings`,
@@ -315,8 +316,11 @@ const T = {
     find: 'Find', findHint: 'Words from the turn…', more: 'Show older',
     noTurns: 'No turns.', noMem: 'Could not read the memory.',
     turnHead: (id, w, when) => `#${id} · ${w} · ${when}`,
-    memUsed: 'used as memory', memAside: 'set aside by the checks — not used as memory',
-    memFiction: 'kept as fiction',
+    memUsed: 'remembered as it is',
+    memAside: 'remembered with a tag: unverified — an earlier answer that may be wrong',
+    memFiction: 'remembered with a tag: fiction',
+    correctedInTraining: (r, x) => `Corrected in training: ${r}.` + (x ? ` The answer key says: “${x}”` : ''),
+    seenAs: (tag) => `The tag in front of it when it comes back: ${tag}`,
     right: 'It’s right', wrong: 'Something’s wrong', undo: 'Undo', cancel: 'Cancel',
     supported: (p) => p ? `You marked this as right (+${p} trust).` : 'You marked this as right.',
     corrected: (r, x) => `You corrected this: ${r}.` + (x ? ` You wrote: “${x}”` : ''),
@@ -329,8 +333,8 @@ const T = {
     q2: 'What’s true? In your own words — it is kept word for word, as yours.',
     q2opt: 'Anything to add? You can leave this empty.',
     q3: 'Here’s what will change:',
-    willTurn: 'This turn is no longer used as memory, and will not go into a ring.',
-    willRing: 'This ring is no longer used as memory.',
+    willTurn: 'This turn stays in memory. When it comes back, your correction stands in front of it. It will not go into a ring.',
+    willRing: 'This ring stays in memory. When it comes back, your correction stands in front of it.',
     willFact: (x) => `What you wrote is remembered as yours, word for word: “${x}”`,
     willSupportGone: 'Your earlier “It’s right” on this is taken back.',
     willUndo: 'You can undo this here at any time. Nothing is deleted.',
@@ -384,16 +388,17 @@ const T = {
     sub: 'lokal følgesvenn', checking: 'sjekker', up: 'på enheten', down: 'får ikke kontakt',
     trust: 'tillit', memory: 'minne', record: 'Hva har du tatt feil om?',
     intro1: 'Alt her kjører på denne enheten. Ingenting sendes noe sted.',
-    intro2: 'Svarene er avgrenset, og det vises hvor de kommer fra — fiksjon merkes og brukes aldri til å svare på faktaspørsmål.',
+    intro2: 'Svarene er avgrenset, og det vises hvor de kommer fra — alt huskes, og det som er fiksjon, ubekreftet eller rettet bærer et merke som sier det.',
     placeholder: (n) => `Snakk med ${n}…`, send: 'Send',
     hint: 'Enter for å sende · Shift+Enter for ny linje',
     you: 'du', recordWho: 'loggen — lest fra fila, ikke skrevet av modellen',
     fiction: 'Fiksjon, som du ba om',
-    unverified: 'Kilde som ikke kan bekreftes — brukes ikke som minne',
-    unchecked: 'Ikke sjekket for oppdiktede kilder — brukes ikke som minne',
-    stewardUnbacked: 'Tilskriver forvalteren noe den ikke ble vist — brukes ikke som minne',
+    unverified: 'Kilde som ikke kan bekreftes — huskes med det merket',
+    unchecked: 'Ikke sjekket for oppdiktede kilder — huskes med det merket',
+    stewardUnbacked: 'Tilskriver forvalteren noe den ikke ble vist — huskes som ubekreftet',
     usedMemory: 'brukte minne', usedTools: 'brukte verktøy',
-    remembered: (r, a) => a ? `${r} husket · ${a} lagt til side` : `${r} husket`,
+    usedTagged: (n) => n === 1 ? 'fikk se 1 merket minne' : `fikk se ${n} merkede minner`,
+    remembered: (r, a) => a ? `${r} husket · ${a} av dem merket` : `${r} husket`,
     told: (n) => `${n} fra forvalteren`,
     usedFacts: 'brukte det forvalteren har fortalt', usedRing: 'brukte en årring',
     rings: (n) => n === 0 ? 'ingen årringer ennå' : n === 1 ? '1 årring' : `${n} årringer`,
@@ -415,8 +420,11 @@ const T = {
     find: 'Finn', findHint: 'Ord fra samtalen…', more: 'Vis eldre',
     noTurns: 'Ingen samtaler.', noMem: 'Kunne ikke lese minnet.',
     turnHead: (id, w, when) => `#${id} · ${w} · ${when}`,
-    memUsed: 'brukes som minne', memAside: 'lagt til side av kontrollene — brukes ikke som minne',
-    memFiction: 'tatt vare på som fiksjon',
+    memUsed: 'huskes som det er',
+    memAside: 'huskes med merke: ubekreftet — et tidligere svar som kan være feil',
+    memFiction: 'huskes med merke: fiksjon',
+    correctedInTraining: (r, x) => `Rettet i trening: ${r}.` + (x ? ` Fasiten sier: «${x}»` : ''),
+    seenAs: (tag) => `Merket som står foran når det kommer tilbake: ${tag}`,
     right: 'Det stemmer', wrong: 'Noe er feil', undo: 'Angre', cancel: 'Avbryt',
     supported: (p) => p ? `Du merket dette som riktig (+${p} tillit).` : 'Du merket dette som riktig.',
     corrected: (r, x) => `Du rettet dette: ${r}.` + (x ? ` Du skrev: «${x}»` : ''),
@@ -429,8 +437,8 @@ const T = {
     q2: 'Hva er riktig? Med dine egne ord — det lagres ordrett, som ditt.',
     q2opt: 'Noe å legge til? Du kan la dette stå tomt.',
     q3: 'Dette blir endret:',
-    willTurn: 'Denne samtalen brukes ikke lenger som minne, og kommer ikke med i en årring.',
-    willRing: 'Denne årringen brukes ikke lenger som minne.',
+    willTurn: 'Denne samtalen blir i minnet. Når den kommer tilbake, står rettelsen din foran den. Den kommer ikke med i en årring.',
+    willRing: 'Denne årringen blir i minnet. Når den kommer tilbake, står rettelsen din foran den.',
     willFact: (x) => `Det du skrev huskes som ditt, ordrett: «${x}»`,
     willSupportGone: 'Din tidligere «Det stemmer» på dette trekkes tilbake.',
     willUndo: 'Du kan angre dette her når som helst. Ingenting slettes.',
@@ -583,6 +591,7 @@ function provenance(turnEl, p) {
     if (p.explains.part) tag(s.explainsPart, 'quiet');
   }
   if (p.memory_used) tag(s.usedMemory, 'quiet');
+  if (p.tagged_used > 0) tag(s.usedTagged(p.tagged_used), 'quiet');
   if (p.facts_used > 0) tag(s.usedFacts, 'quiet');
   if (p.rings_used > 0) tag(s.usedRing, 'quiet');
   if (p.used_tools) tag(s.usedTools, 'quiet');
@@ -864,8 +873,14 @@ function actions(box, item, redraw) {
   box.querySelectorAll('.state.steward, .acts, .guide').forEach((e) => e.remove());
   const st = item.steward || {};
   if (st.support) box.append(el('p', 'state ok steward', s.supported(st.support.trust_points)));
-  if (st.correction) box.append(el('p', 'state fix steward',
-    s.corrected((s.reasons[st.correction.reason] || st.correction.reason).toLowerCase(), st.correction.text)));
+  if (st.correction) {
+    // Whose correction it is (build log 64): the steward's own, or the
+    // training loop's answer key - which is never shown as his words.
+    const say = st.correction.by === 'training' ? s.correctedInTraining : s.corrected;
+    box.append(el('p', 'state fix steward',
+      say((s.reasons[st.correction.reason] || st.correction.reason).toLowerCase(), st.correction.text)));
+    if (st.correction.tag) box.append(el('p', 'state aside steward', s.seenAs(st.correction.tag)));
+  }
   const acts = el('div', 'acts');
   const note = st.correction || st.support;
   if (note) {
@@ -1178,11 +1193,12 @@ function applyCompanion(c) {
 }
 
 // ---- status -----------------------------------------------------------------
-// Remembered is what the node can use; set aside is kept in the record and
-// never used. The old figure counted table rows and hid the corrections.
+// Nothing is set aside (build log 64): every turn is remembered, and the ones
+// that are not plain fact - fiction, unverified, corrected - come back to her
+// with a tag in front. "tagged" counts those.
 function memoryLine(s, d) {
   if (d.remembered == null) return d.episodes ?? '–';   // an older proxy
-  const line = s.remembered(d.remembered, d.set_aside || 0);
+  const line = s.remembered(d.remembered, d.tagged ?? d.set_aside ?? 0);
   return d.facts > 0 ? `${line} · ${s.told(d.facts)}` : line;
 }
 

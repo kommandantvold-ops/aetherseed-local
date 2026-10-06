@@ -334,12 +334,21 @@ class TestWhatItSaysTheStewardToldIt(_Proxy):
         self.assertEqual((meta["mode"], ep["mode"], rec["steward_backed"]),
                          ("unverified", "unverified", False))
 
-    def test_words_he_never_gave_are_kept_out_and_never_come_back(self):
+    def test_words_he_never_gave_come_back_only_under_their_tag(self):
+        # Until build log 64 they never came back. Nothing is set aside now:
+        # the answer returns, tagged, and outside the context that counts as
+        # evidence. The attribution check still compares an answer that
+        # credits the steward with HIS facts as shown - never with this line.
+        from logic.provenance import UNVERIFIED_LABEL
         meta, ep, _ = self.answer("My steward told me that the dove brought a golden ring from "
                                   "the mountains of Ararat.")
         self.assertEqual((meta["steward_backed"], ep["mode"]), (False, "unverified"))
-        ctx = proxy.root.retrieve_context("What did the dove bring from Ararat?")
-        self.assertNotIn("golden ring", ctx)
+        report = {}
+        ctx = proxy.root.retrieve_context("What did the dove bring from Ararat?", report=report)
+        line = next(l for l in ctx.split("\n") if "golden ring" in l)
+        self.assertTrue(line.startswith("- " + UNVERIFIED_LABEL), line)
+        self.assertNotIn("golden ring", report["trusted_context"])
+        self.assertNotIn("golden ring", " ".join(report["fact_texts"]))
 
     def test_no_fact_shown_is_nothing_behind_it(self):
         meta, ep, _ = self.answer("My steward told me that it will rain tomorrow.",

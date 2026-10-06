@@ -191,10 +191,70 @@ def resolve_mode(request_mode: str, honesty_high: int = 0) -> str:
 
 
 def visible_modes(request_mode: str):
-    """Which stored modes a request of this mode may retrieve."""
-    if request_mode == FICTION:
-        return (FACTUAL, FICTION)
-    return (FACTUAL,)
+    """Which stored modes a request of this mode may retrieve: all of them.
+
+    NOTHING IS SET ASIDE (build log 64). Andreas, 6 Oct 2026: "None of Lyras
+    memories should be set aside, all memories should be properly tagged, and
+    Lyra should be able to see the tags and the corrections made by the
+    steward." Asked whether that takes in the 527 made-up answers he had set
+    aside on 26 Sep: "All of them, tagged."
+
+    Until then a factual request saw factual turns only, fiction was shown to
+    a fiction request, and 'unverified' came back to no one. That rule was
+    this module's point: an untagged invention returning as context grounds
+    its own repetition (40d). What replaces it is the TAG (memory_tag below):
+    every turn may come back, and one that is not plain fact comes back saying
+    what it is - and, where the steward corrected it, what is true instead.
+    Two guards stay where they were, because a tag cannot do their work: a
+    tagged turn is not evidence for the honesty check (aetherroot reports the
+    context without them), and only factual turns feed a ring.
+    """
+    return VALID_MODES
+
+
+# What a remembered turn that is not plain fact says of itself, in front of
+# the turn, in her prompt. Structural, like FICTION_LABEL: a label is a fact
+# about the line, not a request.
+UNVERIFIED_LABEL = "[Unverified - an earlier answer of yours that may be wrong]"
+SUPPORTED_LABEL = "[Marked right by your steward]"
+CORRECTION_REASONS = {
+    "never": "this never happened",
+    "part": "part of it is wrong",
+    "about": "this was about something else",
+    "detail": "a name or detail is wrong",
+}
+TRUE_MAX = 140           # characters of "what is true" carried on the line
+
+# One line of the system prompt, only on a turn where a tagged line is shown.
+TAG_NOTE = ("Some memory lines carry a tag. [Unverified] and [Corrected] lines are earlier "
+            "answers of yours that were unchecked or wrong: do not repeat them as fact. "
+            "Where a correction says what is true, answer with that.")
+
+
+def memory_tag(mode: str, correction=None, supported: bool = False) -> str:
+    """The tag a remembered turn carries in the prompt ("" for plain fact).
+
+    correction: the active note on the turn, if it was corrected - its
+    "reason", its "text" (what is true, in the corrector's words) and "by":
+    'steward' from the console, 'training' when the training loop's answer key
+    corrected it (the steward's homework, not words he typed - so it is never
+    shown as his)."""
+    if correction:
+        who = "in training" if (correction.get("by") or "steward") == "training" \
+            else "by your steward"
+        text = " ".join((correction.get("text") or "").split())
+        if text:
+            if len(text) > TRUE_MAX:
+                text = text[:TRUE_MAX].rsplit(" ", 1)[0] + "..."
+            return f"[Corrected {who} - what is true: {text}]"
+        return f"[Corrected {who}: {CORRECTION_REASONS.get(correction.get('reason'), 'it is wrong')}]"
+    if mode == FICTION:
+        return FICTION_LABEL
+    if mode == UNVERIFIED:
+        return UNVERIFIED_LABEL
+    if supported:
+        return SUPPORTED_LABEL
+    return ""
 
 
 # ==============================================================================
@@ -246,8 +306,10 @@ _RECORD_TEXT = {
         "earlier": "  ... and {n} earlier.",
         "unchecked": "{times} I could not check an answer for invented sources.",
         "clean": "Nothing in it was flagged for an unbacked source.",
-        "fiction": ("{what} you asked me to make up. {they} kept separately and "
-                    "never used to answer a question of fact."),
+        # Build log 64: nothing is set aside, so "never used" would be false.
+        # A story can come back into a later prompt - under its tag.
+        "fiction": ("{what} you asked me to make up. {they} remembered with a "
+                    "fiction tag, and I am shown that tag whenever one comes back."),
         "fiction_what": ("1 turn was something", "{n} turns were things"),
         "fiction_they": ("It is", "They are"),
         "scope": ("What this record cannot tell you: whether I was simply wrong. "
@@ -269,8 +331,8 @@ _RECORD_TEXT = {
         "earlier": "  ... og {n} tidligere.",
         "unchecked": "{times} kunne jeg ikke sjekke et svar for oppdiktede kilder.",
         "clean": "Ingenting i den er merket for en kilde uten grunnlag.",
-        "fiction": ("{what} du ba meg finne på. {they} holdt adskilt og brukes "
-                    "aldri til å svare på et faktaspørsmål."),
+        "fiction": ("{what} du ba meg finne på. {they} husket med merket fiksjon, "
+                    "og jeg får se det merket hver gang en av dem kommer tilbake."),
         "fiction_what": ("1 av dem var noe", "{n} av dem var ting"),
         "fiction_they": ("Det er", "De er"),
         "scope": ("Det loggen ikke kan fortelle deg: om jeg rett og slett tok feil. "
