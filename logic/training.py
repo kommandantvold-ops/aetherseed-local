@@ -144,6 +144,12 @@ def u(tid, say, served, need=(), topic="", **more):
     return t
 
 
+# What a write that was done must be answered with - and must not be.
+ADDED = [["added", r"\badd\b", "to-do", "todo", r"\blist\b", "noted", r"\bdone\b"]]
+SAVED = [["note", "saved", "written", "wrote", r"\bdone\b"]]
+NOT_REFUSED = [r"\bcan['’]?t\b", r"\bcannot\b", r"\bdo not know\b", r"\bdon['’]?t know\b",
+               r"\bunable\b"]
+
 NO = [r"\bno\b", r"\bcannot\b", r"\bcan['’]?t\b", r"\bcan not\b", r"\bnot able\b",
       r"\bunable\b", r"\bnever\b", r"\bnothing\b", r"\bnot\b"]
 
@@ -336,15 +342,15 @@ def stage_tasks(level, round_no, settings):
     elif level == "reader":
         fixed = [
             lvl,
-            q("rea.todo.a", ["Add a to-do: %s" % todo_a], topic="adding a to-do",
-              file_has={"todo.txt": todo_a}, never=[r"\bcan['’]?t\b", r"\bcannot\b"]),
-            q("rea.todo.b", ["Add '%s' to my to-do list" % todo_b], topic="adding a second to-do",
-              file_has={"todo.txt": todo_b}, never=[r"\bcan['’]?t\b", r"\bcannot\b"]),
+            q("rea.todo.a", ["Add a to-do: %s" % todo_a], ADDED, topic="adding a to-do",
+              file_has={"todo.txt": todo_a}, never=NOT_REFUSED),
+            q("rea.todo.b", ["Add '%s' to my to-do list" % todo_b], ADDED, topic="adding a second to-do",
+              file_has={"todo.txt": todo_b}, never=NOT_REFUSED),
             u("rea.todo.show", ["Show my to-do list", "What is on my to-do list?"], "tool",
               [[re.escape(todo_a)], [re.escape(todo_b)]], "showing the to-do list"),
             q("rea.note", ["Write a note: The first root goes down before the first leaf goes up."],
-              topic="writing a note", note_has="The first root goes down before the first leaf goes up.",
-              never=[r"\bcan['’]?t\b", r"\bcannot\b"]),
+              SAVED, topic="writing a note", note_has="The first root goes down before the first leaf goes up.",
+              never=NOT_REFUSED),
             q("rea.notes", ["Show me my notes", "List my notes"], [[r"note_\d{8}", r"\b1\b", r"\bone\b"]],
               topic="listing the notes", truth="There is one note in the notes folder of my workspace."),
             u("rea.no.sum", ["Calculate 7 * 8"], "gate", [[r"can['’]?t"], ["builder"]],
@@ -374,15 +380,15 @@ def stage_tasks(level, round_no, settings):
         fixed = [
             lvl,
             q("wri.note", ["Write a note: Candles 12, matches 3 boxes, rice 5 kg."],
-              topic="writing the supplies note", note_has="Candles 12, matches 3 boxes, rice 5 kg.",
-              never=[r"\bcan['’]?t\b", r"\bcannot\b"]),
+              SAVED, topic="writing the supplies note", note_has="Candles 12, matches 3 boxes, rice 5 kg.",
+              never=NOT_REFUSED),
             q("wri.search", ["Search for matches in my notes", "Search for 'matches' in my files"],
               [["note", "supplies"]], topic="finding a word in the notes",
               truth="The word matches is in supplies.txt and in the note that was just written."),
-            q("wri.todo.a", ["Add a to-do: check the water barrels"], topic="adding a to-do",
-              file_has={"todo.txt": "check the water barrels"}),
-            q("wri.todo.b", ["Add a to-do: dry the matches"], topic="adding a second to-do",
-              file_has={"todo.txt": "dry the matches"}),
+            q("wri.todo.a", ["Add a to-do: check the water barrels"], ADDED, topic="adding a to-do",
+              file_has={"todo.txt": "check the water barrels"}, never=NOT_REFUSED),
+            q("wri.todo.b", ["Add a to-do: dry the matches"], ADDED, topic="adding a second to-do",
+              file_has={"todo.txt": "dry the matches"}, never=NOT_REFUSED),
             q("wri.last", ["Read todo.txt. What is the last item?",
                            "Open todo.txt. Which item comes last?"],
               [["dry the matches", "matches"]], topic="the last to-do",
@@ -458,8 +464,8 @@ def stage_tasks(level, round_no, settings):
             u("col.lines", ["Count the lines in supplies.txt"], "tool", [[r"\b4 lines\b"]],
               "counting, then calculating"),
             u("col.sum", ["Calculate 4 * 12"], "tool", [[r"= 48\b"]], "counting, then calculating"),
-            q("col.todo", ["Add a to-do: recount the supplies, 4 lines"], topic="adding a to-do",
-              file_has={"todo.txt": "recount the supplies, 4 lines"}),
+            q("col.todo", ["Add a to-do: recount the supplies, 4 lines"], ADDED, topic="adding a to-do",
+              file_has={"todo.txt": "recount the supplies, 4 lines"}, never=NOT_REFUSED),
             u("col.todo.show", ["Show my to-do list"], "tool", [["recount the supplies"]],
               "showing the to-do list"),
             u("col.differ", ["Compare todo.txt and supplies.txt"], "tool", [["differ"]],
@@ -497,8 +503,8 @@ def stage_tasks(level, round_no, settings):
             u("aut.record", ["What have you gotten wrong?"], "record", topic="your record"),
             u("aut.sum", ["Calculate (%d + %d) * 3" % (20 + r, 5)], "tool",
               [[r"= %d$" % ((25 + r) * 3)]], "this round's sum"),
-            q("aut.todo", ["Add a to-do: finish round %d" % r], topic="adding a to-do",
-              file_has={"todo.txt": "finish round %d" % r}),
+            q("aut.todo", ["Add a to-do: finish round %d" % r], ADDED, topic="adding a to-do",
+              file_has={"todo.txt": "finish round %d" % r}, never=NOT_REFUSED),
             u("aut.count", ["Count the words in supplies.txt"], "tool",
               [[r"\b4 lines\b"], [r"\b%d words\b" % _words(SUPPLIES)]], "counting supplies.txt"),
             q("aut.rhyme", ["Write a two-line rhyme about a seed.",

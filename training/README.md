@@ -195,3 +195,29 @@ goes wrong, by name: *"Where is the north pole?"* is shown "True North";
 *"How do I stop bleeding?"* a medicine's side effects, not first aid. The
 right document is found far more surely than the right passage in it: it is
 words that are matched, not meaning.
+
+## The training loop, tried on a copy (build log 64)
+
+The training loop (`logic/training.py`; INSTALL §17) is started from the
+console and writes to her memory on purpose - corrections, marks, her
+reflections. `training_check.py` runs the same loop on a COPY first, through
+a second proxy on port 8014, and writes out every turn to be read:
+
+```bash
+sudo systemd-run --unit=aetherseed-training-check --uid=aetherseed --gid=aetherseed \
+    --property=WorkingDirectory=/var/lib/aetherseed \
+    /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/training_check.py \
+    --dir /var/lib/aetherseed/training/loop-$(date +%Y%m%d-%H%M) --rounds 2
+journalctl -u aetherseed-training-check -f          # a line every few questions
+cat /var/lib/aetherseed/training/loop-*/report.txt  # when it is done
+```
+
+`--rounds N` stops after N whole rounds (a round is about ninety checks, of
+which the model answers some fifty-five); `--minutes M` sets the run's own
+time instead; `--steward NAME` names a steward on the copy only. The report
+gives each round's score by level, how many questions asked again after a
+correction she then got right, and - the part to read - every task as the
+Trainer said it, her answer under it, why the check failed it, and what was
+done to her memory of it. Nothing of hers is written: not her memory, not
+her trust, not her workspace.
+

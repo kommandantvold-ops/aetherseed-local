@@ -672,6 +672,109 @@ heading or none. A chapter's problems are filed under its last section.
 `training/shelf_check.py` tries a document on a copy of her memory
 (`training/README.md`).
 
+## 17. Tags instead of set aside, her steward's name, and the training loop (step 64, after the tag)
+
+Not part of the tag `stable-llama-2026-10-03`. It is on `main`. Andreas,
+6 Oct 2026: *"None of Lyras memories should be set aside, all memories
+should be properly tagged, and Lyra should be able to see the tags and the
+corrections made by the steward. Lyra should know who her steward is (me)
+and I want her to do a training loop where she trains her accuracy and tool
+layer. Which means she needs homework, higher trust level, a self
+reflection, and repeat, a self augmenting training loop. This should be
+pausable and playable from the phone gui so I can see the progress and run
+it multiple times. The loop should last about 4 hours, and have tasks for
+each trust level."*
+
+No new package. The files, beyond §16's:
+
+```bash
+sudo install -o root -g root -m 644 logic/training.py logic/exact_tools.py logic/provenance.py \
+    logic/steward.py logic/companion.py logic/speaker.py logic/knowledge.py logic/gate_answers.py \
+    logic/prompt_builder.py logic/token_budget.py /opt/aetherseed/logic/
+sudo install -o root -g root -m 644 proxy.py aetherroot.py intent_detection.py /opt/aetherseed/
+sudo install -o root -g root -m 644 knowledge/companion.en.jsonl /opt/aetherseed/knowledge/
+sudo install -o root -g root -m 644 gui/index.html gui/serve.py /opt/aetherseed/gui/
+sudo install -o root -g root -m 644 training/training_check.py training/shelf_check.py /opt/aetherseed/training/
+sudo systemctl restart aetherseed-proxy aetherseed-gui aetherseed-kiosk
+```
+
+The first start adds one column to her memory (`steward_notes.by`: whose
+note it is). Nothing else in it is changed by installing.
+
+**Nothing is set aside.** Every turn she has stored comes back to her when
+it fits the question - also a story, an answer that gave a source she could
+not have had, and a turn that was corrected. What is not plain fact comes
+back with a tag in front of it: `[Fiction, written at your request - not
+fact]`, `[Unverified - an earlier answer of yours that may be wrong]`,
+`[Corrected by your steward - what is true: ...]`, `[Marked right by your
+steward]`. A line in her prompt says what a tag asks of her. Three things
+are as they were: a ring is still made from plain factual turns only; a
+tagged line is not evidence - the check for invented sources reads her
+memory without them; and nothing is deleted. The console's header reads
+*"5982 remembered · 622 of them tagged"*. Asked *"What have you been
+corrected on?"* she answers from the notes themselves, counted and quoted,
+model not called.
+
+**Who her steward is.** The unit's own setting, beside the companion's name
+(`companion.json`), never the build's: at first run (an optional field), or
+later under *Training* on the console. It adds one line to the charter -
+`Your steward is <name>.` - and the unit itself answers *"Who is your
+steward?"*. Nobody else can declare that name as a speaker. It is declared,
+not verified: nothing on the unit can tell who is at the screen.
+
+**Three tools at builder**, answered by the unit word for word: *"Calculate
+12 * (7 + 5)"*, *"Count the words in notes.md"* / *"How many times does the
+word seed appear in notes.md?"*, *"Compare a.txt and b.txt"*
+(`logic/exact_tools.py`). No shell and no Python is reachable from a
+conversation, as before; the arithmetic is read by a parser of its own and
+nothing typed is ever run. Below builder she says she cannot yet. *"What is
+17 times 23?"* is a question, and goes to the model as it always did.
+
+**The training loop.** *Training* in the console's header - the unit's own
+screen, or a phone on its Wi-Fi (§13): **Play** starts a run of about four
+hours, **Pause** stops after the question in hand, **Go on** continues
+there, **Stop** ends the run. The screen shows the round, the level lent,
+the question in hand, the last check and why it failed, the score at each
+level, what each round *would have earned*, what she said after it, and the
+runs before this one. A run that the unit's restart cuts off comes back
+paused.
+
+- A run is rounds of six stages - observer, reader, writer, builder,
+  collaborator, autonomous - and after each round she is told how it went
+  and asked what she will do differently. About ninety checks a round.
+- **The level is lent, not given.** Each task runs at its stage's level for
+  the length of that one turn, in a workspace of the loop's own
+  (`~/.aetherseed/training/workspace`), with its own audit log. Her real
+  level is untouched, a run adds and takes no trust, and nothing is written
+  among the steward's files. What a round would have earned - the highest
+  level whose stage, and every stage under it, reached 80% - is shown and
+  changes nothing.
+- **What it leaves in her memory.** The turns the model answered, as the
+  Trainer's (not the steward's); they wait for no ring. One that failed the
+  check is corrected from the answer key and comes back as `[Corrected in
+  training - what is true: ...]`; one that passed as `[Passed a check in
+  training]`. A question she got wrong is asked again next round in the
+  same words; the screen counts how many of those she then gets right.
+  Her memory is copied whole before each run
+  (`~/.aetherseed/training/backup/`, the last three kept).
+- **What it is not.** The model's weights do not change; nothing on the
+  unit trains them. The check reads for words of an answer key - it can
+  pass a wrong answer it did not foresee and fail a right one. Every turn of
+  a run is kept to be read (`~/.aetherseed/training/runs/<n>/turns.jsonl`).
+  Reader and writer open the same tools in this build, and collaborator and
+  autonomous open none beyond builder (the network is off): their stages
+  test longer chains, refusing what cannot be done, and a mixed exam.
+
+Before a run on her own memory, try the loop on a copy and read what she
+said (`training/README.md`):
+
+```bash
+sudo systemd-run --unit=aetherseed-training-check --uid=aetherseed --gid=aetherseed \
+    --property=WorkingDirectory=/var/lib/aetherseed \
+    /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/training_check.py \
+    --dir /var/lib/aetherseed/training/loop-$(date +%Y%m%d-%H%M) --rounds 2
+```
+
 ## Decisions this build carries, not steps
 
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds
