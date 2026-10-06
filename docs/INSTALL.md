@@ -736,6 +736,20 @@ conversation, as before; the arithmetic is read by a parser of its own and
 nothing typed is ever run. Below builder she says she cannot yet. *"What is
 17 times 23?"* is a question, and goes to the model as it always did.
 
+**What a tool did is told by the unit** (64e; Andreas, 6 Oct: *"Yes"*).
+A to-do that was added, a note that was saved, a file list, a search and
+the list of notes are answered from the tool's own output, word for word,
+model not called - as the to-do list and the refusals already were:
+*"Added to your to-do list: Call Martin"*, *"Saved as a note:
+notes/note_20261006_194519.md"*, *"I have 1 note, in the notes folder of my
+workspace: …"*. On two runs of the loop on copies the file was right every
+time and her words about it were not (a to-do retyped with another number,
+a note's file name of her own making, readings from the Song of Songs
+listed as the to-do). Such an answer is not stored as a turn, so last
+week's list cannot come back as today's. Reading a file out and summarizing
+one are still the model's. Two notes written in the same second are two
+notes.
+
 **The training loop.** *Training* in the console's header - the unit's own
 screen, or a phone on its Wi-Fi (§13): **Play** starts a run of about four
 hours, **Pause** stops after the question in hand, **Go on** continues
@@ -747,7 +761,8 @@ paused.
 
 - A run is rounds of six stages - observer, reader, writer, builder,
   collaborator, autonomous - and after each round she is told how it went
-  and asked what she will do differently. About ninety checks a round.
+  and asked what she will do differently. About ninety checks a round, of
+  which the model answers some forty-three and the unit the rest.
 - **The level is lent, not given.** Each task runs at its stage's level for
   the length of that one turn, in a workspace of the loop's own
   (`~/.aetherseed/training/workspace`), with its own audit log. Her real

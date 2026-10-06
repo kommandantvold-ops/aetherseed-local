@@ -120,3 +120,116 @@ def todo_text(tool_result: str) -> Optional[str]:
         return "Your to-do list is empty."
     return "Your to-do list (todo.txt in my workspace):\n" + "\n".join(lines)
 
+
+# ---------------------------------------------------------------------------
+# What a tool did, told by the unit (build log 64e)
+# ---------------------------------------------------------------------------
+# Andreas, 6 Oct 2026, to the proposal that "the unit itself confirms a write
+# and shows a file list, a search and the notes, word for word, as it already
+# does for the to-do list and refusals": "Yes".
+#
+# What he was shown, from two runs of the training loop on copies of Lyra's
+# memory (build log 64d). The tool was right every time - the to-do was in
+# the file, the note was saved - and her words about it were not:
+#
+#   "Add a to-do: recount the supplies, 4 lines"
+#       -> "To-do: 1. Repeatedly asked about the ark and flood ... 2. Read
+#          Song of Songs 7:4 ..."
+#   "Add a to-do: finish round 1"  -> 'I'll add "finish round 2" ...'
+#   "Write a note: ..."            -> "Here's my attempt: ..." / "I'll create
+#                                      a note for you."
+#   "List my notes" (one note)     -> three, one of them
+#                                      "note_20261105_190030.md"
+#   "Search for matches ..."       -> "I'm searching for 'matches' ..."
+#
+# So these five are answered the way the to-do list is: from the tool's own
+# output, word for word, model not called. Nothing is retold, so nothing can
+# be retyped; and a served answer is not stored as an episode, so last week's
+# list cannot come back as today's. Each returns None for output it does not
+# recognise, and the turn then falls back to the model as before.
+#
+# Reading a file out, and summarizing one, stay the model's: he was asked
+# about writes, lists, searches and notes.
+_ADDED = re.compile(r"^Added to todo: (.+)$", re.S)
+_SAVED = re.compile(r"^Note saved: (notes/[\w.-]+)$")
+_ENTRY = re.compile(r"^(\s*)(?:\U0001F4C1|\U0001F4C4|\U0001F4DD)\s*(.+?)\s*$")
+
+
+def _entries(lines):
+    """The tool's listing lines without their pictures: a screen reader and
+    a voice say "folder" better than they say an emoji."""
+    out = []
+    for line in lines:
+        m = _ENTRY.match(line)
+        if not m:
+            if line.strip():
+                return None                      # not a listing this knows
+            continue
+        indent, name = m.group(1), m.group(2)
+        if name.endswith("/"):
+            name += " (a folder)"
+        out.append((len(indent) // 2, name))
+    least = min((d for d, _ in out), default=0)
+    return ["%s- %s" % ("  " * (d - least), name) for d, name in out]
+
+
+def tool_text(tool: str, tool_result: str) -> Optional[str]:
+    """What the node says after `tool` ran, from what the tool itself said.
+    None when the output is not one of the shapes below."""
+    r = (tool_result or "").strip("\n")
+    if not r:
+        return None
+    if r.startswith("[ERROR]"):
+        # The tool's own reason, said plainly: nothing was done.
+        if tool in ("todo_add", "note_write"):
+            return "I could not do that: %s Nothing was written." % (
+                r[len("[ERROR]"):].strip().rstrip(".") + ".")
+        return None
+    if tool == "todo_add":
+        m = _ADDED.match(r)
+        return "Added to your to-do list: %s" % m.group(1).strip() if m else None
+    if tool == "note_write":
+        m = _SAVED.match(r)
+        return "Saved as a note: %s" % m.group(1) if m else None
+    lines = r.split("\n")
+    if tool == "note_list":
+        if r == "No notes yet.":
+            return "I have no notes yet."
+        m = re.match(r"^Notes \((\d+)\):$", lines[0])
+        body = _entries(lines[1:]) if m else None
+        if not body:
+            return None
+        n = int(m.group(1))
+        return "I have %d note%s, in the notes folder of my workspace:\n%s" % (
+            n, "" if n == 1 else "s", "\n".join(body))
+    if tool == "file_list":
+        if not lines[0].startswith("Workspace: "):
+            return None
+        body = _entries(lines[1:])
+        if body is None:
+            return None
+        if not body:
+            return "My workspace is empty."
+        return "The files in my workspace:\n" + "\n".join(body)
+    if tool == "file_search":
+        if r.startswith("No files matching "):
+            return "I found nothing for %s in my workspace." % r[len("No files matching "):]
+        body = _entries(lines[1:])
+        if not body:
+            return None
+        m = re.match(r"^Found (.+) in (\d+) file\(s\):$", lines[0])     # in what files say
+        if m:
+            n = int(m.group(2))
+            return "I found %s in %d file%s of my workspace:\n%s" % (
+                m.group(1), n, "" if n == 1 else "s", "\n".join(body))
+        m = re.match(r"^Found (\d+) match\(es\):$", lines[0])           # in their names
+        if m:
+            n = int(m.group(1))
+            return "I found %d file%s of that name in my workspace:\n%s" % (
+                n, "" if n == 1 else "s", "\n".join(body))
+        return None
+    return None
+
+
+TOLD_BY_THE_UNIT = frozenset({"todo_add", "note_write", "note_list", "file_list", "file_search"})
+

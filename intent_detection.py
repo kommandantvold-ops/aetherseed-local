@@ -449,6 +449,14 @@ def _write_note(content: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"note_{timestamp}.md"
     path = notes_dir / filename
+    # Two notes in one second took one name, and the second replaced the
+    # first (seen when the unit, not the model, began to answer a write at
+    # once - build log 64e). A note is never written over another.
+    n = 2
+    while path.exists():
+        filename = f"note_{timestamp}_{n}.md"
+        path = notes_dir / filename
+        n += 1
 
     try:
         note_content = f"# Note — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{content}\n"

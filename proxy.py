@@ -32,7 +32,8 @@ from aetherroot import AetherRoot
 from aetherspark import AetherSpark, SafetyGate, TRUST_PERMISSIONS
 from trust_evolution import TrustEvolution
 from intent_detection import detect_intent, execute_intent, in_workspace
-from logic.gate_answers import is_level_question, level_text, refusal_text, todo_text
+from logic.gate_answers import (is_level_question, level_text, refusal_text, todo_text,
+                                tool_text, TOLD_BY_THE_UNIT)
 
 # ============================================================
 # CONFIGURATION
@@ -1293,6 +1294,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     print("[tools] to-do list shown from the file (model not called)",
                           flush=True)
                     self._serve_plain(model, shown, source="tool", mode="tool",
+                                      used_tools=True)
+                    return
+            # What a write did, and what a listing, a search and the notes
+            # hold, told by the unit from the tool's own output (build log
+            # 64e; Andreas, 6 Oct 2026: "Yes"). Her words around a tool's
+            # result were wrong often - a to-do retyped with another number,
+            # a note's file name made up - and the file right every time.
+            if intent["intent"] in TOLD_BY_THE_UNIT:
+                told = tool_text(intent["intent"], result)
+                if told is not None:
+                    print(f"[tools] {intent['intent']} told by the unit "
+                          f"(model not called)", flush=True)
+                    self._serve_plain(model, told, source="tool", mode="tool",
                                       used_tools=True)
                     return
             if result:

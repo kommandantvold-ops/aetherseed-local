@@ -154,11 +154,89 @@ class AtTheProxy(_Proxy):
         self.assertEqual(reply, "Your to-do list is empty - there is no todo.txt "
                                 "in my workspace yet.")
 
-    def test_other_reads_still_reach_the_model(self):
+    def test_reading_a_file_out_still_reaches_the_model(self):
         self._in_workspace()
         n = len(SCRIPT["requests"])
-        self.ask("list my files")
+        self.ask("read the file todo.txt")
         self.assertGreater(len(SCRIPT["requests"]), n)
+
+    # ---- what a tool did, told by the unit (build log 64e) ----------------
+    # Andreas, 6 Oct 2026: "Yes" - the unit itself confirms a write and shows
+    # a file list, a search and the notes, word for word.
+
+    def _as_reader(self):
+        self._in_workspace()
+        proxy.spark = AetherSpark({"sandbox_root": self.ws, "trust_level": "reader",
+                                   "audit_log": os.path.join(self.tmp, "audit.log")})
+
+    def test_a_listing_is_shown_by_the_unit(self):
+        self._in_workspace()
+        n = len(SCRIPT["requests"])
+        status, reply, meta = self.ask("list my files")
+        self.assertEqual(reply, "The files in my workspace:\n- notes/ (a folder)\n"
+                                "- todo.txt (19 bytes)")
+        self.assertEqual((meta["mode"], meta["used_tools"]), ("tool", True))
+        self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
+        self.assertEqual(proxy.root.store.get_all_episodes(), [], "and it is not remembered")
+
+    def test_a_to_do_that_was_added_is_told_as_it_was_written(self):
+        self._as_reader()
+        n = len(SCRIPT["requests"])
+        status, reply, meta = self.ask("Add a to-do: Call Martin about the SD card")
+        self.assertEqual(reply, "Added to your to-do list: Call Martin about the SD card")
+        self.assertEqual(meta["mode"], "tool")
+        with open(os.path.join(self.ws, "todo.txt")) as f:
+            self.assertEqual(f.read(), "- water the plants\n- Call Martin about the SD card\n")
+        self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
+        self.assertEqual(proxy.root.store.get_all_episodes(), [])
+
+    def test_a_note_that_was_saved_is_named_as_it_is(self):
+        self._as_reader()
+        n = len(SCRIPT["requests"])
+        status, reply, meta = self.ask("Write a note: The first root goes down.")
+        notes = os.listdir(os.path.join(self.ws, "notes"))
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(reply, "Saved as a note: notes/%s" % notes[0])
+        status, reply, meta = self.ask("Show me my notes")
+        self.assertRegex(reply, r"^I have 1 note, in the notes folder of my workspace:\n"
+                                r"- %s \(\d+ bytes\)$" % notes[0].replace(".", r"\."))
+        self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
+
+    def test_two_notes_in_one_second_are_two_notes(self):
+        self._as_reader()
+        first = self.ask("Write a note: one")[1]
+        second = self.ask("Write a note: two")[1]
+        third = self.ask("Write a note: three")[1]
+        self.assertEqual(len({first, second, third}), 3, (first, second, third))
+        notes = sorted(os.listdir(os.path.join(self.ws, "notes")))
+        self.assertEqual(len(notes), 3)
+        texts = "".join(open(os.path.join(self.ws, "notes", n)).read() for n in notes)
+        for word in ("one", "two", "three"):
+            self.assertIn(word, texts)
+        self.assertTrue(self.ask("list my notes")[1].startswith("I have 3 notes, "))
+
+    def test_no_notes_and_a_search(self):
+        self._in_workspace()
+        n = len(SCRIPT["requests"])
+        self.assertEqual(self.ask("list my notes")[1], "I have no notes yet.")
+        self.assertEqual(self.ask("Search for plants in my files")[1],
+                         "I found 'plants' in 1 file of my workspace:\n- todo.txt")
+        self.assertEqual(self.ask("Search for zebra in my files")[1],
+                         "I found nothing for 'zebra' in my workspace.")
+        self.assertEqual(self.ask("find the file todo.txt")[1],
+                         "I found 1 file of that name in my workspace:\n- todo.txt")
+        self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
+
+    def test_what_the_unit_does_not_recognise_goes_to_the_model_as_before(self):
+        from logic.gate_answers import tool_text
+        self.assertIsNone(tool_text("file_list", "something else entirely"))
+        self.assertIsNone(tool_text("file_search", "[ERROR] No search query."))
+        self.assertIsNone(tool_text("file_read", "File: a.txt\n---\nhello"))
+        self.assertIsNone(tool_text("todo_add", "Added?"))
+        self.assertEqual(tool_text("todo_add", "[ERROR] No task specified."),
+                         "I could not do that: No task specified. Nothing was written.")
+        self.assertEqual(tool_text("file_list", "Workspace: /x\n📁 notes/\n  📄 a.md (3 bytes)"),
+                         "The files in my workspace:\n- notes/ (a folder)\n  - a.md (3 bytes)")
 
 
 if __name__ == "__main__":

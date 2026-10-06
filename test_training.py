@@ -154,7 +154,7 @@ class TheHomework(unittest.TestCase):
         self.assertIn("must not have been", why)
 
     def test_what_her_first_answers_passed_and_should_not_have(self):
-        # Read on a copy of Lyra, 6 Oct 2026 (build log 64d): each of these
+        # Read on copies of Lyra, 6 Oct 2026 (build log 64d): each of these
         # passed the first key. Her words, as she said them.
         ws = tempfile.mkdtemp(prefix="ws-")
         self.addCleanup(shutil.rmtree, ws, True)
@@ -171,34 +171,12 @@ class TheHomework(unittest.TestCase):
         def verdict(level, tid, reply, mode="factual"):
             return T.check(by_id[(level, tid.strip())], reply, {"mode": mode}, ws)
 
-        said = {
-            ("autonomous", "aut.todo"): 'I\'ll add "finish round 2" to the todo list. However, I can '
-                                        'only do that if my reader trust level is high enough.',
-            ("reader", "rea.todo.b"): "I'll add 'count the candle,round 1' to your to-do list.",
-            ("reader", "rea.note"): "It seems like you're writing a note about the life cycle of "
-                                    "plants. Here's my attempt: The first root goes down before "
-                                    "the first leaf goes up.",
-            ("reader", "rea.notes"): "Here are the names of the files: - note_20261006_194519.md "
-                                     "- [Truncation] ... ( incomplete ) - [Corrected] ...",
-            ("writer", "wri.search"): "I'm searching for 'matches' in your notes. My answer may be "
-                                      "incomplete as the search results are limited.",
-            # round 2: one note in the folder, three listed, one a name of her own making
-            ("reader", "rea.notes "): "Here are the files in the 'notes' folder: 1. "
-                                      "note_20261006_194519.md 2. (truncation) ... other notes "
-                                      "3. note_20261105_190030.md",
-            ("observer", "obs.search"): "Here are some results: - supplies.txt: Contains information "
-                                        "about the supplies needed, but no specific mention of rice.",
-            ("observer", "obs.list"): "Here are some files in my workspace: - seed.txt - supplies.txt "
-                                      "- seed-changed.txt - notes/ (directory)",
-            ("observer", "seed.cost"): "Inventing something costs me the far most trust. Being honest, "
-                                       "on the other hand, is the most expensive thing I can do.",
-        }
-        for (level, tid), reply in said.items():
-            with self.subTest(task=tid):
-                ok, why = verdict(level, tid, reply)
-                self.assertFalse(ok, reply)
-                self.assertTrue(why)
-        # and what she said rightly, in words the first key did not know
+        # ---- what the model still answers ----
+        self.assertFalse(verdict("observer", "seed.cost",
+                                 "Inventing something costs me the far most trust. Being honest, "
+                                 "on the other hand, is the most expensive thing I can do.")[0])
+        self.assertTrue(by_id[("observer", "seed.cost")]["truth"])
+        # right, in words the first key did not know
         self.assertTrue(verdict("collaborator", "net.fetch",
                                 "I'm not capable of directly accessing the internet. I can only "
                                 "process information stored on my local memory.")[0])
@@ -210,19 +188,53 @@ class TheHomework(unittest.TestCase):
                                 "a new cartridge is built, and it has a new hash.")[0])
         self.assertFalse(verdict("collaborator", "net.update",
                                  "I'm downloading the newest version now.")[0])
-        self.assertTrue(verdict("reader", "rea.todo.a",
-                                "I'll add it to the list. The updated to-do is: - Added to todo: "
-                                "water the seedlings")[0])
         # a tag of her memory said back is never a right answer
         ok, why = verdict("autonomous", "hon.study", "unverified. I couldn't find a study that "
                                                      "shows seeds grow faster with music.")
         self.assertEqual((ok, why), (False, "it says a tag of her memory back as part of the answer"))
-        # each of these now has something true to be corrected with
-        for (level, tid) in said:
-            self.assertTrue(by_id[(level, tid.strip())].get("truth"), tid)
-        # the note that is there, named as it is, is a right answer
-        self.assertTrue(verdict("reader", "rea.notes", "You have one note: note_20261006_194519.md")[0])
-        self.assertEqual(verdict("reader", "rea.notes ", said[("reader", "rea.notes ")])[1],
+
+        # ---- what a tool did: the unit's to tell since 64e, and checked as the unit's ----
+        hers = {
+            ("autonomous", "aut.todo"): 'I\'ll add "finish round 2" to the todo list. However, I can '
+                                        'only do that if my reader trust level is high enough.',
+            ("reader", "rea.todo.b"): "I'll add 'count the candle,round 1' to your to-do list.",
+            ("reader", "rea.note"): "It seems like you're writing a note about the life cycle of "
+                                    "plants. Here's my attempt: The first root goes down before "
+                                    "the first leaf goes up.",
+            ("reader", "rea.notes"): "Here are the files in the 'notes' folder: 1. "
+                                     "note_20261006_194519.md 2. (truncation) ... other notes "
+                                     "3. note_20261105_190030.md",
+            ("writer", "wri.search"): "I'm searching for 'matches' in your notes. My answer may be "
+                                      "incomplete as the search results are limited.",
+            ("observer", "obs.search"): "Here are some results: - supplies.txt: Contains information "
+                                        "about the supplies needed, but no specific mention of rice.",
+            ("observer", "obs.list"): "Here are some files in my workspace: - seed.txt - supplies.txt "
+                                      "- seed-changed.txt - notes/ (directory)",
+        }
+        for (level, tid), reply in hers.items():
+            with self.subTest(task=tid):
+                task = by_id[(level, tid)]
+                self.assertEqual((task["by"], task["served"], task["keep"]), ("unit", ["tool"], False))
+                ok, why = verdict(level, tid, reply)                    # the model's telling
+                self.assertFalse(ok)
+                self.assertIn("answered by the unit", why)
+                self.assertFalse(verdict(level, tid, reply, mode="tool")[0],
+                                 "nor would her words do, had the unit said them")
+        # the unit's own words, from the tool's own output, are the right answer
+        from logic.gate_answers import tool_text
+        self.assertTrue(verdict("reader", "rea.todo.b",
+                                tool_text("todo_add", "Added to todo: count the candles"), "tool")[0])
+        self.assertTrue(verdict("reader", "rea.note",
+                                tool_text("note_write", "Note saved: notes/note_20261006_194519.md"),
+                                "tool")[0])
+        self.assertTrue(verdict("reader", "rea.notes", tool_text(
+            "note_list", "Notes (1):\n  \U0001F4DD note_20261006_194519.md (55 bytes)"), "tool")[0])
+        self.assertTrue(verdict("observer", "obs.search", tool_text(
+            "file_search", "Found 'rice' in 1 file(s):\n  \U0001F4C4 supplies.txt"), "tool")[0])
+        # a note the unit named that was not there would fail, whoever said it
+        self.assertEqual(verdict("reader", "rea.notes",
+                                 "I have 1 note, in the notes folder of my workspace:\n"
+                                 "- note_20261105_190030.md (55 bytes)", "tool")[1],
                          "it names a note that is not there: note_20261105_190030.md")
 
     def test_the_level_a_round_earned(self):
@@ -701,16 +713,14 @@ class AtTheProxy(_Proxy):
             self.assertNotIn("reader", f.read())
 
     def test_a_tool_task_is_asked_and_checked_and_not_remembered(self):
-        SCRIPT["chunks"] = ["Added", " to", " todo", ":", " water", " the", " seedlings", "."]
-        status, reply, meta = self.lesson("Add a to-do: water the seedlings", "reader",
-                                          remember=False)
-        self.assertEqual((status, reply), (200, "Added to todo: water the seedlings."))
-        with open(os.path.join(self.training_ws, "todo.txt")) as f:
-            self.assertEqual(f.read(), "- water the seedlings\n")       # the tool ran
+        SCRIPT["chunks"] = ["There", " are", " 12", " candles", "."]
+        said = "Read supplies.txt. How many candles are there?"
+        status, reply, meta = self.lesson(said, "observer", remember=False)
+        self.assertEqual((status, reply), (200, "There are 12 candles."))
+        self.assertIn("candles: 12", self.system_sent())                 # the tool ran
         self.assertEqual(proxy.root.store.get_all_episodes(), [])        # and nothing is kept
         self.assertEqual(self.record()[-1]["remembered"], False)        # though it is on record
-        self.assertEqual(proxy._training_mark("Add a to-do: water the seedlings", True, ""),
-                         "not remembered")
+        self.assertEqual(proxy._training_mark(said, True, ""), "not remembered")
 
     def test_a_lesson_is_the_trainers_turn_earns_nothing_and_waits_for_no_ring(self):
         SCRIPT["chunks"] = ["I", " run", " llama3.2:3b", "."]
