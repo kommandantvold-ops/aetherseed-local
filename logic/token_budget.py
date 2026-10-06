@@ -527,6 +527,11 @@ _LEADING_ARTEFACTS = (
 )
 
 
+_CORRECTION_OPENS = ("[Corrected by your steward", "[Corrected in training")
+_LEADING_CORRECTION = re.compile(
+    r"\[Corrected (?:by your steward|in training)[^\]\n]{0,260}\]")
+
+
 def strip_leading_artefacts(text: str):
     """Remove retrieval formatting the model copied onto the FRONT of its
     answer. Returns (clean, n_removed).
@@ -564,6 +569,13 @@ def strip_leading_artefacts(text: str):
                 n += 1
                 break
         else:
+            # A correction's tag says what is true, so its words differ: it
+            # is taken off whole, to its closing bracket (build log 64d).
+            m = _LEADING_CORRECTION.match(probe)
+            if m:
+                out = probe[m.end():]
+                n += 1
+                continue
             return (out.lstrip() if n else text), n
 
 
@@ -587,8 +599,13 @@ def opening_may_be_artefact(text: str) -> bool:
     probe = (text or "").lstrip()
     if not probe:
         return True
-    return any(tag.startswith(probe) and len(probe) < len(tag)
-               for tag in _LEADING_ARTEFACTS)
+    if any(tag.startswith(probe) and len(probe) < len(tag)
+           for tag in _LEADING_ARTEFACTS + _CORRECTION_OPENS):
+        return True
+    # inside a correction's tag, until its bracket closes (or it runs too long
+    # to be one)
+    return (probe.startswith(_CORRECTION_OPENS) and "]" not in probe
+            and "\n" not in probe and len(probe) < 300)
 
 
 def cut_at_scaffold_marker(text: str):
@@ -619,8 +636,15 @@ def cut_at_scaffold_marker(text: str):
     if not text:
         return text, False
     first = -1
-    for tag in (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE):
+    for tag in _BLOCK_MARKERS:
         i = text.find(tag)
+        if i >= 0 and (first < 0 or i < first):
+            first = i
+    # A memory line's tag counts only INSIDE an answer. At its very front it
+    # is the leading artefact strip_leading_artefacts() takes off, with the
+    # answer standing behind it; cutting there would leave nothing.
+    for tag in _TAG_MARKERS:
+        i = text.find(tag, 1)
         if i >= 0 and (first < 0 or i < first):
             first = i
     if first < 0:
@@ -628,7 +652,30 @@ def cut_at_scaffold_marker(text: str):
     return text[:first].rstrip(), True
 
 
-_MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
+# The tags of a remembered line (logic/provenance.py), said by the MODEL in
+# the middle of an answer: the same recitation, and the same cut. Read on a
+# copy of Lyra, 6 Oct 2026 (build log 64d) - asked to add a to-do, she wrote
+#
+#   "Your updated to-do is: / - Added to / - [Passed a check in training]
+#    [Episode] Trainer: Add a to-do: water the seedlings, round 2 | AI: ..."
+#
+# a line of her memory block, tag and all, as if it were the list. Stored,
+# that answer would carry a tag INSIDE a remembered line the next time it
+# came back - a turn that tags itself. Each is cut at its opening words, so
+# a correction is cut whatever it goes on to say. "[Known]" and "[Steward
+# told you]" stay out, as before: said back, the first is a true line of the
+# build and the second is still an attribution.
+_TAG_MARKERS = (
+    "[Episode]",
+    "[Passed a check in training]",
+    "[Marked right by your steward]",
+    "[Unverified - an earlier answer of yours",
+    "[Corrected by your steward",
+    "[Corrected in training",
+    "[Fiction, written at your request",
+)
+_BLOCK_MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
+_MARKERS = _BLOCK_MARKERS + _TAG_MARKERS
 _MAX_MARKER = max(len(m) for m in _MARKERS)
 
 
@@ -656,7 +703,9 @@ def marker_prefix_len(text: str) -> int:
     i = text.find("[", lo)
     while i >= 0:
         tail = text[i:]
-        if any(m.startswith(tail) and len(tail) < len(m) for m in _MARKERS):
+        # (a tag at the very front is the head's business, not a marker's)
+        if any(m.startswith(tail) and len(tail) < len(m)
+               for m in (_MARKERS if i > 0 else _BLOCK_MARKERS)):
             return len(tail)
         i = text.find("[", i + 1)
     return 0

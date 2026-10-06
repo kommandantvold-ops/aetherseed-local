@@ -24,9 +24,9 @@ sys.path.insert(0, HERE)
 
 _STUBBED = []
 for _name, _attrs in (("aetherroot", ["AetherRoot"]),
-                      ("aetherspark", ["AetherSpark"]),
+                      ("aetherspark", ["AetherSpark", "SafetyGate"]),
                       ("trust_evolution", ["TrustEvolution"]),
-                      ("intent_detection", ["detect_intent", "execute_intent"]),
+                      ("intent_detection", ["detect_intent", "execute_intent", "in_workspace"]),
                       ("honesty_check", ["check_response"])):
     _m = types.ModuleType(_name)
     for _a in _attrs:
@@ -36,6 +36,7 @@ for _name, _attrs in (("aetherroot", ["AetherRoot"]),
             get_status=lambda: {"episodes": 0, "willingness_mean": 0.0}))
     sys.modules[_name] = _m
     _STUBBED.append(_name)
+sys.modules["aetherspark"].TRUST_PERMISSIONS = {"observer": [1], "reader": [1, 2]}
 
 import proxy  # noqa: E402
 
@@ -294,6 +295,39 @@ class TestStreamGuard(unittest.TestCase):
         self.assertEqual(ai, "")
         self.assertEqual(text, "")
         self.assertTrue(lines[-1]["done"])
+
+    # ---- a remembered line recited inside an answer (build log 64d) ----
+    # Read on a copy of Lyra, 6 Oct 2026: asked to add a to-do she wrote a
+    # line of her memory block, tag and all, as if it were the list.
+
+    def test_a_tagged_memory_line_recited_inside_an_answer_is_cut_there(self):
+        lines, text, ai = self.run_chunks(
+            ["I'll", " add", " it", ".", " Your", " updated", " to-do", " is", ":", "\n", "-",
+             " Added", " to", "\n", "-", " [Passed", " a", " check", " in", " training", "]",
+             " [Episode]", " Trainer", ":", " Add", " a", " to-do"])
+        self.assertEqual(ai, "I'll add it. Your updated to-do is:\n- Added to\n-")
+        self.assertEqual(text.rstrip(), ai, "what is shown is what is stored")
+        self.assertNotIn("[", text)
+
+    def test_a_correction_recited_inside_an_answer_is_cut_whatever_it_says(self):
+        for opening in ([" [Corrected", " in", " training", " -", " what", " is", " true", ":"],
+                        [" [Corrected", " by", " your", " steward", ":", " this"],
+                        [" [Unverified", " -", " an", " earlier", " answer", " of", " yours"],
+                        [" [Episode]", " Steward", ":"]):
+            with self.subTest(opening="".join(opening)):
+                lines, text, ai = self.run_chunks(["The", " list", " is"] + opening + [" x", "."])
+                self.assertEqual((ai, text.rstrip()), ("The list is", "The list is"))
+
+    def test_a_correction_tag_at_the_front_is_taken_off_and_the_answer_kept(self):
+        lines, text, ai = self.run_chunks(
+            ["[Corrected", " in", " training", " -", " what", " is", " true", ":", " I", " run",
+             " llama3.2:3b", ".]", " I", " run", " llama3.2:3b", "."])
+        self.assertEqual((ai, text), ("I run llama3.2:3b.", "I run llama3.2:3b."))
+
+    def test_brackets_that_are_not_a_tag_are_left_alone(self):
+        lines, text, ai = self.run_chunks(["See", " [1]", " and", " [Passed", " the", " exam", "]", "."])
+        self.assertEqual(ai, "See [1] and [Passed the exam].")
+        self.assertEqual(text, ai)
 
     def test_the_hold_cannot_run_away(self):
         # A pathological opening that stays plausible must release by
