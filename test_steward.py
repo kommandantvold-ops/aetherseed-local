@@ -91,11 +91,19 @@ class Correcting(_Store):
         ctx = self.root.retrieve_context("where do I live", report=report)
         # Until build log 64 the wrong turn stopped being used. It comes back
         # now - "Lyra should be able to see ... the corrections made by the
-        # steward" - and never without the correction on its own line.
-        line = next(l for l in ctx.split("\n") if "moon" in l)
+        # steward" - as its question and its correction. NOT with the answer
+        # that was wrong (64d): on a copy of Lyra she copied the wrong answer
+        # standing after "AI:" down to the letter it was cut off at.
+        line = next(l for l in ctx.split("\n") if "Corrected" in l)
         self.assertTrue(line.startswith(
-            "- [Corrected by your steward - what is true: I live in Kristiansand.] [Episode]"), line)
-        self.assertNotIn("moon", report["trusted_context"])
+            "- [Corrected by your steward - what is true: I live in Kristiansand.] [Episode] "
+            "Steward: "), line)
+        self.assertNotIn("| AI:", line)
+        self.assertTrue(line.endswith("Steward: where do I live"), line)
+        self.assertNotIn("moon", ctx)
+        self.assertNotIn("Corrected", report["trusted_context"])
+        self.assertEqual(self.store.episode(self.moon)["ai_msg"], "You live on the moon.",
+                         "nothing is deleted: her words are in the store and the memory view")
         self.assertIn(FACT_TAG + " I live in Kristiansand.", ctx)
         line = self.log_lines()[-1]
         self.assertEqual((line["action"], line["mode_before"], line["by"]),
@@ -110,9 +118,10 @@ class Correcting(_Store):
         self.assertEqual(self.store.fact_count(), before)                # no "[Steward told you]"
         self.assertEqual(out["note"]["by"], "training")
         ctx = self.root.retrieve_context("where do I live")
-        line = next(l for l in ctx.split("\n") if "moon" in l)
+        line = next(l for l in ctx.split("\n") if "Corrected" in l)
         self.assertTrue(line.startswith(
             "- [Corrected in training - what is true: The steward lives by the sea.]"), line)
+        self.assertNotIn("| AI:", line)
         self.assertNotIn(FACT_TAG + " The steward lives by the sea.", ctx)
         self.assertEqual(self.log_lines()[-1]["by"], "the training loop's answer key")
         S.undo(self.store, self.trust, out["note"]["id"])

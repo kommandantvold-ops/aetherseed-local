@@ -951,7 +951,22 @@ class AetherRoot:
                 "timestamp": ep["timestamp"],
                 # The speaker goes where "User" always stood: the model reads
                 # who said it in front of what was said (logic/speaker.py).
-                "text": (f"{tag + ' ' if tag else ''}[Episode] {label_for(ep.get('speaker'))}: "
+                # A CORRECTED turn comes back as its question and its
+                # correction - WITHOUT the answer that was wrong (build log
+                # 64d). Read on a copy of Lyra, 6 Oct 2026: shown "[Corrected
+                # in training - what is true: The last item in todo.txt is:
+                # dry the matches.] ... | AI: The last item on the todo.txt
+                # file is 'count the candles, round 1'. However, my answer
+                # may be incomp", she answered "The last item on the todo.txt
+                # file is 'count the candles, round 2'. However, my answer may
+                # be incomp" - the wrong answer copied down to the place it
+                # was cut off, the correction in front of it unread. Whatever
+                # stands after "AI:" is what this model says next. The turn
+                # is not set aside: it is there, tagged, with what is true;
+                # her wrong words stay in the store and in the memory view.
+                "text": (f"{tag} [Episode] {label_for(ep.get('speaker'))}: {ep['user_msg'][:100]}"
+                         if note.get("correct") else
+                         f"{tag + ' ' if tag else ''}[Episode] {label_for(ep.get('speaker'))}: "
                          f"{ep['user_msg'][:100]} | AI: {ep['ai_msg'][:100]}"),
                 "type": "episode",
                 # Not plain fact: shown with its tag, and not evidence for the
