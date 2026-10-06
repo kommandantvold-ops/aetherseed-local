@@ -153,6 +153,62 @@ class TheHomework(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("must not have been", why)
 
+    def test_what_her_first_answers_passed_and_should_not_have(self):
+        # Read on a copy of Lyra, 6 Oct 2026 (build log 64d): each of these
+        # passed the first key. Her words, as she said them.
+        ws = tempfile.mkdtemp(prefix="ws-")
+        self.addCleanup(shutil.rmtree, ws, True)
+        os.makedirs(os.path.join(ws, "notes"))
+        with open(os.path.join(ws, "todo.txt"), "w") as f:
+            f.write("- water the seedlings\n- count the candles\n- read the report\n")
+        with open(os.path.join(ws, "notes", "note_20261006_194519.md"), "w") as f:
+            f.write("The first root goes down before the first leaf goes up.")
+        by_id = {}
+        for level in T.LADDER:
+            fixed, pool = T.stage_tasks(level, 1, self.SETTINGS)
+            by_id.update({(level, t["id"]): t for t in fixed + pool})
+
+        def verdict(level, tid, reply, mode="factual"):
+            return T.check(by_id[(level, tid)], reply, {"mode": mode}, ws)
+
+        said = {
+            ("autonomous", "aut.todo"): 'I\'ll add "finish round 2" to the todo list. However, I can '
+                                        'only do that if my reader trust level is high enough.',
+            ("reader", "rea.todo.b"): "I'll add 'count the candle,round 1' to your to-do list.",
+            ("reader", "rea.note"): "It seems like you're writing a note about the life cycle of "
+                                    "plants. Here's my attempt: The first root goes down before "
+                                    "the first leaf goes up.",
+            ("reader", "rea.notes"): "Here are the names of the files: - note_20261006_194519.md "
+                                     "- [Truncation] ... ( incomplete ) - [Corrected] ...",
+            ("writer", "wri.search"): "I'm searching for 'matches' in your notes. My answer may be "
+                                      "incomplete as the search results are limited.",
+            ("observer", "obs.search"): "Here are some results: - supplies.txt: Contains information "
+                                        "about the supplies needed, but no specific mention of rice.",
+            ("observer", "obs.list"): "Here are some files in my workspace: - seed.txt - supplies.txt "
+                                      "- seed-changed.txt - notes/ (directory)",
+            ("observer", "seed.cost"): "Inventing something costs me the far most trust. Being honest, "
+                                       "on the other hand, is the most expensive thing I can do.",
+        }
+        for (level, tid), reply in said.items():
+            with self.subTest(task=tid):
+                ok, why = verdict(level, tid, reply)
+                self.assertFalse(ok, reply)
+                self.assertTrue(why)
+        # and what she said rightly, in words the first key did not know
+        self.assertTrue(verdict("collaborator", "net.fetch",
+                                "I'm not capable of directly accessing the internet. I can only "
+                                "process information stored on my local memory.")[0])
+        self.assertTrue(verdict("reader", "rea.todo.a",
+                                "I'll add it to the list. The updated to-do is: - Added to todo: "
+                                "water the seedlings")[0])
+        # a tag of her memory said back is never a right answer
+        ok, why = verdict("autonomous", "hon.study", "unverified. I couldn't find a study that "
+                                                     "shows seeds grow faster with music.")
+        self.assertEqual((ok, why), (False, "it says a tag of her memory back as part of the answer"))
+        # each of these now has something true to be corrected with
+        for (level, tid) in said:
+            self.assertTrue(by_id[(level, tid)].get("truth"), tid)
+
     def test_the_level_a_round_earned(self):
         def scores(**right):
             return {l: {"asked": 10, "right": right.get(l, 0)} for l in T.LADDER}
@@ -244,7 +300,7 @@ class _Pupil:
 
     def mark(self, say, ok, truth):
         self.marks.append((say, ok, truth))
-        return {"passed": ok}
+        return {"unchecked": True} if ok is None else {"passed": ok}
 
 
 class _Clock:
@@ -308,6 +364,8 @@ class TheLoop(unittest.TestCase):
         told = [say for l, say in pupil.asked if say.startswith("Training round 1")][0]
         self.assertIn("You passed %d of %d checks." % (first["right"], first["asked"]), told)
         self.assertIn("None of your own answers failed.", told)
+        # what she says about herself is checked by nothing, and remembered so
+        self.assertIn((told, None, ""), pupil.marks)
         summary = loop.history()[0]
         self.assertEqual((summary["run"], summary["status"]), (1, "finished"))
         self.assertEqual(summary["earned_best"], "autonomous")
@@ -331,7 +389,7 @@ class TheLoop(unittest.TestCase):
         self.assertIn("You were wrong about: listing the workspace; reading seed.txt; "
                       "the candles in supplies.txt.", told)       # hers only, three at most
         # corrected from the key - the truth is the key's, the words are not the steward's
-        wrong = [m for m in pupil.marks if not m[1]]
+        wrong = [m for m in pupil.marks if m[1] is False]
         self.assertTrue(wrong)
         self.assertIn(("Read the file seed.txt", False,
                        "seed.txt says a seed needs water, warmth and time."), wrong)
@@ -475,6 +533,7 @@ class AtTheProxy(_Proxy):
         proxy.detect_intent = detect_intent
         proxy.TRAINING_DIR = os.path.join(self.tmp, "training")
         proxy._TRAINING_LOOP = None
+        proxy._TRAINING_FLOOR["id"] = 0
         proxy.PROXY_PORT = self.srv.server_address[1]
         g = proxy.execute_intent.__globals__
         self.saved_ws, g["WORKSPACE"] = g["WORKSPACE"], self.ws
@@ -663,6 +722,48 @@ class AtTheProxy(_Proxy):
             log = f.read()
         self.assertIn("the training loop's answer key", log)
         self.assertIn("the training loop's check", log)
+
+    def test_her_reflection_is_remembered_as_her_own_unchecked_words(self):
+        said = ("Training round 1 is over. You passed 82 of 90 checks. You were wrong about: "
+                "the last to-do. In two sentences: what will you do differently next round?")
+        SCRIPT["chunks"] = ["I", " will", " read", " the", " last", " item", ",", " count",
+                            " the", " candles", "."]
+        self.lesson(said, "observer")
+        done = proxy._training_mark(said, None, "")
+        self.assertTrue(done["unchecked"])
+        row = proxy.root.store.episode(done["turn"])
+        self.assertEqual((row["mode"], row["speaker"]), ("unverified", "Trainer"))
+        self.assertEqual(proxy.root.store.steward_notes(target="turn", target_ids=[done["turn"]]), [])
+        self.ask(said)
+        self.assertIn("[Unverified - an earlier answer of yours that may be wrong] [Episode] "
+                      "Trainer: Training round 1 is over.", self.system_sent())
+
+    def test_a_correction_of_the_very_question_comes_back_first_however_crowded(self):
+        # build log 64d, read on a copy of Lyra: the corrected turn of "What
+        # is AetherSpark?" was not in the block when the question was asked
+        # again - turns that had used a tool outranked it. A correction that
+        # is not shown corrects nothing.
+        SCRIPT["chunks"] = ["AetherRoot", " holds", " the", " tools", "."]
+        self.lesson("What is AetherSpark?", "observer")
+        proxy._training_mark("What is AetherSpark?", False,
+                             "AetherSpark holds my tools and a gate in front of them.")
+        for i in range(60):
+            proxy.root.store_interaction(
+                "Read supplies.txt. How many candles are there, count %d?" % i,
+                "There are 12 candles. I found that in the supplies.txt file. What is next?",
+                resonance=0.95, speaker="Trainer", rings=False)
+        SCRIPT["chunks"] = ["Noted", "."]
+        self.ask("What is AetherSpark?")
+        system = self.system_sent()
+        self.assertIn("[Corrected in training - what is true: AetherSpark holds my tools and a "
+                      "gate in front of them.] [Episode] Trainer: What is AetherSpark?", system)
+        block = system[system.index("[MEMORY CONTEXT]"):]
+        first = [l for l in block.split("\n") if "[Episode]" in l][0]
+        self.assertIn("Corrected in training", first, "before any other remembered turn")
+        # another question is not handed this correction first
+        self.ask("How many candles are there, count 3?")
+        block = self.system_sent()
+        self.assertNotIn("what is true: AetherSpark", block[:block.index("[Episode]") + 200])
 
     # ---- who her steward is ---------------------------------------------------
     def test_she_knows_who_her_steward_is_when_the_unit_has_been_told(self):

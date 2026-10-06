@@ -193,6 +193,10 @@ def _training_mark(say, ok, truth):
     if root.store.steward_notes(target="turn", target_ids=[turn]):
         return "not remembered"
     log = os.path.join(os.path.dirname(PROVENANCE_LOG), "corrections.log")
+    if ok is None:
+        # Her reflection: her own words about herself, checked by nothing.
+        root.store.set_episode_mode(turn, UNVERIFIED)
+        return {"turn": turn, "unchecked": True}
     if ok:
         steward.passed_in_training(root.store, turn, log_path=log)
         return {"turn": turn, "passed": True}

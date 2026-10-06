@@ -1017,6 +1017,25 @@ class AetherRoot:
                 top_k=max(want * 8, 40)
             )
             top = _dedupe_by_question(ranked, want)
+            # A CORRECTION OF THIS VERY QUESTION COMES BACK FIRST (build log
+            # 64d). Read on a copy of Lyra, 6 Oct 2026: "What is AetherSpark?"
+            # was answered wrongly, corrected, and asked again in the same
+            # words - and the corrected turn was not in the block. Two turns
+            # about candles and a seed stood there instead: ranking is half
+            # similarity over 64 hashed dimensions and a third resonance, and
+            # a turn that used a tool carries more of that than a corrected
+            # one. A correction that is not shown corrects nothing - the
+            # steward's from the console as much as the training loop's. So
+            # the newest corrected turn of the same question is put first,
+            # whatever its rank. Only a corrected one: an uncorrected echo
+            # of a question is what step 29 measured filling the window.
+            asked_key = _question_key(user_msg)
+            mine = [m for m in all_memories
+                    if m.get("corrected") and m.get("key") == asked_key and asked_key]
+            if mine:
+                newest = max(mine, key=lambda m: m.get("timestamp") or "")
+                top = [newest] + [m for m in top if m.get("key") != asked_key]
+                top = top[:want]
             asked_nos = {r["ring_no"] for r in asked}
             top = [m for m in top if m.get("ring_no") is None
                    or m["ring_no"] not in asked_nos]
