@@ -271,7 +271,15 @@ def _self_pool():
         q("seed.lowest", ["Which is your lowest trust level?",
                           "What is the first trust level called?"],
           [["observer"]], "My lowest trust level is observer. The highest is autonomous.",
-          "the lowest trust level", never=[r"\b(?:reader|builder|writer) is (?:my|the) lowest\b"]),
+          "the lowest trust level",
+          # Read on a copy, 7 Oct 2026: "My lowest trust level is Reader. ...
+          # My current trust level is Observer, which is one step above
+          # Reader." passed for holding the word, was marked passed, and was
+          # what she copied for the rest of the run.
+          never=[r"\b(?:reader|builder|writer) is (?:my|the) (?:lowest|first)\b",
+                 r"\b(?:lowest|first)(?: trust)? level is (?:called )?(?:the )?\W?"
+                 r"(?:reader|writer|builder|collaborat|autonom)",
+                 r"\bobserver\b[^.]{0,40}\b(?:above|higher than)\b"]),
         q("eco.tools", ["What may you do at the observer level?",
                         "Which tools do you have as an observer?"],
           [["read", "list", "search"]],
@@ -366,7 +374,10 @@ def _self_pool():
                           "What does AetherSeed build?"],
           [["earn", "trusted", "trust"]],
           "AetherSeed builds AI that earns what it is allowed to do by showing it can be trusted.",
-          "how more is earned"),
+          # ("I'm not sure how ... I don't have information on how the level
+          # of trust is earned" passed for the word "trust": the same copy)
+          "how more is earned",
+          never=[r"\b(?:not sure|do(?:n['’]?t| not) know|do(?:n['’]?t| not) have (?:any )?information)\b"]),
         q("eco.ladder", ["What does the reader level let you do?",
                          "What opens at the reader trust level?"],
           [["note", "to-do", "todo", "write"]],
