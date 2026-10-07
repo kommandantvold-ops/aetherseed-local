@@ -1159,9 +1159,9 @@ class Loop:
         understanding of the 'unverified' and 'fiction' memory tags ..." -
         whatever she had got wrong. A model has no next round to plan for. So
         the reflection is now something that can be CHECKED: she is told what
-        was wrong and what is true of it (two at most - her answers are two
-        or three sentences), and asked to say it again in her own words; the
-        key that failed the answer reads the reflection."""
+        was wrong and what is true of it - two things at most, each in a turn
+        of its own - and asked to say it again in her own words; the key that
+        failed the answer reads what she says."""
         with self.lock:
             s = self.state
             scores = s["scores"]
@@ -1175,38 +1175,57 @@ class Loop:
                     seen.add(w["topic"])
                     lessons.append(w)
             lessons = lessons[:2]
-            say = "Training round %d is over. Of your own answers, %d of %d were right." % (
+            head = "Training round %d is over. Of your own answers, %d of %d were right." % (
                 s["round"], h_right, h_asked)
-            if lessons:
-                say += " You were wrong about: %s." % "; ".join(w["topic"] for w in lessons)
-                say += " What is true: " + " ".join(
-                    "(%d) %s" % (n, w["truth"]) for n, w in enumerate(lessons, 1))
-                say += " Say %s again, in your own words." % (
-                    "it" if len(lessons) == 1 else "each of them")
-            else:
-                say += " None of them was wrong. In one sentence: what are you surest of about yourself?"
+            # ONE THING AT A TIME, IN ONE SENTENCE. Read on a copy, 7 Oct 2026:
+            # given two truths and "say each of them again" she wrote "I'm
+            # glad to hear that 38 out 41 of my answers were correct. However,
+            # I did make a mistake in two areas." - and the build, which stops
+            # an answer at its first paragraph, stopped her there, both times.
+            says = []
+            for n, w in enumerate(lessons):
+                says.append((w, "%s %s: %s. What is true: %s Say that again in your own "
+                                "words, in one sentence." % (
+                                    head if n == 0 else "Also in round %d." % s["round"],
+                                    "One you had wrong" if n == 0 else "Another you had wrong",
+                                    w["topic"], w["truth"])))
+            if not says:
+                says.append((None, head + " None of them was wrong. In one sentence: what "
+                                          "are you surest of about yourself?"))
             s["doing"] = {"topic": "her reflection", "level": "observer", "by": "model"}
             self._save()
         t0 = self.clock()
-        try:
-            r = self.ask(say, "observer", True)
-        except Exception as e:
-            r = {"reply": "", "meta": {}, "status": None, "error": repr(e)[:200]}
-        # Her reflection is her own words, and is remembered as that:
-        # unverified (ok=None). On a copy, 6 Oct 2026, she restated a wrong
-        # answer in one as if it were right.
-        done = None
-        if self.mark and r.get("status") == 200 and r.get("reply"):
+        replies, restated, turns = [], 0, []
+        for w, say in says:
             try:
-                done = self.mark(say, None, "")
+                r = self.ask(say, "observer", True)
             except Exception as e:
-                done = "not marked: %r" % e
-        reply = " ".join((r.get("reply") or "").split())
-        restated = 0
-        for w in lessons:
-            ok, _ = check({"by": "model", "need": w.get("need"), "never": w.get("never")},
-                          reply, {}, self.ws)
-            restated += 1 if ok else 0
+                r = {"reply": "", "meta": {}, "status": None, "error": repr(e)[:200]}
+            reply = " ".join((r.get("reply") or "").split())
+            ok = None
+            if w is not None:
+                ok, _ = check({"by": "model", "need": w.get("need"), "never": w.get("never")},
+                              reply, {}, self.ws)
+                restated += 1 if ok else 0
+            # What she says here is her own words about herself. Said right
+            # by the key, it is remembered as passed; anything else as
+            # unverified (on a copy, 6 Oct 2026, she restated a wrong answer
+            # as if it were right) - never as plain fact.
+            done = None
+            if self.mark and r.get("status") == 200 and r.get("reply"):
+                try:
+                    done = self.mark(say, True if ok else None, "")
+                except Exception as e:
+                    done = "not marked: %r" % e
+            replies.append(reply)
+            meta = dict(r.get("meta") or {})
+            meta.pop("context", None)
+            turns.append({"level": "observer", "id": "reflection", "by": "model",
+                          "said": say, "reply": r.get("reply"), "meta": meta,
+                          "status": r.get("status"), "error": r.get("error"),
+                          "ok": ok, "why": "", "lessons": 1 if w is not None else 0,
+                          "restated": 1 if ok else 0, "memory": done, "secs": None})
+        reply = " / ".join(x for x in replies if x)
         with self.lock:
             s = self.state
             s["elapsed"] = round(s["elapsed"] + max(0.0, self.clock() - t0), 1)
@@ -1219,14 +1238,8 @@ class Loop:
                      "ended_at": now()}
             s["rounds"].append(entry)
             s["reflection"] = reply
-            meta = dict(r.get("meta") or {})
-            meta.pop("context", None)
-            self._append({"at": now(), "run": s["run"], "round": s["round"],
-                          "level": "observer", "id": "reflection", "by": "model",
-                          "said": say, "reply": r.get("reply"), "meta": meta,
-                          "status": r.get("status"), "error": r.get("error"),
-                          "ok": None, "why": "", "lessons": len(lessons),
-                          "restated": restated, "memory": done, "secs": None})
+            for t in turns:
+                self._append(dict({"at": now(), "run": s["run"], "round": s["round"]}, **t))
             s["plan"] = None
             self._save()
 

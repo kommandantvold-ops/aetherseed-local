@@ -105,9 +105,9 @@ class TestStreamGuard(unittest.TestCase):
         proxy.MAX_GENERATION_SECONDS = 90
         SCRIPT["done_reason"] = "stop"
 
-    def run_chunks(self, chunks):
+    def run_chunks(self, chunks, question="x"):
         SCRIPT["chunks"] = chunks
-        raw, ai = proxy.call_hailo_chat("llama3.2:3b", [{"role": "user", "content": "x"}])
+        raw, ai = proxy.call_hailo_chat("llama3.2:3b", [{"role": "user", "content": question}])
         lines, text = _forwarded(raw)
         return lines, text, ai
 
@@ -368,6 +368,7 @@ class TestStreamGuard(unittest.TestCase):
 
     # ---- a correction said inside the answer (build log 65) ----
     TRUE = "AetherSeed AS is a Norwegian company, founded in 2026."
+    ASKED = "Which country is AetherSeed from?"
 
     def _said(self, tag_text):
         return (tag_text.replace(" ", "\x00 ")).split("\x00")
@@ -377,35 +378,55 @@ class TestStreamGuard(unittest.TestCase):
         # "AetherSeed AS is from" - the truth cut away with its wrapper.
         tag = "[Corrected in training - what is true: %s]" % self.TRUE
         lines, text, ai = self.run_chunks(["AetherSeed", " AS", " is", " from"]
-                                          + self._said(" " + tag))
+                                          + self._said(" " + tag), self.ASKED)
         self.assertEqual(ai, "AetherSeed AS is from " + self.TRUE)
         self.assertEqual(text, ai, "what is shown is what is stored")
         self.assertNotIn("[", text)
+
+    def test_a_correction_of_something_else_is_taken_out_whole(self):
+        # The same copy, the same question: she said the tag of the NEXT line
+        # of her memory, and its words left standing made "is from A level I
+        # earn opens its tools at my next restart, not at once. Norway."
+        tag = ("[Corrected in training - what is true: A level I earn opens its tools "
+               "at my next restart, not at once.]")
+        lines, text, ai = self.run_chunks(
+            ["Aether", " Seed", " AS", " is", " from"] + self._said(" " + tag)
+            + [" Norway", ".", " However", ",", " I", " am", " small", "."], self.ASKED)
+        self.assertEqual(ai, "Aether Seed AS is from Norway. However, I am small.")
+        self.assertEqual(text, ai, "what is shown is what is stored")
+
+    def test_with_nothing_asked_that_it_bears_on_it_is_taken_out(self):
+        tag = "[Corrected in training - what is true: %s]" % self.TRUE
+        lines, text, ai = self.run_chunks(["Seven", "."] + self._said(" " + tag),
+                                          "What is 3 + 4?")
+        self.assertEqual((ai.rstrip(), text.rstrip()), ("Seven.", "Seven."))
+        self.assertEqual(text, ai, "what is shown is what is stored")
 
     def test_the_line_of_memory_she_recites_after_it_is_still_cut(self):
         tag = "[Corrected by your steward - what is true: %s]" % self.TRUE
         lines, text, ai = self.run_chunks(
             ["It", " is", " from"] + self._said(" " + tag)
-            + [" [", "Episode", "]", " Trainer", ":", " Which", " country", "?"])
+            + [" [", "Episode", "]", " Trainer", ":", " Which", " country", "?"], self.ASKED)
         self.assertEqual(ai, "It is from " + self.TRUE)
         self.assertEqual(text.rstrip(), ai)
 
     def test_a_correction_that_only_says_it_is_wrong_is_cut_as_before(self):
         lines, text, ai = self.run_chunks(
             ["It", " is", " so", "."] + self._said(" [Corrected in training: it is wrong]")
-            + [" more"])
+            + [" more"], self.ASKED)
         self.assertEqual((ai, text.rstrip()), ("It is so.", "It is so."))
 
     def test_a_correction_cut_off_by_the_end_keeps_what_it_got_to(self):
         chunks = ["It", " is", " from"] + self._said(
             " [Corrected in training - what is true: AetherSeed AS is a Norwegian")
-        lines, text, ai = self.run_chunks(chunks)
+        lines, text, ai = self.run_chunks(chunks, self.ASKED)
         self.assertEqual(ai, "It is from AetherSeed AS is a Norwegian")
         self.assertEqual(text, ai)
 
     def test_nothing_of_an_open_correction_goes_out_before_it_closes(self):
         tag = "[Corrected in training - what is true: %s]" % self.TRUE
-        lines, text, ai = self.run_chunks(["It", " is", " from"] + self._said(" " + tag) + ["."])
+        lines, text, ai = self.run_chunks(["It", " is", " from"] + self._said(" " + tag) + ["."],
+                                          self.ASKED)
         for line in lines:
             self.assertNotIn("Corrected", (line.get("message") or {}).get("content", ""))
             self.assertNotIn("[", (line.get("message") or {}).get("content", ""))

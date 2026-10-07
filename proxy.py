@@ -540,6 +540,10 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     bare_tags = 0
     after_tag = False
     said_true = 0
+    # the question being answered: what a correction she says back is
+    # measured against (the last thing the user said)
+    asked = next((m.get("content") for m in reversed(messages or [])
+                  if m.get("role") == "user" and isinstance(m.get("content"), str)), None)
     deadline = time.monotonic() + MAX_GENERATION_SECONDS
 
     resp = urllib.request.urlopen(req, timeout=300)
@@ -604,8 +608,11 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
                 # A correction that says what is true, said inside the
                 # answer: its wrapper is taken off and the truth stays.
                 ai_content, n_said = unwrap_corrections(
-                    ai_content, sent, ending=bool(stopped_because or d.get("done")))
+                    ai_content, sent, ending=bool(stopped_because or d.get("done")),
+                    question=asked)
                 said_true += n_said
+                if n_said and (not ai_content or ai_content[-1:].isspace()):
+                    after_tag = True         # taken out whole: see above
 
                 # Both remaining stops work on the ACCUMULATED text, not this
                 # chunk: "[END MEMORY CONTEXT]" is several tokens and a blank
@@ -668,7 +675,8 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
               f"the answer - not shown, not stored", flush=True)
     if said_true:
         print(f"[generation] {said_true} correction(s) said inside the answer: "
-              f"the wrapper taken off, what is true left standing", flush=True)
+              f"the wrapper taken off; what is true left standing where it "
+              f"bears on the question", flush=True)
     if held_dropped:
         print(f"[generation] held back {held_dropped} character(s) that could "
               f"have been the start of a scaffold marker - not shown, not "

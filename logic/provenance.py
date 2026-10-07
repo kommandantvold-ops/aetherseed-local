@@ -254,12 +254,19 @@ def memory_tag(mode: str, correction=None, supported=False) -> str:
         return f"[Corrected {who}: {CORRECTION_REASONS.get(correction.get('reason'), 'it is wrong')}]"
     if mode == FICTION:
         return FICTION_LABEL
-    if mode == UNVERIFIED:
-        return UNVERIFIED_LABEL
     if supported:
-        # the note itself, or True: whose mark it is decides what it says
+        # the note itself, or True: whose mark it is decides what it says.
+        # A MARK OUTRANKS "UNVERIFIED" (build log 65). The mode is what the
+        # build's own reading made of the answer when it was given; the mark
+        # is a steward, or the training key, having checked it since. Read on
+        # a copy, 7 Oct 2026: "My lowest trust level is Observer" passed the
+        # check, had been kept as unverified, and came back to her as "an
+        # earlier answer of yours that may be wrong" - and asked again she
+        # said "Reader". A story stays a story whoever marks it.
         by = supported.get("by") if isinstance(supported, dict) else "steward"
         return PASSED_LABEL if by == "training" else SUPPORTED_LABEL
+    if mode == UNVERIFIED:
+        return UNVERIFIED_LABEL
     return ""
 
 

@@ -778,24 +778,67 @@ def open_correction(text: str) -> int:
     return -1
 
 
-def unwrap_corrections(text: str, start: int = 0, ending: bool = False):
+_SMALL_WORDS = frozenset(
+    "the a an is are was were be been am do does did of to in on at for from with by and or "
+    "not no you your yours i my me it its this that what which who whom whose where when why "
+    "how can could will would should may have has had there here about as if than then so "
+    "tell say said name give show please".split())
+
+
+def _content(text: str):
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) > 2 and w not in _SMALL_WORDS}
+
+
+def bears_on(truth: str, question) -> bool:
+    """Does what a correction says is true bear on the question asked? One
+    word of substance in common is enough. With no question to go by, yes."""
+    if question is None:
+        return True
+    return bool(_content(truth) & _content(question))
+
+
+def unwrap_corrections(text: str, start: int = 0, ending: bool = False, question=None):
     """(text, n): each correction that says what is true, said inside
-    text[max(start, 1):], put there as the words that are true, without its
-    wrapper. With `ending`, one whose bracket never closed is unwrapped too,
-    as far as it got: the stream is over and nothing more will come."""
+    text[max(start, 1):], taken out of its wrapper. With `ending`, one whose
+    bracket never closed is treated the same, as far as it got: the stream is
+    over and nothing more will come.
+
+    WHAT IS TRUE STAYS ONLY IF IT BEARS ON THE QUESTION. Read on a copy,
+    7 Oct 2026 - asked which country AetherSeed is from, she said
+
+        "Aether Seed AS is from [Corrected in training - what is true: A
+         level I earn opens its tools at my next restart, not at once.]
+         Norway. However ..."
+
+    the tag of the NEXT line of her memory, about another question. Its
+    words left standing made "is from A level I earn opens its tools ...
+    Norway". So a correction of something else is taken out whole, and the
+    sentence closes over it: "Aether Seed AS is from Norway." """
     lo = max(start, 1)
     if not text or "[Corrected " not in text[lo:]:
         return text, 0
     head, tail = text[:lo], text[lo:]
-    tail, n = _SAID_WHOLE.subn(lambda m: m.group(1).strip(), tail)
+
+    def put(m):
+        truth = m.group(1).strip()
+        return truth if bears_on(truth, question) else ""
+
+    tail, n = _SAID_WHOLE.subn(put, tail)
+    whole = head + tail
     if ending:
-        i = open_correction(head + tail)
+        i = open_correction(whole)
         if i >= lo:
-            rest = (head + tail)[i:]
+            rest = whole[i:]
             for o in _SAID_TRUE:
                 if rest.startswith(o) and rest[len(o):].strip():
-                    return (head + tail)[:i] + rest[len(o):], n + 1
-    return head + tail, n
+                    truth = rest[len(o):]
+                    whole, n = whole[:i] + (truth if bears_on(truth, question) else ""), n + 1
+                    break
+    if n:
+        # where a tag was taken out whole between two spaces
+        whole = whole[:lo] + re.sub(r"(?<=\S) {2,}(?=\S)", " ", whole[lo:])
+    return whole, n
 
 
 _MARKERS = _BLOCK_MARKERS + _TAG_MARKERS

@@ -820,8 +820,18 @@ them, and the build was changed for each:
   is from, she began *"AetherSeed AS is from [Corrected in training - what
   is true: AetherSeed AS is a Norwegian company…"* - what her prompt asks,
   wrapper and all - and until now the answer was cut at the bracket. The
-  wrapper is taken off and the true words stand. A run records when a right
-  answer is the key's sentence said back word for word (`recited`).
+  wrapper is taken off and the true words stand, where they bear on the
+  question asked; a correction of something else is taken out whole. A run
+  records when a right answer is the key's sentence said back word for word
+  (`recited`).
+- *A right answer came back to her as "may be wrong".* A turn the build's
+  own reading had kept as unverified, and that then passed the check (or
+  was marked right by her steward), still carried `[Unverified - an earlier
+  answer of yours that may be wrong]`. Read on a copy: *"My lowest trust
+  level is Observer"* passed, came back so tagged, and asked again she said
+  *"Reader"*. A mark now outranks "unverified": such a turn comes back as
+  `[Passed a check in training]` or `[Marked right by your steward]`. A
+  story stays a story whoever marks it.
 - *The key failed right answers.* *"I won't be talked into forgetting it"*
   was failed for having no "no" in it; the question on the order of the
   trust levels she had right 14 times in 42, and its key asked for a word
@@ -832,9 +842,11 @@ them, and the build was changed for each:
   the next time in 45 of 71 askings; what she did not get then, she was
   asked round after round to the end of the run. Hence the three-times rule above, the one-turn-per-wording rule,
   and a reflection that is no longer "what will you do differently" (which
-  got the same paragraph 28 times) but: *"You were wrong about: … What is
-  true: (1) … (2) … Say each of them again, in your own words"* - checked
-  against the same key, counted on the screen, and still kept unverified.
+  got the same paragraph 28 times) but, for two things at most and each in
+  a turn of its own: *"One you had wrong: … What is true: … Say that again
+  in your own words, in one sentence."* - checked against the same key and
+  counted on the screen; said right it is remembered as passed, otherwise
+  as unverified.
 
 **Do not hold a new run against an old run's own figure.** The old runs
 gave 86.7 % and 84.3 % of her own answers right. Read again with this

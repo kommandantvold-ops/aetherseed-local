@@ -327,7 +327,7 @@ class _Pupil:
         self.kept[say] = self.kept.get(say, False) or keep      # was it ever kept
         if self.slow:
             time.sleep(self.slow)
-        if say.startswith("Training round"):
+        if say.startswith(("Training round", "Also in round")):
             reply = "I am surest of my name."
             if "What is true:" in say:          # she says again what she was told is true
                 reply = say.split("What is true:", 1)[1].rsplit(" Say ", 1)[0]
@@ -522,13 +522,23 @@ class TheLoop(unittest.TestCase):
         self.assertEqual(sorted(loop.history()[0]["not_learned"]), sorted(s["not_learned"]))
         self.assertEqual(s["learned"], [])
         # the reflection tells her what is true of what she had wrong - two at most
-        told = [say for l, say in pupil.asked if say.startswith("Training round 1")][0]
-        self.assertIn("You were wrong about: ", told)
-        self.assertIn(" What is true: (1) ", told)
-        self.assertIn(" (2) ", told)
-        self.assertNotIn(" (3) ", told)
-        self.assertTrue(told.endswith("Say each of them again, in your own words."))
+        # - each in a turn of its own, to be said again in one sentence (read
+        # on a copy: asked for two at once she got as far as "I did make a
+        # mistake in two areas." and the paragraph stop ended her there)
+        told = [say for l, say in pupil.asked
+                if say.startswith(("Training round 1 ", "Also in round 1."))]
+        self.assertEqual(len(told), 2)
+        self.assertIn(" One you had wrong: ", told[0])
+        self.assertTrue(told[1].startswith("Also in round 1. Another you had wrong: "))
+        for say in told:
+            self.assertEqual(say.count(" What is true: "), 1)
+            self.assertTrue(say.endswith("Say that again in your own words, in one sentence."))
         self.assertEqual((first["lessons"], first["restated"]), (2, 2), "the key read her reflection")
+        said = [t for t in self.turns() if t["id"] == "reflection" and t["round"] == 1]
+        self.assertEqual([t["ok"] for t in said], [True, True])
+        # said right, it is remembered as passed - not as "may be wrong"
+        self.assertEqual([m[:2] for m in pupil.marks if m[0] in told],
+                         [(told[0], True), (told[1], True)])
 
     def test_a_reflection_that_says_nothing_of_what_was_wrong_is_seen_to(self):
         # 28 reflections in the first two runs, and nearly all of them this sentence
@@ -539,6 +549,9 @@ class TheLoop(unittest.TestCase):
         s = self.wait(loop, "finished")
         self.assertEqual((s["rounds"][0]["lessons"], s["rounds"][0]["restated"]), (2, 0))
         self.assertEqual(loop.history()[0]["restated"][0], 0)
+        # and what she said instead is kept as her own unchecked words
+        told = [say for l, say in pupil.asked if say.startswith("Training round 1 ")]
+        self.assertIn((told[0], None), [m[:2] for m in pupil.marks])
 
     def test_what_a_correction_taught_is_counted_as_learned(self):
         wrong = {"self.model", "eco.root", "as.company"}
@@ -960,6 +973,21 @@ class AtTheProxy(_Proxy):
         self.ask(said)
         self.assertIn("[Unverified - an earlier answer of yours that may be wrong] [Episode] "
                       "Trainer: Training round 1 is over.", self.system_sent())
+
+    def test_a_turn_that_passed_the_check_does_not_come_back_as_may_be_wrong(self):
+        # Read on a copy, 7 Oct 2026: "My lowest trust level is Observer"
+        # passed, had been kept as unverified, came back tagged "an earlier
+        # answer of yours that may be wrong" - and asked again she said Reader.
+        said = "Which is your lowest trust level?"
+        SCRIPT["chunks"] = ["My", " lowest", " trust", " level", " is", " observer", "."]
+        self.lesson(said, "observer")
+        done = proxy._training_mark(said, True, "")
+        proxy.root.store.set_episode_mode(done["turn"], "unverified")
+        self.ask(said)
+        sent = self.system_sent()
+        self.assertIn("[Passed a check in training] [Episode] Trainer: " + said, sent)
+        self.assertNotIn("[Unverified - an earlier answer of yours that may be wrong] "
+                         "[Episode] Trainer: " + said, sent)
 
     def test_the_loop_is_told_what_her_memory_already_holds(self):
         # build log 65: one checked turn of a wording, not one every round

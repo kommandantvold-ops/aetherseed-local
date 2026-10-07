@@ -183,6 +183,13 @@ class TestRetrievalRule(unittest.TestCase):
         self.assertEqual(memory_tag(FICTION), FICTION_LABEL)
         self.assertEqual(memory_tag(UNVERIFIED), UNVERIFIED_LABEL)
         self.assertEqual(memory_tag(FACTUAL, supported=True), SUPPORTED_LABEL)
+        # a mark outranks "unverified" (build log 65): checked since, by the
+        # steward or by the training key, it no longer "may be wrong" -
+        self.assertEqual(memory_tag(UNVERIFIED, supported=True), SUPPORTED_LABEL)
+        self.assertEqual(memory_tag(UNVERIFIED, supported={"by": "training"}),
+                         "[Passed a check in training]")
+        # - but a story stays a story whoever marks it
+        self.assertEqual(memory_tag(FICTION, supported=True), FICTION_LABEL)
         # a correction outranks the mode, and says who made it and what is true
         self.assertEqual(memory_tag(UNVERIFIED, {"reason": "detail", "text": "The cat is called Pixel.",
                                                  "by": "steward"}),
