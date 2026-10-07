@@ -50,8 +50,9 @@ finish() {      # finish ok NAME | finish error CODE "one line"
   local tmp=$RESULT.tmp
   printf '%s\n' "$@" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$RESULT"
   echo "first-start: $*"
-  [ "$1" = ok ] && exit 0
-  exit 1
+  # A refusal is an answer, not a failure of the unit: the console shows it,
+  # and `systemctl --failed` stays a list of things that are broken.
+  exit 0
 }
 
 [ -r "$REQUEST" ] || { echo "first-start: no request"; exit 0; }

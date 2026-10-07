@@ -872,6 +872,89 @@ sudo systemd-run --unit=aetherseed-training-check --uid=aetherseed --gid=aethers
     --dir /var/lib/aetherseed/training/loop-$(date +%Y%m%d-%H%M) --rounds 2
 ```
 
+## 18. A unit onboarded where it will live: the first start, and a source card (step 66, after the tag)
+
+Not part of the tag `stable-llama-2026-10-03`. It is on `main`. Andreas,
+7 Oct 2026: *"Onboarded on-site means the user will pick name passkey and
+start it for the first time"* - and: *"install a fresh build on the pi on
+the 4th pi ... and that sd card will be copied for new pilot units. Lyra
+stays the separate R&D unit."*
+
+Until this step a unit's own Wi-Fi was set up at a shell (§13) and its clock
+by the network it was built on. A unit that is copied from a card and opened
+in someone's home has no shell, no network that tells it the time (§14) and
+no battery on its clock.
+
+Two more files in the application, and three units:
+
+```bash
+cd ~/aetherseed-main
+sudo install -o root -g root -m 644 gui/index.html gui/serve.py /opt/aetherseed/gui/
+sudo install -o root -g root -m 755 tools/first_start.sh tools/source_card.sh /opt/aetherseed/tools/
+for u in aetherseed-first-start.path aetherseed-first-start.service aetherseed-new-identity.service; do
+  sudo install -o root -g root -m 644 services/$u /etc/systemd/system/$u
+done
+sudo systemctl daemon-reload && sudo systemctl restart aetherseed-gui aetherseed-kiosk
+```
+
+Installing them changes nothing on a unit that is already set up: nothing
+is enabled, and nothing is armed.
+
+**The first start.** On a unit that is *armed* (`/etc/aetherseed/first-start`
+exists) the first-run screen goes on, after the name, to **the date and
+time** - five fields with their names on them, day, month, year, hour,
+minute, started from the unit's own clock - and **a passkey for the unit's
+own Wi-Fi**, typed in the open so that it can be written down. Then
+*Start*. The unit sets its clock, puts up the Wi-Fi of §13 under the
+companion's name (in plain letters: *Bjørn*'s network is called `Bjorn`,
+and the screen says so), and is no longer armed. It can be done once.
+
+- Only **at the unit's own screen**: the console refuses it from anywhere
+  else, and a phone cannot be on the unit's Wi-Fi before there is a passkey.
+- The console still has no root. It leaves the request in its runtime
+  directory, as it does for shutdown; `aetherseed-first-start.path` starts
+  `tools/first_start.sh` as root, which checks everything again, does the
+  two things and answers. The passkey lies in `/run` (memory, mode 600)
+  for the moment between the two, and is written to no log.
+- If the Wi-Fi will not come up the screen says so and stays; the unit is
+  still armed and it can be tried again. A restart in between comes back to
+  the same step.
+- **What it does not do.** It cannot change the passkey or the clock
+  afterwards: a unit that has lost its clock in a power cut is behind until
+  someone with a shell sets it (§14). It does not set the size of the
+  screen's text (§9: scale 3 unless `/etc/aetherseed/kiosk.env` says
+  otherwise).
+
+**A source card.** A copy of a card is that card - its name, its memory,
+its passkey, its SSH identity. So a source is a unit that was installed by
+this guide and **never started**:
+
+```bash
+sudo /opt/aetherseed/tools/source_card.sh check    # what a copy would carry; changes nothing
+sudo /opt/aetherseed/tools/source_card.sh seal     # make it a source, and power off
+```
+
+`seal` **refuses a unit that has been started** - a named companion, one
+stored turn, a Wi-Fi of its own, a steward's document, a trust record. It
+is not a factory reset. On a unit that passes it stops the companion,
+removes what running it left behind (the empty store, the model server's
+and the keepalive's logs, the screen's browser profile), arms the first
+start, deletes the SSH host keys and leaves `/etc/aetherseed/new-identity`,
+forgets the network it was built on, the journal and the installer's files
+in the admin account's home, and powers off.
+
+**Copy the card before it is booted again.** At the next boot - of the
+source or of any copy - `aetherseed-new-identity.service` makes new SSH host
+keys and a new machine id, removes its flag and restarts the unit once
+(about a minute longer, that one time). A source that was booted after its
+seal has its identity already, and every copy made then would share it:
+seal it again. Sealing twice is harmless as long as nobody has named the
+companion.
+
+The copies keep the admin account, its password and the SSH keys that were
+on the source - the pilot arrangement of §14 (key only, if the source was
+set so). They come up at scale 3 and with the keyboard layout of the build.
+
 ## Decisions this build carries, not steps
 
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds

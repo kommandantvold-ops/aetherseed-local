@@ -107,7 +107,7 @@ case ${1:-} in
     [ -e "$IDENTITY" ] && say "the next boot makes a new identity ($IDENTITY)" \
       || say "identity: machine id $(cut -c1-8 /etc/machine-id 2>/dev/null)..., $(ls /etc/ssh/ssh_host_*_key.pub 2>/dev/null | wc -l) SSH host key(s) - a copy would share them"
     for u in aetherseed-first-start.path aetherseed-new-identity.service; do
-      say "$u: $(systemctl is-enabled "$u" 2>/dev/null || echo not installed)"
+      st=$(systemctl is-enabled "$u" 2>/dev/null); say "$u: ${st:-not installed}"
     done
     for h in /home/*; do
       [ -d "$h" ] || continue
