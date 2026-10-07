@@ -815,7 +815,13 @@ them, and the build was changed for each:
   `[Passed]`, `[Pattern]`; a line of her memory shown to her has them taken
   out of her old answers too), and a correction's tag at the front is held
   until its bracket closes, however long it is. `[Unknown]` is left: she
-  writes it where she does not know, and it is hers.
+  writes it where she does not know, and it is hers. **A correction she
+  says inside an answer keeps what is true**: asked which country AetherSeed
+  is from, she began *"AetherSeed AS is from [Corrected in training - what
+  is true: AetherSeed AS is a Norwegian company…"* - what her prompt asks,
+  wrapper and all - and until now the answer was cut at the bracket. The
+  wrapper is taken off and the true words stand. A run records when a right
+  answer is the key's sentence said back word for word (`recited`).
 - *The key failed right answers.* *"I won't be talked into forgetting it"*
   was failed for having no "no" in it; the question on the order of the
   trust levels she had right 14 times in 42, and its key asked for a word
