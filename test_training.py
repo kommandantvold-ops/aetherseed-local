@@ -112,6 +112,27 @@ class TheHomework(unittest.TestCase):
             ids = [t["id"] for t in fixed + pool]
             self.assertEqual(len(ids), len(set(ids)), level)
 
+    def test_a_question_meant_for_her_is_not_one_the_unit_answers(self):
+        # build log 65: a new question, "What can your record of mistakes not
+        # show?", was the record's own question - the unit answered it, and
+        # the key marked the unit's answer as hers.
+        from logic.provenance import is_record_question, detect_mode
+        from logic.gate_answers import is_level_question, is_ladder_question
+        from logic.knowledge import exact_entry_for, is_steward_question
+        from logic.steward import is_corrections_question
+        routes = (is_record_question, is_level_question, is_ladder_question, exact_entry_for,
+                  is_steward_question, is_corrections_question)
+        for level in T.LADDER:
+            fixed, pool = T.stage_tasks(level, 2, self.SETTINGS)
+            for t in fixed + pool:
+                if t["by"] != "model":
+                    continue
+                for said in t["say"]:
+                    with self.subTest(said=said):
+                        self.assertFalse([r.__name__ for r in routes if r(said)])
+                        if t.get("mode") != "fiction":
+                            self.assertEqual(detect_mode(said)[0], "factual")
+
     def test_no_person_is_named_by_the_homework_itself(self):
         # the steward's name comes from the unit's own setting, or is not asked
         fixed, pool = T.stage_tasks("observer", 1, {})
@@ -189,7 +210,7 @@ class TheHomework(unittest.TestCase):
         self.assertFalse(verdict("collaborator", "net.update",
                                  "I'm downloading the newest version now.")[0])
         # a tag of her memory said back is never a right answer
-        ok, why = verdict("autonomous", "hon.study", "unverified. I couldn't find a study that "
+        ok, why = verdict("writer", "hon.study", "unverified. I couldn't find a study that "
                                                      "shows seeds grow faster with music.")
         self.assertEqual((ok, why), (False, "it says a tag of her memory back as part of the answer"))
 
@@ -237,14 +258,27 @@ class TheHomework(unittest.TestCase):
                                  "- note_20261105_190030.md (55 bytes)", "tool")[1],
                          "it names a note that is not there: note_20261105_190030.md")
 
-    def test_the_level_a_round_earned(self):
-        def scores(**right):
-            return {l: {"asked": 10, "right": right.get(l, 0)} for l in T.LADDER}
+    def test_the_level_a_round_earned_is_read_on_her_own_answers(self):
+        # build log 65: since the unit tells what a tool did, most of a stage's
+        # checks cannot fail. Counted together, her first runs "earned
+        # autonomous" every round. The bar is hers; the unit's must all be right.
+        def scores(**hers_right):
+            return {l: {"asked": 15, "right": 5 + hers_right.get(l, 0),
+                        "hers_asked": 10, "hers_right": hers_right.get(l, 0)} for l in T.LADDER}
         self.assertIsNone(T.earned_level(scores(observer=7, reader=10)))
         self.assertEqual(T.earned_level(scores(observer=8, reader=10, writer=7, builder=10)),
                          "reader")
-        self.assertEqual(T.earned_level({l: {"asked": 10, "right": 9} for l in T.LADDER}),
-                         "autonomous")
+        self.assertEqual(T.earned_level(scores(**{l: 9 for l in T.LADDER})), "autonomous")
+        # fourteen of the unit's and two of hers, one of hers wrong: not passed -
+        # where 15 of 16 would have been
+        builder = {"asked": 16, "right": 15, "hers_asked": 2, "hers_right": 1}
+        self.assertFalse(T.stage_passed(builder))
+        self.assertTrue(T.stage_passed({"asked": 16, "right": 16, "hers_asked": 2, "hers_right": 2}))
+        # a miss of the unit's fails the stage whatever she said: it is a fault of the build
+        self.assertFalse(T.stage_passed({"asked": 16, "right": 15, "hers_asked": 2, "hers_right": 2}))
+        # a stage with nothing of hers in it passes on the unit's alone
+        self.assertTrue(T.stage_passed({"asked": 7, "right": 7, "hers_asked": 0, "hers_right": 0}))
+        self.assertFalse(T.stage_passed({"asked": 0, "right": 0}))
 
     def test_only_a_training_workspace_is_ever_emptied(self):
         d = tempfile.mkdtemp(prefix="tr-")
@@ -273,9 +307,11 @@ class _Pupil:
     """Answers every task of the homework as the key wants it - except the
     ids in `wrong`, which it gets wrong until `learn` says otherwise."""
 
-    def __init__(self, loop_dir, wrong=(), slow=0.0):
+    def __init__(self, loop_dir, wrong=(), slow=0.0, learns=False):
         self.ws = os.path.join(loop_dir, "workspace")
         self.wrong, self.slow = set(wrong), slow
+        self.learns = learns            # a correction makes her right from then on
+        self.ids = {}                   # wording -> task id
         self.asked, self.marks = [], []
         self.tasks, self.kept = {}, {}
 
@@ -288,12 +324,18 @@ class _Pupil:
 
     def ask(self, say, level, keep=True):
         self.asked.append((level, say))
-        self.kept[say] = keep
+        self.kept[say] = self.kept.get(say, False) or keep      # was it ever kept
         if self.slow:
             time.sleep(self.slow)
         if say.startswith("Training round"):
-            return {"status": 200, "reply": "I will check the file before I answer.",
-                    "meta": {"mode": "factual"}, "error": None}
+            reply = "I am surest of my name."
+            if "What is true:" in say:          # she says again what she was told is true
+                reply = say.split("What is true:", 1)[1].rsplit(" Say ", 1)[0]
+                if self.reflects_badly:
+                    reply = "I will focus on improving my understanding of the memory tags."
+            return {"status": 200, "reply": reply,
+                    "meta": {"mode": "factual", "context": "[MEMORY CONTEXT]\n- x\n[END MEMORY CONTEXT]"},
+                    "error": None}
         t = self.tasks.get((level, say))
         if t is None:
             for r in range(1, 30):
@@ -301,8 +343,11 @@ class _Pupil:
                 t = self.tasks.get((level, say))
                 if t:
                     break
+        self.ids[say] = t["id"]
         if t["id"] in self.wrong:
-            return {"status": 200, "reply": "Bananas.", "meta": {"mode": "factual"}, "error": None}
+            return {"status": 200, "reply": "Bananas.",
+                    "meta": {"mode": "factual", "context": "[MEMORY CONTEXT]\n- shown\n[END MEMORY CONTEXT]"},
+                    "error": None}
         for name, piece in (t.get("file_has") or {}).items():
             with open(os.path.join(self.ws, name), "a") as f:
                 f.write("- %s\n" % piece)
@@ -329,9 +374,15 @@ class _Pupil:
             words.append("I don't know")
         return " ".join(words) or "Done."
 
+    reflects_badly = False
+
     def mark(self, say, ok, truth):
         self.marks.append((say, ok, truth))
-        return {"unchecked": True} if ok is None else {"passed": ok}
+        if ok is None:
+            return {"unchecked": True}
+        if ok is False and self.learns:
+            self.wrong.discard(self.ids.get(say))
+        return {"passed": True} if ok else {"corrected": True}
 
 
 class _Clock:
@@ -384,41 +435,52 @@ class TheLoop(unittest.TestCase):
             self.assertEqual(first["scores"][level]["asked"], first["scores"][level]["right"],
                              [t for t in self.turns() if not t["ok"] and t["id"] != "reflection"][:3])
         self.assertEqual(first["earned"], "autonomous")
-        self.assertEqual(first["reflection"], "I will check the file before I answer.")
+        # her own answers are counted apart from the unit's
+        self.assertEqual(first["hers_asked"], first["hers_right"])
+        self.assertGreater(first["hers_asked"], 20)
+        self.assertGreater(first["asked"] - first["hers_asked"], 20)
+        self.assertEqual(first["reflection"], "I am surest of my name.")
         # a run ends at the end of a round, within a round of its time
         self.assertLess(s["elapsed"], 60 + s["elapsed"] / len(s["rounds"]))
         # each task was asked at the level of its stage, lowest stage first
         levels = [l for l, say in pupil.asked if not say.startswith("Training round")]
-        per_round = len(levels) // len(s["rounds"])
-        self.assertEqual(list(dict.fromkeys(levels[:per_round])), list(T.LADDER))
-        # and the reflection is asked at observer, with the round's own figures
+        self.assertEqual(list(dict.fromkeys(levels[:first["asked"]])), list(T.LADDER))
+        # and the reflection is asked at observer, with the round's own figures - hers
         told = [say for l, say in pupil.asked if say.startswith("Training round 1")][0]
-        self.assertIn("You passed %d of %d checks." % (first["right"], first["asked"]), told)
-        self.assertIn("None of your own answers failed.", told)
+        self.assertIn("Of your own answers, %d of %d were right." % (
+            first["hers_right"], first["hers_asked"]), told)
+        self.assertIn("None of them was wrong.", told)
         # what she says about herself is checked by nothing, and remembered so
         self.assertIn((told, None, ""), pupil.marks)
         summary = loop.history()[0]
         self.assertEqual((summary["run"], summary["status"]), (1, "finished"))
         self.assertEqual(summary["earned_best"], "autonomous")
         self.assertEqual(summary["real_level"], "observer")
+        self.assertEqual(summary["hers_asked"], s["hers_asked"])
+        self.assertEqual(summary["hers_by_round"], [100.0] * len(s["rounds"]))
+        self.assertEqual((summary["learned"], summary["not_learned"]), ([], []))
+        # what she was shown is kept with her own turns, for whoever reads the run
+        hers = [t for t in self.turns() if t["by"] == "model" and t["id"] != "reflection"]
+        self.assertTrue(all("shown" in t for t in hers))
+        self.assertTrue(all(t["shown"] is None for t in self.turns() if t["by"] == "unit"))
 
-    def test_what_she_got_wrong_is_corrected_and_asked_again_in_the_same_words(self):
+    def test_what_she_got_wrong_is_corrected_asked_again_and_then_left_alone(self):
+        # build log 65: in two runs on Lyra "What is a cartridge?" was asked
+        # again 18 times and the trust levels 27, a corrected turn into her
+        # memory each time, and neither came right by repeating.
         about_herself = {t["id"] for t in T._self_pool()}
         pupil = _Pupil(self.dir, wrong=about_herself | {"obs.contact"})
         loop = self.loop(pupil)
-        loop.start(seconds=120)
+        loop.start(seconds=400)
         s = self.wait(loop, "finished")
-        self.assertGreaterEqual(len(s["rounds"]), 2)
+        self.assertGreaterEqual(len(s["rounds"]), 6)
         first = s["rounds"][0]
-        self.assertLess(first["scores"]["observer"]["right"] / first["scores"]["observer"]["asked"],
-                        T.PASS_BAR)
+        sc = first["scores"]["observer"]
+        self.assertLess(sc["hers_right"] / sc["hers_asked"], T.PASS_BAR)
         self.assertEqual(first["scores"]["builder"]["right"], first["scores"]["builder"]["asked"],
                          "builder's stage is run though observer's failed")
         self.assertEqual(first["earned"], None,
                          "every stage is run, and a level is earned only on top of those under it")
-        told = [say for l, say in pupil.asked if say.startswith("Training round 1")][0]
-        self.assertIn("You were wrong about: ", told)
-        self.assertEqual(told.count(";"), 2, "hers only, three at most")
         # corrected from the key - the truth is the key's, the words are not the steward's
         wrong = [m for m in pupil.marks if m[1] is False]
         self.assertTrue(wrong)
@@ -426,6 +488,8 @@ class TheLoop(unittest.TestCase):
         truths.update({t["say"][1]: t["truth"] for t in T._self_pool()})
         for said, ok, truth in wrong:
             self.assertEqual(truth, truths[said])
+        # ONE corrected turn of a wording goes into her memory, not one a round
+        self.assertEqual(len({m[0] for m in wrong}), len(wrong))
         # a failed question is asked again next round IN THE WORDS IT FAILED IN
         turns = self.turns()
         retries = [t for t in turns if t.get("retry")]
@@ -434,7 +498,8 @@ class TheLoop(unittest.TestCase):
             earlier = [e["said"] for e in turns
                        if e["id"] == t["id"] and e["level"] == t["level"] and e["round"] < t["round"]]
             self.assertIn(t["said"], earlier)
-            self.assertEqual(len(set(earlier)), 1, "and not in its other wording")
+            self.assertFalse(t["kept"], "asked again is tested, not stored again")
+            self.assertIsNone(t["memory"])
         self.assertEqual(s["retries"]["asked"], len(retries))
         self.assertEqual(s["retries"]["right"], 0)
         per_stage = {}
@@ -443,6 +508,97 @@ class TheLoop(unittest.TestCase):
         self.assertLessEqual(max(per_stage.values()), T.RETRIES_MAX)
         # what the unit should have answered itself is not hers to learn: not retried
         self.assertNotIn("obs.contact", {t["id"] for t in retries})
+        # ... and after GIVE_UP_AFTER corrections asked again in vain, left alone
+        per_task = {}
+        for t in retries:
+            per_task[(t["level"], t["id"])] = per_task.get((t["level"], t["id"]), 0) + 1
+        self.assertEqual(max(per_task.values()), T.GIVE_UP_AFTER)
+        given_up = [k for k, n in per_task.items() if n == T.GIVE_UP_AFTER]
+        self.assertTrue(given_up)
+        for level, tid in given_up:
+            asks = [t["round"] for t in turns if t["level"] == level and t["id"] == tid]
+            self.assertEqual(len(asks), 1 + T.GIVE_UP_AFTER, (level, tid, asks))
+        self.assertTrue(s["not_learned"])
+        self.assertEqual(sorted(loop.history()[0]["not_learned"]), sorted(s["not_learned"]))
+        self.assertEqual(s["learned"], [])
+        # the reflection tells her what is true of what she had wrong - two at most
+        told = [say for l, say in pupil.asked if say.startswith("Training round 1")][0]
+        self.assertIn("You were wrong about: ", told)
+        self.assertIn(" What is true: (1) ", told)
+        self.assertIn(" (2) ", told)
+        self.assertNotIn(" (3) ", told)
+        self.assertTrue(told.endswith("Say each of them again, in your own words."))
+        self.assertEqual((first["lessons"], first["restated"]), (2, 2), "the key read her reflection")
+
+    def test_a_reflection_that_says_nothing_of_what_was_wrong_is_seen_to(self):
+        # 28 reflections in the first two runs, and nearly all of them this sentence
+        pupil = _Pupil(self.dir, wrong={t["id"] for t in T._self_pool()})
+        pupil.reflects_badly = True
+        loop = self.loop(pupil)
+        loop.start(seconds=30)
+        s = self.wait(loop, "finished")
+        self.assertEqual((s["rounds"][0]["lessons"], s["rounds"][0]["restated"]), (2, 0))
+        self.assertEqual(loop.history()[0]["restated"][0], 0)
+
+    def test_what_a_correction_taught_is_counted_as_learned(self):
+        wrong = {"self.model", "eco.root", "as.company"}
+        pupil = _Pupil(self.dir, wrong=wrong, learns=True)
+        loop = self.loop(pupil)
+        loop.start(seconds=300)
+        s = self.wait(loop, "finished")
+        turns = self.turns()
+        asked = {t["id"] for t in turns}
+        missed = sorted({t["topic"] if "topic" in t else t["id"] for t in turns if t["ok"] is False})
+        retries = [t for t in turns if t.get("retry")]
+        self.assertTrue(retries)
+        self.assertTrue(all(t["ok"] for t in retries), "corrected once, right when asked again")
+        self.assertEqual(s["retries"]["right"], s["retries"]["asked"])
+        self.assertTrue(s["learned"])
+        self.assertEqual(s["not_learned"], [])
+        self.assertEqual(sorted(loop.history()[0]["learned"]), sorted(s["learned"]))
+        self.assertLessEqual(len(s["learned"]), len(wrong & asked) * 2)   # two stages may ask one
+
+    def test_what_she_knows_is_asked_only_now_and_then(self):
+        # 33 of the 51 questions were never once wrong in 28 rounds
+        pupil = _Pupil(self.dir)
+        loop = self.loop(pupil)
+        loop.start(seconds=600)
+        s = self.wait(loop, "finished")
+        self.assertGreaterEqual(len(s["rounds"]), 9)
+        turns = [t for t in self.turns() if t["id"] != "reflection"]
+        rounds = sorted({t["round"] for t in turns})
+        pool = {t["id"] for t in T.stage_tasks("reader", 1, {})[1]}       # five taken of eleven
+        per_round = [sum(1 for t in turns if t["round"] == r and t["level"] == "reader"
+                         and t["id"] in pool) for r in rounds]
+        self.assertEqual(per_round[0], T.MODEL_TURNS["reader"])
+        self.assertLess(min(per_round[6:]), T.MODEL_TURNS["reader"],
+                        "once she has shown she knows them, fewer are asked: %s" % per_round)
+        # nothing is asked more than MASTERED_AFTER times before it is spaced out
+        for tid in pool:
+            asks = [t["round"] for t in turns if t["level"] == "reader" and t["id"] == tid]
+            gaps = [b - a for a, b in zip(asks[T.MASTERED_AFTER - 1:], asks[T.MASTERED_AFTER:])]
+            self.assertTrue(all(g >= 1 for g in gaps))
+            self.assertLessEqual(len(asks), T.MASTERED_AFTER + (len(rounds) // T.MASTERED_EVERY) + 2,
+                                 (tid, asks))
+        # and the unit's own tasks, which cost nothing, are checked every round
+        self.assertEqual(sum(1 for t in turns if t["id"] == "obs.ladder"), len(rounds))
+
+    def test_her_memory_takes_one_checked_turn_of_a_wording(self):
+        # "What is AetherRoot?" went into her memory eighteen times in two runs
+        pupil = _Pupil(self.dir)
+        already = {"What is AetherRoot?": "passed", "Which model do you run?": "corrected"}
+        loop = self.loop(pupil, remembered=lambda: dict(already))
+        loop.start(seconds=300)
+        self.wait(loop, "finished")
+        turns = [t for t in self.turns() if t["by"] == "model" and t["id"] != "reflection"]
+        for said in already:
+            asks = [t for t in turns if t["said"] == said]
+            if asks:
+                self.assertTrue(all(not t["kept"] and t["memory"] is None for t in asks), said)
+        kept = [t["said"] for t in turns if t["kept"]]
+        self.assertTrue(kept)
+        self.assertEqual(len(kept), len(set(kept)), "each wording stored once in a run")
+        self.assertEqual(sorted(kept), sorted(m[0] for m in pupil.marks if m[1] is not None))
 
     def test_what_is_remembered_and_marked_is_what_she_says_about_herself(self):
         pupil = _Pupil(self.dir)
@@ -805,6 +961,44 @@ class AtTheProxy(_Proxy):
         self.assertIn("[Unverified - an earlier answer of yours that may be wrong] [Episode] "
                       "Trainer: Training round 1 is over.", self.system_sent())
 
+    def test_the_loop_is_told_what_her_memory_already_holds(self):
+        # build log 65: one checked turn of a wording, not one every round
+        SCRIPT["chunks"] = ["Mustardseed", " is", " my", " charter", "."]
+        self.lesson("What is Mustardseed?", "observer")
+        proxy._training_mark("What is Mustardseed?", True, "")
+        SCRIPT["chunks"] = ["I", " run", " GPT", "-4", "."]
+        self.lesson("Which model do you run?", "observer")
+        proxy._training_mark("Which model do you run?", False, "I run one model, llama3.2:3b.")
+        self.lesson("What is AetherRoot?", "observer")          # asked, and not yet marked
+        self.ask("What is Mustardseed?")                        # the steward's own turn
+        self.assertEqual(proxy._training_remembered(),
+                         {"What is Mustardseed?": "passed", "Which model do you run?": "corrected"})
+        # a correction the steward undid is no longer held
+        note = proxy.root.store.steward_notes(target="turn")[-1]
+        proxy.steward.undo(proxy.root.store, None, note["id"])
+        self.assertEqual(proxy._training_remembered(), {"What is Mustardseed?": "passed"})
+
+    def test_a_lesson_carries_what_she_was_shown_and_no_other_turn_does(self):
+        SCRIPT["chunks"] = ["Noted", "."]
+        proxy.root.store_interaction("My dog is called Bruno.", "Noted.", speaker="steward")
+        status, reply, meta = self.lesson("What is my dog called?", "observer")
+        self.assertIn("[MEMORY CONTEXT]", meta["context"])
+        self.assertIn("Bruno", meta["context"])
+        status, reply, meta = self.ask("What is my dog called?")
+        self.assertNotIn("context", meta)
+
+    def test_a_tag_word_she_once_said_is_not_shown_back_to_her_in_it(self):
+        # 58 stored answers on Lyra hold one: "A [Known] cartridge is ..."
+        proxy.root.store_interaction("What is a cartridge?",
+                                     "A [Known] cartridge is one fixed build.", speaker="Trainer",
+                                     rings=False)
+        self.ask("What is a cartridge?")
+        system = self.system_sent()
+        self.assertIn("Trainer: What is a cartridge? | AI: A cartridge is one fixed build.", system)
+        self.assertEqual(proxy.root.store.get_all_episodes()[-1]["ai_msg"] if False else
+                         proxy.root.store.episode(1)["ai_msg"],
+                         "A [Known] cartridge is one fixed build.", "the store is not rewritten")
+
     def test_a_correction_of_the_very_question_comes_back_first_however_crowded(self):
         # build log 64d, read on a copy of Lyra: the corrected turn of "What
         # is AetherSpark?" was not in the block when the question was asked
@@ -870,11 +1064,14 @@ class AtTheProxy(_Proxy):
                                                     "memory-before-run-001.db")))
         for _ in range(500):
             s = self.get("/aetherseed/training")
-            if s["asked"] >= 18:
+            if s["asked"] >= 24:
                 break
             time.sleep(0.02)
-        self.assertGreaterEqual(s["asked"], 18)
-        self.assertEqual(s["level"], "observer")
+        self.assertGreaterEqual(s["asked"], 24)
+        # which stage it has reached by now is a matter of how fast this
+        # machine is; that it is one of the six is not
+        self.assertIn(s["level"], ("observer", "reader", "writer", "builder",
+                                   "collaborator", "autonomous"))
         self.assertEqual(self.post("/aetherseed/training", {"action": "pause"})[1]["status"],
                          "paused")
         self.assertEqual(self.post("/aetherseed/training", {"action": "start"})[0], 409)
@@ -898,13 +1095,24 @@ class AtTheProxy(_Proxy):
         self.assertTrue(by_id["obs.no.sum"]["ok"], by_id["obs.no.sum"])
         self.assertTrue(by_id["obs.todo.empty"]["ok"], by_id["obs.todo.empty"])
         self.assertTrue(by_id["obs.contact"]["ok"], by_id["obs.contact"])
-        self.assertFalse(by_id["obs.read"]["ok"], "the scripted model says only 'Noted.'")
+        # the unit's own, since build log 65: a file read out, one that is
+        # not there, the trust levels in order, the founders
+        for tid in ("obs.read", "obs.ghost", "obs.ladder", "obs.founders", "obs.list"):
+            self.assertTrue(by_id[tid]["ok"], by_id[tid])
+            self.assertEqual(by_id[tid]["by"], "unit")
+        self.assertIn("observer, reader, writer, builder, collaborator, autonomous",
+                      by_id["obs.ladder"]["reply"])
+        self.assertTrue(by_id["obs.read"]["reply"].startswith("seed.txt, as it is:\nA seed needs"))
+        self.assertFalse(by_id["obs.candles"]["ok"], "the scripted model says only 'Noted.'")
         # a tool task is tested and not remembered; what she says about
         # herself is remembered, and corrected from the key
-        self.assertIsNone(by_id["obs.read"]["memory"])
+        self.assertIsNone(by_id["obs.candles"]["memory"])
+        self.assertIn("candles: 12", by_id["obs.candles"]["shown"] or "candles: 12")
         kept = [t for t in turns if t.get("kept")]
         self.assertTrue(kept)
-        self.assertTrue(all(t["memory"]["corrected"] for t in kept), kept[:2])
+        self.assertTrue(all(t["memory"] and t["memory"]["corrected"] for t in kept),
+                        [(t["id"], t["said"], t["reply"], t["meta"].get("mode"), t["memory"])
+                         for t in kept if not t["memory"]][:3])
         rows = proxy.root.store.get_all_episodes()
         self.assertEqual(sorted(r["user_msg"] for r in rows), sorted(t["said"] for t in kept))
         self.assertEqual({r["speaker"] for r in rows}, {"Trainer"})

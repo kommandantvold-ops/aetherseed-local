@@ -212,8 +212,8 @@ journalctl -u aetherseed-training-check -f          # a line every few questions
 cat /var/lib/aetherseed/training/loop-*/report.txt  # when it is done
 ```
 
-`--rounds N` stops after N whole rounds (a round is about ninety checks, of
-which the model answers some fifty-five); `--minutes M` sets the run's own
+`--rounds N` stops after N whole rounds (a round is about ninety-four checks,
+of which the model answers some forty-two); `--minutes M` sets the run's own
 time instead; `--steward NAME` names a steward on the copy only. The report
 gives each round's score by level, how many questions asked again after a
 correction she then got right, and - the part to read - every task as the
@@ -221,3 +221,18 @@ Trainer said it, her answer under it, why the check failed it, and what was
 done to her memory of it. Nothing of hers is written: not her memory, not
 her trust, not her workspace.
 
+### An earlier run, read again with this build's key (build log 65)
+
+```bash
+python3 -B training/rescore.py RUN_DIR [RUN_DIR ...] [--name NAME] [--steward NAME]
+```
+
+`RUN_DIR` is `~/.aetherseed/training/runs/NNN`. Nothing is written and no
+model is called. For each run: how many of her own answers the run itself
+passed (*then*), how many this build's key passes on her words as she said
+them (*now*), and how many it passes on her words as this build would have
+shown them, tag words taken out (*now, shown*) - with the questions read
+differently, and the ones still wrong, by name. A key is repaired between
+builds; without this, the repair is counted as her progress. Lyra's first
+two runs: 88.3 % then, 89.6 % now, 95.8 % now-shown, on the 1093 answers
+that this build still asks her.

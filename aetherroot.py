@@ -893,6 +893,7 @@ class AetherRoot:
         request then retrieved. test_rings.py holds the regression.
         """
         from logic.provenance import visible_modes, memory_tag
+        from logic.token_budget import strip_bare_tags
         from logic.speaker import label_for
         from logic.rings import ring_line, is_recollection, rings_for_question
 
@@ -967,7 +968,11 @@ class AetherRoot:
                 "text": (f"{tag} [Episode] {label_for(ep.get('speaker'))}: {ep['user_msg'][:100]}"
                          if note.get("correct") else
                          f"{tag + ' ' if tag else ''}[Episode] {label_for(ep.get('speaker'))}: "
-                         f"{ep['user_msg'][:100]} | AI: {ep['ai_msg'][:100]}"),
+                         # A tag word she once said inside an answer is not
+                         # shown back to her in it (build log 65): 58 stored
+                         # answers on Lyra hold one, and each one shown is one
+                         # more example to copy. The store is not rewritten.
+                         f"{ep['user_msg'][:100]} | AI: {strip_bare_tags(ep['ai_msg'])[0][:100]}"),
                 "type": "episode",
                 # Not plain fact: shown with its tag, and not evidence for the
                 # honesty check. A turn the steward only marked right is fact.

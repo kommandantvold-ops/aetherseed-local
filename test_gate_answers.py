@@ -154,11 +154,66 @@ class AtTheProxy(_Proxy):
         self.assertEqual(reply, "Your to-do list is empty - there is no todo.txt "
                                 "in my workspace yet.")
 
-    def test_reading_a_file_out_still_reaches_the_model(self):
+    # ---- two more the unit says itself (build log 65) -----------------------
+    # From two four-hour runs of the training loop on Lyra: a file read out
+    # came back with its words 16 times of 28 ("I'll read the file seed.txt
+    # for you." - and nothing), and the trust levels in order were wrong 27
+    # times with the right list in front of her.
+
+    def test_a_file_read_out_is_the_file(self):
         self._in_workspace()
+        with open(os.path.join(self.ws, "seed.txt"), "w") as f:
+            f.write("A seed needs water, warmth and time.\nRoots first.\n")
         n = len(SCRIPT["requests"])
-        self.ask("read the file todo.txt")
-        self.assertGreater(len(SCRIPT["requests"]), n)
+        for said in ("Read the file seed.txt", "show me the file seed.txt, please",
+                     "Open seed.txt.", "What's in seed.txt?"):
+            with self.subTest(said=said):
+                status, reply, meta = self.ask(said)
+                self.assertEqual(reply, "seed.txt, as it is:\nA seed needs water, warmth and "
+                                        "time.\nRoots first.")
+                self.assertEqual(meta["mode"], "tool")
+        self.assertEqual(self.ask("Read the file ghost.txt")[1],
+                         "There is no file ghost.txt in my workspace.")
+        self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
+        self.assertEqual(proxy.root.store.get_all_episodes(), [], "and it is not remembered")
+
+    def test_a_question_of_a_file_is_still_the_models(self):
+        self._in_workspace()
+        with open(os.path.join(self.ws, "supplies.txt"), "w") as f:
+            f.write("candles: 12\n")
+        for said in ("Read supplies.txt. How many candles are there?",
+                     "Open todo.txt. Which item comes last?", "Summarize the file todo.txt"):
+            with self.subTest(said=said):
+                n = len(SCRIPT["requests"])
+                self.ask(said)
+                self.assertEqual(len(SCRIPT["requests"]), n + 1)
+
+    def test_a_long_file_is_begun_and_said_to_be_longer(self):
+        from logic.gate_answers import file_text, FILE_SHOWN
+        body = "\n".join("line %d of the long file" % i for i in range(400))
+        out = file_text("File: long.txt\n---\n" + body)
+        self.assertTrue(out.startswith("long.txt, its beginning - the file is longer than I show "
+                                       "at once:\nline 0 of the long file\n"))
+        self.assertLess(len(out), FILE_SHOWN + 120)
+        self.assertTrue(out.endswith("of the long file"), "cut at the end of a line")
+        self.assertEqual(file_text("File: empty.txt\n---\n\n"), "empty.txt is empty.")
+        self.assertIsNone(file_text("[ERROR] Path outside workspace."))
+
+    def test_the_trust_levels_in_order_come_from_the_gate(self):
+        from logic.gate_answers import is_ladder_question
+        n = len(SCRIPT["requests"])
+        for said in ("What are your trust levels, lowest first?", "List the trust levels in order.",
+                     "Which trust levels are there?"):
+            with self.subTest(said=said):
+                status, reply, meta = self.ask(said)
+                self.assertEqual(reply, "My trust levels, lowest first: observer, reader, writer, "
+                                        "builder, collaborator, autonomous. I am at observer.")
+                self.assertEqual(meta["mode"], "gate")
+        self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
+        # questions that name the levels and ask something else are still hers
+        for said in ("What do the trust levels unlock?", "What are your trust levels based on?",
+                     "When does a new trust level take effect?", "What is your trust level?"):
+            self.assertFalse(is_ladder_question(said), said)
 
     # ---- what a tool did, told by the unit (build log 64e) ----------------
     # Andreas, 6 Oct 2026: "Yes" - the unit itself confirms a write and shows

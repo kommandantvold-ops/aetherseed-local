@@ -33,7 +33,8 @@ from aetherspark import AetherSpark, SafetyGate, TRUST_PERMISSIONS
 from trust_evolution import TrustEvolution
 from intent_detection import detect_intent, execute_intent, in_workspace
 from logic.gate_answers import (is_level_question, level_text, refusal_text, todo_text,
-                                tool_text, TOLD_BY_THE_UNIT)
+                                tool_text, TOLD_BY_THE_UNIT, is_ladder_question,
+                                ladder_text, only_asks_for_the_file, file_text)
 
 # ============================================================
 # CONFIGURATION
@@ -67,7 +68,7 @@ from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 sanitize_model_output, first_paragraph,
                                 ends_sentence, cut_at_scaffold_marker,
                                 strip_leading_artefacts, opening_may_be_artefact,
-                                marker_prefix_len,
+                                marker_prefix_len, strip_bare_tags, opening_hold,
                                 PromptTooLarge, TokenizerUnavailable)
 from logic.provenance import (detect_mode, resolve_mode, is_record_question,
                              summarise_record, FICTION, UNVERIFIED, TAG_NOTE)
@@ -220,6 +221,23 @@ def _training_backup(path):
         dst.close()
 
 
+def _training_remembered():
+    """The homework wordings her memory already holds one checked turn of:
+    {wording: "passed" | "corrected"} (build log 65). Such a wording is asked
+    and checked again, and not stored again - in the first two runs "What is
+    AetherRoot?" went into her memory eighteen times."""
+    out = {}
+    rows = root.store.conn.execute(
+        "SELECT e.user_msg, n.action FROM episodes e JOIN steward_notes n "
+        "ON n.target = 'turn' AND n.target_id = e.id AND n.undone_at IS NULL "
+        "WHERE e.speaker = ? AND n.by = ? ORDER BY e.id", (TRAINER, steward.TRAINING))
+    for said, action in rows:
+        # a correction outranks a pass: what is true of it is what is kept
+        if action == "correct" or said not in out:
+            out[said] = "corrected" if action == "correct" else "passed"
+    return out
+
+
 def training_loop():
     global _TRAINING_LOOP
     with _TRAINING_LOCK:
@@ -228,7 +246,8 @@ def training_loop():
                 TRAINING_DIR, ask=_training_ask, mark=_training_mark,
                 backup=_training_backup,
                 settings=lambda: {"name": _settings()[0], "steward": _steward()},
-                real_level=lambda: spark.gate.trust_level)
+                real_level=lambda: spark.gate.trust_level,
+                remembered=_training_remembered)
         return _TRAINING_LOOP
 
 
@@ -518,6 +537,8 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     # could not take back the pieces already sent.
     sent = 0
     held_dropped = 0
+    bare_tags = 0
+    after_tag = False
     deadline = time.monotonic() + MAX_GENERATION_SECONDS
 
     resp = urllib.request.urlopen(req, timeout=300)
@@ -551,7 +572,7 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
                     head_raw += clean
                     head_clean, n_art = strip_leading_artefacts(head_raw)
                     if (not stopped_because and not d.get("done")
-                            and len(head_raw) < HEAD_HOLD_CHARS
+                            and len(head_raw) < opening_hold(head_raw, HEAD_HOLD_CHARS)
                             and opening_may_be_artefact(head_clean)):
                         continue                 # nothing forwarded yet
                     head_settled = True
@@ -566,7 +587,19 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
                     # can end on; this token is not forwarded or stored.
                     stopped_because = "sentence"
                     clean = ""
+                if after_tag and clean:
+                    # The word before the tag left its space, and this one
+                    # brings its own: one of the two is enough.
+                    if clean[:1] == " " and (not ai_content or ai_content[-1:].isspace()):
+                        clean = clean[1:]
+                    after_tag = False
                 ai_content += clean
+                # A tag word of her memory said inside a sentence is taken out
+                # of what has not yet gone to the reader (build log 65).
+                ai_content, n_bare = strip_bare_tags(ai_content, sent)
+                bare_tags += n_bare
+                if n_bare and (not ai_content or ai_content[-1:].isspace()):
+                    after_tag = True
 
                 # Both remaining stops work on the ACCUMULATED text, not this
                 # chunk: "[END MEMORY CONTEXT]" is several tokens and a blank
@@ -624,6 +657,9 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     if hold:
         ai_content = ai_content[:len(ai_content) - hold]
         held_dropped += hold
+    if bare_tags:
+        print(f"[generation] took {bare_tags} tag word(s) of her memory out of "
+              f"the answer - not shown, not stored", flush=True)
     if held_dropped:
         print(f"[generation] held back {held_dropped} character(s) that could "
               f"have been the start of a scaffold marker - not shown, not "
@@ -1258,6 +1294,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._serve_plain(model, text, source="gate", mode="gate", used_tools=True)
             return
 
+        # ---- ITS TRUST LEVELS, IN ORDER ----
+        # From the gate too (build log 65): corrected 27 times in two runs of
+        # the training loop, she did not come to hold the order of six names.
+        if is_ladder_question(user_msg):
+            print("[gate] the trust levels listed from the gate (model not called)",
+                  flush=True)
+            self._serve_plain(model, ladder_text(gate.trust_level), source="gate",
+                              mode="gate", used_tools=True)
+            return
+
         # ---- INTENT DETECTION ----
         intent = detect_intent(user_msg)
         workspace_data = ""
@@ -1301,6 +1347,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # 64e; Andreas, 6 Oct 2026: "Yes"). Her words around a tool's
             # result were wrong often - a to-do retyped with another number,
             # a note's file name made up - and the file right every time.
+            # A file read out is the file (build log 65): "I'll read the file
+            # for you." and nothing more, 12 times of 28. Only when the file
+            # is all that is asked for; a question of a file is the model's.
+            if intent["intent"] == "file_read" and only_asks_for_the_file(
+                    user_msg, intent.get("match") or ""):
+                shown = file_text(result)
+                if shown is not None:
+                    print("[tools] a file read out by the unit (model not called)",
+                          flush=True)
+                    self._serve_plain(model, shown, source="tool", mode="tool",
+                                      used_tools=True)
+                    return
             if intent["intent"] in TOLD_BY_THE_UNIT:
                 told = tool_text(intent["intent"], result)
                 if told is not None:
@@ -1523,6 +1581,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # Not from the library, though a passage of it says every word of
             # the question: the console says so, and "look it up" shows it.
             "library_line": bool(library_line and ai_content),
+            # For a turn of the training loop: her memory block as it stood
+            # in front of her (build log 65), so that a run's record can tell
+            # "she was shown it and said otherwise" from "she was not shown
+            # it". The loop's own record only; the console never asks for it.
+            **({"context": memory_context[:1600]} if lesson else {}),
         }))
 
         # Store in AetherRoot

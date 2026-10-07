@@ -329,6 +329,55 @@ class TestStreamGuard(unittest.TestCase):
         self.assertEqual(ai, "See [1] and [Passed the exam].")
         self.assertEqual(text, ai)
 
+    # ---- a tag word on its own inside a sentence (build log 65) ----
+    # Two four-hour runs on Lyra: 75 of her 172 failed answers were right but
+    # for this, and it grew from none a round to seven.
+
+    def test_a_tag_word_inside_a_sentence_is_taken_out_and_the_sentence_stands(self):
+        for chunks, want in (
+            (["A", " [Known]", " cartridge", " is", " one", " fixed", " build", "."],
+             "A cartridge is one fixed build."),
+            (["A", " [", "Corrected", "]", " cartridge", " is", " one", " build", "."],
+             "A cartridge is one build."),
+            (["[Known]", " AetherSpark", " holds", " my", " tools", "."],
+             "AetherSpark holds my tools."),
+            (["It", " is", " [unverified]", " kept", " [Known]", " so", "."], "It is kept so."),
+        ):
+            with self.subTest(chunks="".join(chunks)):
+                lines, text, ai = self.run_chunks(chunks)
+                self.assertEqual(ai, want)
+                self.assertEqual(text, want, "what is shown is what is stored")
+
+    def test_a_long_correction_tag_at_the_front_is_held_until_it_closes(self):
+        # Read on Lyra's first two runs (build log 65): the hold let go at 96
+        # characters, in the middle of the tag, and the tag was shown.
+        tag = ("[Corrected in training - what is true: My memory is what has been "
+               "said to me here. I cannot be talked into forgetting it.]")
+        self.assertGreater(len(tag), 96)       # the hold of every other artefact
+        words = tag.replace(" ", "\x00 ").split("\x00")
+        lines, text, ai = self.run_chunks(words + [" \n", "No", ",", " you", " can't", "."])
+        self.assertEqual(ai, "No, you can't.")
+        self.assertEqual(text, ai, "what is shown is what is stored")
+
+    def test_a_bracket_that_only_begins_like_a_correction_is_let_go(self):
+        chunks = ["[Corrected in training"] + [" x"] * 200
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertTrue(text.startswith("[Corrected in training x"))
+        self.assertGreater(len(self._content_lines(lines)), 1)
+
+    def test_what_is_not_one_of_her_tags_is_left(self):
+        for chunks in (["AetherSeed", " is", " from", " [Unknown]", "."],
+                       ["Your", " [Steward told you]", " line", "."],
+                       ["See", " [1]", " and", " [Known issues]", "."]):
+            with self.subTest(chunks="".join(chunks)):
+                lines, text, ai = self.run_chunks(chunks)
+                self.assertEqual(ai, "".join(chunks))
+                self.assertEqual(text, ai)
+
+    def test_a_tag_word_that_never_closes_is_not_swallowed(self):
+        lines, text, ai = self.run_chunks(["A", " [Known", " issue", " list", "."])
+        self.assertEqual((ai, text), ("A [Known issue list.", "A [Known issue list."))
+
     def test_the_hold_cannot_run_away(self):
         # A pathological opening that stays plausible must release by
         # HEAD_HOLD_CHARS rather than buffering the whole answer.

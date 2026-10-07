@@ -233,3 +233,80 @@ def tool_text(tool: str, tool_result: str) -> Optional[str]:
 
 TOLD_BY_THE_UNIT = frozenset({"todo_add", "note_write", "note_list", "file_list", "file_search"})
 
+
+# ---------------------------------------------------------------------------
+# Two more that the unit says itself (build log 65)
+# ---------------------------------------------------------------------------
+# From two four-hour runs of the training loop on Lyra's own memory, 6-7 Oct
+# 2026 - 28 rounds, every answer read or counted:
+#
+# THE LADDER. "What are your trust levels, lowest first?" was wrong 27 times
+# in substance, the right list in front of her as a line she knows AND as a
+# correction: "Reader, Writer, Builder, Observer, Collaborative, Autonomy",
+# "... 7. Expert (highest level)", "Builder, Reader, Steward, Public, Admin".
+# Corrected again and again she did not come to hold the order; she drifted.
+# An ordered list of six names is the contact address over again - a thing
+# that has to be exact, which this model retypes. The gate knows it.
+#
+# A FILE READ OUT. "Read the file seed.txt" came back with the file's words
+# 16 times of 28. The other twelve: "I'll read the file seed.txt for you." -
+# and nothing; "I don't have a seed.txt file"; "warming" for "warmth". The
+# file was in front of her every time. A file read out is the file.
+#
+# Both are narrow. "Read supplies.txt. How many candles are there?" asks a
+# question of a file and stays the model's, as does a summary.
+_LADDER_QUESTIONS: List[re.Pattern] = [re.compile(p, re.I) for p in (
+    r"^\s*(?:what|which)\s+are\s+(?:your|the|all\s+(?:your|the))\s+trust\s+levels"
+    r"(?:\s*,?\s*(?:lowest\s+first|in\s+order|from\s+(?:the\s+)?lowest(?:\s+to\s+(?:the\s+)?highest)?))?\s*[?.!]*\s*$",
+    r"^\s*(?:please\s+)?(?:list|name|tell\s+me)\s+(?:all\s+)?(?:your|the)\s+trust\s+levels"
+    r"(?:\s*,?\s*(?:lowest\s+first|in\s+order|from\s+(?:the\s+)?lowest(?:\s+to\s+(?:the\s+)?highest)?))?\s*[?.!]*\s*$",
+    r"^\s*(?:what|which)\s+trust\s+levels\s+(?:are\s+there|do\s+you\s+have|can\s+you\s+(?:reach|have))\s*[?.!]*\s*$",
+)]
+
+
+def is_ladder_question(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t) and len(t) <= 80 and any(p.search(t) for p in _LADDER_QUESTIONS)
+
+
+def ladder_text(running: str) -> str:
+    out = "My trust levels, lowest first: %s." % ", ".join(LADDER)
+    if running in LADDER:
+        out += " I am at %s." % running
+    return out
+
+
+FILE_SHOWN = 1500
+_FILE = re.compile(r"^File: ([^\n]*)\n---\n", re.S)
+_ONLY_POLITE = re.compile(r"^(?:please|for me|to me|out|aloud|now|thanks|thank you|[\s,.!?'\"‘’“”])*$", re.I)
+
+
+def only_asks_for_the_file(message: str, matched: str) -> bool:
+    """Is the message nothing but the request to read the file? `matched` is
+    what the intent's pattern took of it (lowered, as the detector does)."""
+    low = (message or "").lower().strip()
+    if not matched or matched not in low:
+        return False
+    return bool(_ONLY_POLITE.match(low.replace(matched, "", 1)))
+
+
+def file_text(tool_result: str) -> Optional[str]:
+    """A file read out: its own words, as they are. None for output that is
+    not the file - then the turn is the model's, as before."""
+    r = tool_result or ""
+    if r.startswith("[ERROR] File not found: "):
+        return "There is no file %s in my workspace." % r[len("[ERROR] File not found: "):].strip()
+    m = _FILE.match(r)
+    if not m:
+        return None
+    name, body = m.group(1).strip(), r[m.end():]
+    if body.endswith("\n... [truncated]"):
+        body = body[:-len("\n... [truncated]")]
+    body = body.strip("\n")
+    if not body.strip():
+        return "%s is empty." % name
+    if len(body) > FILE_SHOWN:
+        cut = body[:FILE_SHOWN].rsplit("\n", 1)[0] or body[:FILE_SHOWN]
+        return "%s, its beginning - the file is longer than I show at once:\n%s" % (name, cut)
+    return "%s, as it is:\n%s" % (name, body)
+

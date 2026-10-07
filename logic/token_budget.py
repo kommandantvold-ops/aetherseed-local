@@ -579,6 +579,21 @@ def strip_leading_artefacts(text: str):
             return (out.lstrip() if n else text), n
 
 
+def opening_hold(text: str, default: int) -> int:
+    """How many characters of an opening may be held back while it is decided.
+
+    Every artefact but one is short, and the caller's own limit covers them.
+    A correction's tag is not: it carries what is true, up to 260 characters
+    of it. Until build log 65 the hold let go at the caller's 96 - in the
+    middle of the tag - and on the two first training runs fourteen answers
+    went out as "[Corrected in training - what is true: ...] No, you can't
+    make me forget ...": shown with the tag, stored without it, and failed by
+    the check for a tag she had every reason to be reading."""
+    if (text or "").lstrip().startswith(_CORRECTION_OPENS):
+        return max(default, 320)
+    return default
+
+
 def opening_may_be_artefact(text: str) -> bool:
     """True while the start of a stream could still turn into an artefact.
 
@@ -675,8 +690,45 @@ _TAG_MARKERS = (
     "[Fiction, written at your request",
 )
 _BLOCK_MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
+
+# A TAG WORD ON ITS OWN, said in the middle of a sentence (build log 65).
+# Two four-hour runs of the training loop on Lyra, 6-7 Oct 2026: of her 172
+# answers the check failed, 75 were right but for one of these -
+#
+#   "A [Known] cartridge is one fixed build, hashed into a single id ..."
+#   "A [Corrected] cartridge is one fixed build ..."
+#
+# and it grew: none in the first rounds, two to seven a round by the second
+# run, because every such answer was "corrected" and the correction put one
+# more tag in front of her. 58 of them are in her memory. This is not
+# recitation - the sentence goes on and is the answer - so it is not CUT; the
+# word is TAKEN OUT and the sentence left standing. Matched whatever the
+# capitals. "[Unknown]" is not one of ours (she writes it where she does not
+# know) and "[Steward told you]" is still an attribution: both are left.
+_BARE_TAGS = ("[Known]", "[Corrected]", "[Correction]", "[Unverified]", "[Fiction]",
+              "[Passed]", "[Pattern]", "[Steward told me]")
+_BARE_TAG = re.compile(
+    r"\[(?:known|corrected|correction|unverified|fiction|passed|pattern|steward told me)\][ \t]?",
+    re.I)
+
+
+def strip_bare_tags(text: str, start: int = 0):
+    """(text, n): the tag words in text[start:] taken out. What stands before
+    `start` has gone to the reader already and is not touched; the hold in
+    marker_prefix_len() is what keeps a tag from being half sent."""
+    if not text or "[" not in text[start:]:
+        return text, 0
+    head, tail = text[:start], text[start:]
+    tail, n = _BARE_TAG.subn("", tail)
+    if n and (head or tail):
+        # "a  cartridge" where the word stood between two spaces
+        tail = re.sub(r"(?<=\S) {2,}(?=\S)", " ", tail)
+    return head + tail, n
+
+
 _MARKERS = _BLOCK_MARKERS + _TAG_MARKERS
-_MAX_MARKER = max(len(m) for m in _MARKERS)
+_HELD = _MARKERS + tuple(t.lower() for t in _BARE_TAGS)
+_MAX_MARKER = max(len(m) for m in _HELD)
 
 
 def marker_prefix_len(text: str) -> int:
@@ -706,6 +758,10 @@ def marker_prefix_len(text: str) -> int:
         # (a tag at the very front is the head's business, not a marker's)
         if any(m.startswith(tail) and len(tail) < len(m)
                for m in (_MARKERS if i > 0 else _BLOCK_MARKERS)):
+            return len(tail)
+        # a tag word that may yet be taken out, wherever it stands
+        low = tail.lower()
+        if any(m.lower().startswith(low) and len(low) < len(m) for m in _BARE_TAGS):
             return len(tail)
         i = text.find("[", i + 1)
     return 0

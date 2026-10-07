@@ -402,7 +402,7 @@ const T = {
     explainsPart: 'she was given only the first part of it',
     // the training loop (build log 64)
     train: 'Training', trainTitle: 'Training',
-    trainHelp: (n) => `Homework for ${n || 'the companion'}: questions about itself and tasks for its tools, at each trust level in turn. Every answer is checked against a key. What it gets wrong is corrected in its memory, and asked again next round. After each round it says what it will do differently. A run lasts about four hours; you can pause it and go on.`,
+    trainHelp: (n) => `Homework for ${n || 'the companion'}: questions about itself and tasks for its tools, at each trust level in turn. Every answer is checked against a key. What it gets wrong is corrected in its memory and asked again next round; what is still wrong after three corrections is left alone and listed here. After each round it is asked to say again what it had wrong. A run lasts about four hours; you can pause it and go on.`,
     whoLabel: 'Its steward is called', whoSave: 'Save', whoNone: 'your name',
     whoSaved: 'Saved.',
     stewardHelp: 'Your own name, if it should know who its steward is. You can leave this empty.',
@@ -422,8 +422,18 @@ const T = {
     trReal: (lvl) => `Its real trust level is ${lvl}. A run lends the higher levels for the length of a question and does not change the real one: that changes only when you say.`,
     trRoundsTitle: 'Rounds of this run',
     trRound: (n, r, a) => `Round ${n} · ${r} of ${a} right`,
+    // build log 65: a run is judged by HER answers; the unit's are shown beside them
+    trRoundHers: (n, r, a, p) => `Round ${n} · its own answers ${r} of ${a} (${p} %)`,
+    trUnitPart: (r, a) => `the unit’s ${r} of ${a}`,
+    trHers: (r, a, p) => `its own answers: ${r} of ${a} (${p} %)`,
+    trBoxHers: (r, a) => `own ${r} / ${a}`, trBoxUnit: (r, a) => `unit ${r} / ${a}`,
+    trTrend: (list) => `Its own answers, round by round: ${list} %`,
+    trLearned: (list) => `Wrong, corrected, then right when asked again: ${list}.`,
+    trNotLearned: (n, list) => `Still wrong after ${n} corrections, and left alone for this run: ${list}.`,
+    trRestated: (k, n) => `Asked to say again what was wrong: ${k} of ${n} said right.`,
+    trRunLineHers: (run, st, dur, r, a, p, learned, not, best) => `Run ${run} · ${st} · ${dur} · its own answers ${r} of ${a} (${p} %) · learned ${learned} · not learned ${not}` + (best ? ` · best round would have earned ${best}` : ''),
     trEarned: (lvl) => lvl ? `would have earned: ${lvl}` : 'would have earned no level',
-    trBar: (pct) => `A level counts as passed at ${pct}% and over, with every level under it.`,
+    trBar: (pct) => `A level counts as passed when ${pct}% of its own answers there are right and every answer of the unit’s, with every level under it.`,
     trReflection: (n) => `${n || 'It'} said afterwards:`,
     trNoReflection: 'It said nothing afterwards.',
     trRetries: (r, a) => `Asked again after a correction: ${r} of ${a} right.`,
@@ -543,7 +553,7 @@ const T = {
     explainsPart: 'hun fikk bare den første delen av det',
     // treningsløkka (byggelogg 64)
     train: 'Trening', trainTitle: 'Trening',
-    trainHelp: (n) => `Lekser for ${n || 'følgesvennen'}: spørsmål om den selv og oppgaver for verktøyene, på hvert tillitsnivå etter tur. Hvert svar sjekkes mot en fasit. Det den svarer feil på, rettes i minnet og spørres på nytt i neste runde. Etter hver runde sier den hva den vil gjøre annerledes. En økt varer omtrent fire timer; du kan sette den på pause og fortsette.`,
+    trainHelp: (n) => `Lekser for ${n || 'følgesvennen'}: spørsmål om den selv og oppgaver for verktøyene, på hvert tillitsnivå etter tur. Hvert svar sjekkes mot en fasit. Det den svarer feil på, rettes i minnet og spørres på nytt i neste runde; det som fortsatt er feil etter tre rettelser, lates ligge og listes her. Etter hver runde blir den bedt om å si på nytt det den hadde feil. En økt varer omtrent fire timer; du kan sette den på pause og fortsette.`,
     whoLabel: 'Forvalteren heter', whoSave: 'Lagre', whoNone: 'navnet ditt',
     whoSaved: 'Lagret.',
     stewardHelp: 'Ditt eget navn, hvis den skal vite hvem forvalteren er. Du kan la dette stå tomt.',
@@ -563,8 +573,17 @@ const T = {
     trReal: (lvl) => `Det virkelige tillitsnivået er ${lvl}. En økt låner ut de høyere nivåene så lenge et spørsmål varer, og endrer ikke det virkelige: det endres bare når du sier det.`,
     trRoundsTitle: 'Rundene i denne økta',
     trRound: (n, r, a) => `Runde ${n} · ${r} av ${a} riktige`,
+    trRoundHers: (n, r, a, p) => `Runde ${n} · egne svar ${r} av ${a} (${p} %)`,
+    trUnitPart: (r, a) => `enhetens ${r} av ${a}`,
+    trHers: (r, a, p) => `egne svar: ${r} av ${a} (${p} %)`,
+    trBoxHers: (r, a) => `egne ${r} / ${a}`, trBoxUnit: (r, a) => `enhet ${r} / ${a}`,
+    trTrend: (list) => `Egne svar, runde for runde: ${list} %`,
+    trLearned: (list) => `Feil, rettet, og så riktig da det ble spurt på nytt: ${list}.`,
+    trNotLearned: (n, list) => `Fortsatt feil etter ${n} rettelser, og latt ligge i denne økta: ${list}.`,
+    trRestated: (k, n) => `Bedt om å si på nytt det som var feil: ${k} av ${n} sagt riktig.`,
+    trRunLineHers: (run, st, dur, r, a, p, learned, not, best) => `Økt ${run} · ${st} · ${dur} · egne svar ${r} av ${a} (${p} %) · lært ${learned} · ikke lært ${not}` + (best ? ` · beste runde ville ha gitt ${best}` : ''),
     trEarned: (lvl) => lvl ? `ville ha gitt: ${lvl}` : 'ville ikke ha gitt noe nivå',
-    trBar: (pct) => `Et nivå regnes som bestått fra ${pct} % og opp, sammen med alle nivåene under.`,
+    trBar: (pct) => `Et nivå regnes som bestått når ${pct} % av de egne svarene der er riktige og alle enhetens, sammen med alle nivåene under.`,
     trReflection: (n) => `${n || 'Den'} sa etterpå:`,
     trNoReflection: 'Den sa ingenting etterpå.',
     trRetries: (r, a) => `Spurt på nytt etter en rettelse: ${r} av ${a} riktige.`,
@@ -1271,13 +1290,27 @@ async function trainSend(action) {
   }
 }
 
+// A stage is judged by HER answers (build log 65): at least `bar` of them
+// right, and every one of the unit's. Runs from before that carry no split.
+const pct = (r, a) => a ? (Math.round(1000 * r / a) / 10) : 0;
+function stagePassed(sc, bar) {
+  if (!sc || !sc.asked) return false;
+  if (sc.hers_asked == null) return sc.right / sc.asked >= bar;
+  const unit = sc.asked - sc.hers_asked, unitRight = sc.right - sc.hers_right;
+  return unitRight >= unit && (sc.hers_asked === 0 || sc.hers_right / sc.hers_asked >= bar);
+}
 function levelBoxes(s, scores, current, bar) {
   const box = el('div', 'levels');
   for (const lvl of Object.keys(scores || {})) {
     const sc = scores[lvl], node = el('div', 'lv');
-    node.append(el('b', null, s.tiers[lvl] || lvl),
-                document.createTextNode(sc.asked ? `${sc.right} / ${sc.asked}` : '–'));
-    if (sc.asked && lvl !== current) node.classList.add(sc.right / sc.asked >= bar ? 'pass' : 'fail');
+    node.append(el('b', null, s.tiers[lvl] || lvl));
+    if (!sc.asked) node.append(document.createTextNode('–'));
+    else if (sc.hers_asked == null) node.append(document.createTextNode(`${sc.right} / ${sc.asked}`));
+    else {
+      node.append(el('span', null, s.trBoxHers(sc.hers_right, sc.hers_asked)), el('br'),
+                  el('span', null, s.trBoxUnit(sc.right - sc.hers_right, sc.asked - sc.hers_asked)));
+    }
+    if (sc.asked && lvl !== current) node.classList.add(stagePassed(sc, bar) ? 'pass' : 'fail');
     if (lvl === current) node.classList.add('cur');
     box.append(node);
   }
@@ -1293,7 +1326,8 @@ function drawTraining(d) {
     if (live && d.round) parts.push(s.trWhere(d.round, s.tiers[d.level] || d.level || '–',
                                               Math.min((d.position || 0) + 1, d.of || 0), d.of || 0));
     if (d.budget) parts.push(s.trTime(s.trDur(d.elapsed || 0), s.trDur(d.budget)));
-    if (d.asked) parts.push(live ? s.trTotal(d.right || 0, d.asked) : s.trDone(d.right || 0, d.asked));
+    if (d.hers_asked) parts.push(s.trHers(d.hers_right || 0, d.hers_asked, pct(d.hers_right || 0, d.hers_asked)));
+    else if (d.asked) parts.push(live ? s.trTotal(d.right || 0, d.asked) : s.trDone(d.right || 0, d.asked));
     state.textContent = parts.join(' · ');
   }
   $('trainBar').style.width = (d.budget ? Math.min(100, 100 * (d.elapsed || 0) / d.budget) : 0) + '%';
@@ -1338,11 +1372,21 @@ function drawTraining(d) {
   if (rounds.length) {
     out.append(el('h2', null, s.trRoundsTitle));
     out.append(el('p', 'state aside', s.trBar(Math.round((d.pass_bar || 0.8) * 100))));
+    // What the run is to be judged by: her own answers round by round, what
+    // a correction taught, and what it did not.
+    if (rounds.some((r) => r.hers_asked))
+      out.append(el('p', 'state', s.trTrend(rounds.map((r) => r.hers_asked ? Math.round(100 * r.hers_right / r.hers_asked) : '–').join(' · '))));
     if (d.retries && d.retries.asked) out.append(el('p', 'state aside', s.trRetries(d.retries.right, d.retries.asked)));
+    if ((d.learned || []).length) out.append(el('p', 'state ok', s.trLearned(d.learned.join('; '))));
+    if ((d.not_learned || []).length) out.append(el('p', 'state fix', s.trNotLearned(d.give_up_after || 3, d.not_learned.join('; '))));
     for (const r of rounds.slice().reverse()) {
       const box = el('div', 'round');
-      box.append(el('div', 'head', `${s.trRound(r.round, r.right, r.asked)} · ${s.trEarned(s.tiers[r.earned] || r.earned)}`));
+      const head = r.hers_asked
+        ? `${s.trRoundHers(r.round, r.hers_right, r.hers_asked, pct(r.hers_right, r.hers_asked))} · ${s.trUnitPart(r.right - r.hers_right, r.asked - r.hers_asked)}`
+        : s.trRound(r.round, r.right, r.asked);
+      box.append(el('div', 'head', `${head} · ${s.trEarned(s.tiers[r.earned] || r.earned)}`));
       box.append(levelBoxes(s, r.scores, null, d.pass_bar || 0.8));
+      if (r.lessons) box.append(el('p', 'state ' + (r.restated === r.lessons ? 'ok' : 'fix'), s.trRestated(r.restated || 0, r.lessons)));
       box.append(el('p', 'state aside', r.reflection ? s.trReflection(name) : s.trNoReflection));
       if (r.reflection) box.append(el('p', 'said', r.reflection));
       out.append(box);
@@ -1353,8 +1397,13 @@ function drawTraining(d) {
   if (earlier.length) {
     hist.append(el('h2', null, s.trHistory));
     for (const h of earlier) {
-      hist.append(el('p', 'state aside', s.trRunLine(h.run, s.trStatus[h.status] || h.status,
-        s.trDur(h.elapsed || 0), h.right || 0, h.asked || 0, s.tiers[h.earned_best] || h.earned_best)));
+      const best = s.tiers[h.earned_best] || h.earned_best, stt = s.trStatus[h.status] || h.status;
+      hist.append(el('p', 'state aside', h.hers_asked
+        ? s.trRunLineHers(h.run, stt, s.trDur(h.elapsed || 0), h.hers_right || 0, h.hers_asked,
+            pct(h.hers_right || 0, h.hers_asked), (h.learned || []).length, (h.not_learned || []).length, best)
+        : s.trRunLine(h.run, stt, s.trDur(h.elapsed || 0), h.right || 0, h.asked || 0, best)));
+      if (h.hers_by_round && h.hers_by_round.length)
+        hist.append(el('p', 'state aside', s.trTrend(h.hers_by_round.map((x) => x == null ? '–' : Math.round(x)).join(' · '))));
     }
   }
 }

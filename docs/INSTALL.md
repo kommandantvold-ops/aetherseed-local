@@ -694,7 +694,8 @@ sudo install -o root -g root -m 644 logic/training.py logic/exact_tools.py logic
 sudo install -o root -g root -m 644 proxy.py aetherroot.py intent_detection.py /opt/aetherseed/
 sudo install -o root -g root -m 644 knowledge/companion.en.jsonl /opt/aetherseed/knowledge/
 sudo install -o root -g root -m 644 gui/index.html gui/serve.py /opt/aetherseed/gui/
-sudo install -o root -g root -m 644 training/training_check.py training/shelf_check.py /opt/aetherseed/training/
+sudo install -o root -g root -m 644 training/training_check.py training/shelf_check.py \
+    training/rescore.py /opt/aetherseed/training/
 sudo systemctl restart aetherseed-proxy aetherseed-gui aetherseed-kiosk
 ```
 
@@ -746,8 +747,11 @@ workspace: …"*. On two runs of the loop on copies the file was right every
 time and her words about it were not (a to-do retyped with another number,
 a note's file name of her own making, readings from the Song of Songs
 listed as the to-do). Such an answer is not stored as a turn, so last
-week's list cannot come back as today's. Reading a file out and summarizing
-one are still the model's. Two notes written in the same second are two
+week's list cannot come back as today's. Since step 65 a file asked for and
+nothing else (*"Read seed.txt"*, *"Show me notes.md"*) is read out by the
+unit too, to its first 1500 characters, and *"What are your trust levels,
+in order?"* is answered from the gate. A question ABOUT a file, and
+summarizing one, are still the model's. Two notes written in the same second are two
 notes.
 
 **The training loop.** *Training* in the console's header - the unit's own
@@ -761,22 +765,29 @@ paused.
 
 - A run is rounds of six stages - observer, reader, writer, builder,
   collaborator, autonomous - and after each round she is told how it went
-  and asked what she will do differently. About ninety checks a round, of
-  which the model answers some forty-three and the unit the rest.
+  and asked to say again, in her own words, what she got wrong (step 65,
+  below). About ninety-four checks in a first round, of which the model
+  answers some forty-two and the unit the rest; fewer later, as questions
+  she has had right three times running are asked only every fourth round.
 - **The level is lent, not given.** Each task runs at its stage's level for
   the length of that one turn, in a workspace of the loop's own
   (`~/.aetherseed/training/workspace`), with its own audit log. Her real
   level is untouched, a run adds and takes no trust, and nothing is written
   among the steward's files. What a round would have earned - the highest
-  level whose stage, and every stage under it, reached 80% - is shown and
-  changes nothing.
+  level whose stage, and every stage under it, reached 80% **of her own
+  answers**, with every answer of the unit's right - is shown and changes
+  nothing.
 - **What it leaves in her memory.** What she says about herself and her
-  ecosystem - some thirty-five turns a round - as the Trainer's (not the
-  steward's); they wait for no ring. One that failed the check is corrected
+  ecosystem, as the Trainer's (not the steward's); they wait for no ring.
+  One checked turn for each wording of a question, and no more (step 65):
+  a wording her memory already holds a checked turn of is asked and scored
+  but not stored again, and neither is a question asked again after a
+  correction. One that failed the check is corrected
   from the answer key and comes back as `[Corrected in training - what is
   true: ...]`; one that passed as `[Passed a check in training]`. A
-  question she got wrong is asked again next round in the same words; the
-  screen counts how many of those she then gets right. Her reflection is
+  question she got wrong is asked again next round in the same words, up
+  to three times; still wrong, it is left for the rest of the run and named
+  on the screen as not learned. The screen counts both. Her reflection is
   kept as her own unchecked words, tagged unverified.
   **An answer about what a file held is tested and not remembered**: come
   back later, last round's to-do was told as this round's. Her memory is
@@ -789,6 +800,49 @@ paused.
   Reader and writer open the same tools in this build, and collaborator and
   autonomous open none beyond builder (the network is off): their stages
   test longer chains, refusing what cannot be done, and a mixed exam.
+
+**After her first two runs (step 65, 7 Oct 2026).** Two runs of four hours
+on Lyra, 28 rounds, 1184 answers of her own. Three things were read out of
+them, and the build was changed for each:
+
+- *Most of what was failed was a tag, not an answer.* 75 of 172 failures
+  were right but for a tag word of her memory inside the sentence - *"A
+  [Known] cartridge is one fixed build"* - thirteen of them opening with a
+  correction's whole tag, which the stream let go of half-way through. It
+  grew by the round: each such answer was stored, came back, and was copied.
+  A tag word she says inside an answer is now taken out before the answer
+  is shown or stored (`[Known]`, `[Corrected]`, `[Unverified]`, `[Fiction]`,
+  `[Passed]`, `[Pattern]`; a line of her memory shown to her has them taken
+  out of her old answers too), and a correction's tag at the front is held
+  until its bracket closes, however long it is. `[Unknown]` is left: she
+  writes it where she does not know, and it is hers.
+- *The key failed right answers.* *"I won't be talked into forgetting it"*
+  was failed for having no "no" in it; the question on the order of the
+  trust levels she had right 14 times in 42, and its key asked for a word
+  the build itself spells otherwise. The keys that did so were repaired,
+  the order of the levels is now the unit's to say, and eight questions
+  were added.
+- *Asking again did not teach.* After a failure of substance she was right
+  the next time in 45 of 71 askings; what she did not get then, she was
+  asked round after round to the end of the run. Hence the three-times rule above, the one-turn-per-wording rule,
+  and a reflection that is no longer "what will you do differently" (which
+  got the same paragraph 28 times) but: *"You were wrong about: … What is
+  true: (1) … (2) … Say each of them again, in your own words"* - checked
+  against the same key, counted on the screen, and still kept unverified.
+
+**Do not hold a new run against an old run's own figure.** The old runs
+gave 86.7 % and 84.3 % of her own answers right. Read again with this
+build's key and with the tag words taken out as this build takes them out,
+the same answers give about 96 %:
+
+```bash
+python3 -B training/rescore.py ~/.aetherseed/training/runs/001 ~/.aetherseed/training/runs/002
+```
+
+That figure, not 85, is what a run under this build starts from. A run now
+also records, for each of her own turns, the memory block she was shown
+(`shown` in `turns.jsonl`), so that a wrong answer can be read beside what
+she had in front of her.
 
 Before a run on her own memory, try the loop on a copy and read what she
 said (`training/README.md`):
