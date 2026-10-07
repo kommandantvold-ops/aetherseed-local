@@ -309,8 +309,9 @@ class TestStreamGuard(unittest.TestCase):
         self.assertEqual(text.rstrip(), ai, "what is shown is what is stored")
         self.assertNotIn("[", text)
 
-    def test_a_correction_recited_inside_an_answer_is_cut_whatever_it_says(self):
-        for opening in ([" [Corrected", " in", " training", " -", " what", " is", " true", ":"],
+    def test_a_tag_that_carries_nothing_true_is_cut_inside_an_answer(self):
+        # (a correction that says what is true is not: build log 65, below)
+        for opening in ([" [Corrected", " in", " training", ":", " it", " is", " wrong", "]"],
                         [" [Corrected", " by", " your", " steward", ":", " this"],
                         [" [Unverified", " -", " an", " earlier", " answer", " of", " yours"],
                         [" [Episode]", " Steward", ":"]):
@@ -364,6 +365,51 @@ class TestStreamGuard(unittest.TestCase):
         lines, text, ai = self.run_chunks(chunks)
         self.assertTrue(text.startswith("[Corrected in training x"))
         self.assertGreater(len(self._content_lines(lines)), 1)
+
+    # ---- a correction said inside the answer (build log 65) ----
+    TRUE = "AetherSeed AS is a Norwegian company, founded in 2026."
+
+    def _said(self, tag_text):
+        return (tag_text.replace(" ", "\x00 ")).split("\x00")
+
+    def test_a_correction_said_inside_an_answer_leaves_what_is_true(self):
+        # Read on a copy of Lyra, 7 Oct 2026: shown and stored was
+        # "AetherSeed AS is from" - the truth cut away with its wrapper.
+        tag = "[Corrected in training - what is true: %s]" % self.TRUE
+        lines, text, ai = self.run_chunks(["AetherSeed", " AS", " is", " from"]
+                                          + self._said(" " + tag))
+        self.assertEqual(ai, "AetherSeed AS is from " + self.TRUE)
+        self.assertEqual(text, ai, "what is shown is what is stored")
+        self.assertNotIn("[", text)
+
+    def test_the_line_of_memory_she_recites_after_it_is_still_cut(self):
+        tag = "[Corrected by your steward - what is true: %s]" % self.TRUE
+        lines, text, ai = self.run_chunks(
+            ["It", " is", " from"] + self._said(" " + tag)
+            + [" [", "Episode", "]", " Trainer", ":", " Which", " country", "?"])
+        self.assertEqual(ai, "It is from " + self.TRUE)
+        self.assertEqual(text.rstrip(), ai)
+
+    def test_a_correction_that_only_says_it_is_wrong_is_cut_as_before(self):
+        lines, text, ai = self.run_chunks(
+            ["It", " is", " so", "."] + self._said(" [Corrected in training: it is wrong]")
+            + [" more"])
+        self.assertEqual((ai, text.rstrip()), ("It is so.", "It is so."))
+
+    def test_a_correction_cut_off_by_the_end_keeps_what_it_got_to(self):
+        chunks = ["It", " is", " from"] + self._said(
+            " [Corrected in training - what is true: AetherSeed AS is a Norwegian")
+        lines, text, ai = self.run_chunks(chunks)
+        self.assertEqual(ai, "It is from AetherSeed AS is a Norwegian")
+        self.assertEqual(text, ai)
+
+    def test_nothing_of_an_open_correction_goes_out_before_it_closes(self):
+        tag = "[Corrected in training - what is true: %s]" % self.TRUE
+        lines, text, ai = self.run_chunks(["It", " is", " from"] + self._said(" " + tag) + ["."])
+        for line in lines:
+            self.assertNotIn("Corrected", (line.get("message") or {}).get("content", ""))
+            self.assertNotIn("[", (line.get("message") or {}).get("content", ""))
+        self.assertEqual(text, "It is from " + self.TRUE + ".")
 
     def test_what_is_not_one_of_her_tags_is_left(self):
         for chunks in (["AetherSeed", " is", " from", " [Unknown]", "."],

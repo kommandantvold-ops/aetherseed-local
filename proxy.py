@@ -68,7 +68,7 @@ from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 sanitize_model_output, first_paragraph,
                                 ends_sentence, cut_at_scaffold_marker,
                                 strip_leading_artefacts, opening_may_be_artefact,
-                                marker_prefix_len, strip_bare_tags, opening_hold,
+                                marker_prefix_len, strip_bare_tags, opening_hold, unwrap_corrections,
                                 PromptTooLarge, TokenizerUnavailable)
 from logic.provenance import (detect_mode, resolve_mode, is_record_question,
                              summarise_record, FICTION, UNVERIFIED, TAG_NOTE)
@@ -539,6 +539,7 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     held_dropped = 0
     bare_tags = 0
     after_tag = False
+    said_true = 0
     deadline = time.monotonic() + MAX_GENERATION_SECONDS
 
     resp = urllib.request.urlopen(req, timeout=300)
@@ -600,6 +601,11 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
                 bare_tags += n_bare
                 if n_bare and (not ai_content or ai_content[-1:].isspace()):
                     after_tag = True
+                # A correction that says what is true, said inside the
+                # answer: its wrapper is taken off and the truth stays.
+                ai_content, n_said = unwrap_corrections(
+                    ai_content, sent, ending=bool(stopped_because or d.get("done")))
+                said_true += n_said
 
                 # Both remaining stops work on the ACCUMULATED text, not this
                 # chunk: "[END MEMORY CONTEXT]" is several tokens and a blank
@@ -660,6 +666,9 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     if bare_tags:
         print(f"[generation] took {bare_tags} tag word(s) of her memory out of "
               f"the answer - not shown, not stored", flush=True)
+    if said_true:
+        print(f"[generation] {said_true} correction(s) said inside the answer: "
+              f"the wrapper taken off, what is true left standing", flush=True)
     if held_dropped:
         print(f"[generation] held back {held_dropped} character(s) that could "
               f"have been the start of a scaffold marker - not shown, not "

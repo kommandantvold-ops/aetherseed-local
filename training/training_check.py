@@ -64,6 +64,8 @@ def report(run_dir, out, say):
         say("  HER:     %s" % (t.get("reply") or "(nothing)").replace("\n", "\n           "))
         if not t["ok"]:
             say("  CHECK:   %s" % t["why"])
+        if not t["ok"] and t.get("shown"):
+            say("  SHOWN:   %s" % t["shown"].replace("\n", "\n           "))
         if t.get("memory"):
             say("  MEMORY:  %s" % json.dumps(t["memory"]))
         if t.get("error"):
@@ -136,6 +138,8 @@ def main(argv=None):
         say("\n" + "=" * 78)
         say("the model's own answers: %d of %d passed the check"
             % (sum(1 for t in hers if t["ok"]), len(hers)))
+        say("   of those that passed, %d said the correction back word for word"
+            % sum(1 for t in hers if t["ok"] and t.get("recited")))
         say("answers the unit was to give itself: %d of %d did"
             % (sum(1 for t in unit if t["ok"]), len(unit)))
         secs = [t["secs"] for t in hers if t.get("secs")]

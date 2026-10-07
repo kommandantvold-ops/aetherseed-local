@@ -660,6 +660,10 @@ def cut_at_scaffold_marker(text: str):
     # answer standing behind it; cutting there would leave nothing.
     for tag in _TAG_MARKERS:
         i = text.find(tag, 1)
+        # (a correction that may yet say what is true is not cut while its
+        # bracket is open: unwrap_corrections() decides it when it closes)
+        while i >= 0 and _undecided_correction(text[i:]):
+            i = text.find(tag, i + 1)
         if i >= 0 and (first < 0 or i < first):
             first = i
     if first < 0:
@@ -726,6 +730,74 @@ def strip_bare_tags(text: str, start: int = 0):
     return head + tail, n
 
 
+# A CORRECTION SAID INSIDE AN ANSWER (build log 65). Her prompt tells her:
+# "Where a correction says what is true, answer with that." Read on a copy of
+# Lyra, 7 Oct 2026, with the memory block she was shown beside the answer:
+#
+#   shown:  - [Corrected in training - what is true: AetherSeed AS is a
+#             Norwegian company, founded in 2026.] [Episode] Trainer: Which
+#             country is AetherSeed from?
+#   asked:  Which country is AetherSeed from?
+#   said:   "AetherSeed AS is from [Corrected in training - what is true:
+#            AetherSeed AS is a Norwegian company ..."
+#   shown to the reader, and stored: "AetherSeed AS is from"
+#
+# She did what the line asks, wrapper and all, and the cut of 64d took the
+# truth away with the wrapper. So a correction that says what is true is not
+# cut: its wrapper is taken off and what is true is left standing in the
+# sentence. The stream holds it back until its bracket closes. A correction
+# that only says "it is wrong" carries nothing to keep and is cut as before,
+# and so is whatever line of memory she goes on to recite after the tag.
+_SAID_TRUE = ("[Corrected in training - what is true: ",
+              "[Corrected by your steward - what is true: ")
+_SAID_MAX = 320
+_SAID_WHOLE = re.compile(
+    r"\[Corrected (?:in training|by your steward) - what is true: ([^\]\n]{1,300})\]")
+
+
+def _undecided_correction(tail: str) -> bool:
+    """`tail` begins at a "[": could it still become a correction that says
+    what is true, and has its bracket not closed yet?"""
+    for o in _SAID_TRUE:
+        if o.startswith(tail):
+            return True
+        if (tail.startswith(o) and "]" not in tail and "\n" not in tail
+                and len(tail) < _SAID_MAX):
+            return True
+    return False
+
+
+def open_correction(text: str) -> int:
+    """Where, inside text, a correction's tag stands whose bracket has not
+    closed yet - or -1. Never at the very front: that is the head's."""
+    i = (text or "").find("[Corrected ", 1)
+    while i >= 0:
+        if _undecided_correction(text[i:]):
+            return i
+        i = text.find("[Corrected ", i + 1)
+    return -1
+
+
+def unwrap_corrections(text: str, start: int = 0, ending: bool = False):
+    """(text, n): each correction that says what is true, said inside
+    text[max(start, 1):], put there as the words that are true, without its
+    wrapper. With `ending`, one whose bracket never closed is unwrapped too,
+    as far as it got: the stream is over and nothing more will come."""
+    lo = max(start, 1)
+    if not text or "[Corrected " not in text[lo:]:
+        return text, 0
+    head, tail = text[:lo], text[lo:]
+    tail, n = _SAID_WHOLE.subn(lambda m: m.group(1).strip(), tail)
+    if ending:
+        i = open_correction(head + tail)
+        if i >= lo:
+            rest = (head + tail)[i:]
+            for o in _SAID_TRUE:
+                if rest.startswith(o) and rest[len(o):].strip():
+                    return (head + tail)[:i] + rest[len(o):], n + 1
+    return head + tail, n
+
+
 _MARKERS = _BLOCK_MARKERS + _TAG_MARKERS
 _HELD = _MARKERS + tuple(t.lower() for t in _BARE_TAGS)
 _MAX_MARKER = max(len(m) for m in _HELD)
@@ -751,6 +823,10 @@ def marker_prefix_len(text: str) -> int:
     """
     if not text:
         return 0
+    # a correction whose bracket is still open is held from its "[" on
+    j = open_correction(text)
+    if j >= 0:
+        return len(text) - j
     lo = max(0, len(text) - _MAX_MARKER + 1)
     i = text.find("[", lo)
     while i >= 0:

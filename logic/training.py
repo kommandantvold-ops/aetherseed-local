@@ -1141,6 +1141,11 @@ class Loop:
                           "retry": bool(task.get("retry")), "kept": keep and hers,
                           "said": task["said"], "reply": r.get("reply"), "meta": meta,
                           "shown": shown if hers else None,
+                          # the key's own sentence, word for word, in her
+                          # answer: right, but by saying the correction back
+                          "recited": bool(hers and task.get("truth") and " ".join(
+                              task["truth"].lower().split()) in " ".join(
+                              (r.get("reply") or "").lower().split())),
                           "status": r.get("status"), "error": r.get("error"),
                           "ok": ok, "why": why, "memory": done, "secs": round(spent, 1)})
             self._save()
