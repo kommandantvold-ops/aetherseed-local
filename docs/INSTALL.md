@@ -932,6 +932,7 @@ this guide and **never started**:
 ```bash
 sudo /opt/aetherseed/tools/source_card.sh check    # what a copy would carry; changes nothing
 sudo /opt/aetherseed/tools/source_card.sh seal     # make it a source, and power off
+sudo /opt/aetherseed/tools/source_card.sh seal --restart   # to TRY it: restarts instead; seal again before copying
 ```
 
 `seal` **refuses a unit that has been started** - a named companion, one
@@ -950,6 +951,12 @@ keys and a new machine id, removes its flag and restarts the unit once
 seal has its identity already, and every copy made then would share it:
 seal it again. Sealing twice is harmless as long as nobody has named the
 companion.
+
+Tried on the fourth Pi, 7 Oct 2026 (`seal --restart`): the unit came back
+after two boots with another machine id and other SSH host keys (a login
+that knew the old ones is refused until told the new), everything §2 and
+§14 had switched off still off, nothing failed, no name, no turn, armed,
+and the first-run screen up.
 
 The copies keep the admin account, its password and the SSH keys that were
 on the source - the pilot arrangement of §14 (key only, if the source was

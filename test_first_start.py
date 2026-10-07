@@ -350,9 +350,18 @@ class ACardThatIsASource(unittest.TestCase):
         self.state = tempfile.mkdtemp()
         self.etc = tempfile.mkdtemp()
 
-    def seal(self):
+    def seal(self, *more):
         env = dict(os.environ, AETHERSEED_STATE=self.state, AETHERSEED_ETC=self.etc, AETHERSEED_DRY="1")
-        return subprocess.run(["bash", SOURCE_CARD, "seal"], env=env, capture_output=True, text=True)
+        return subprocess.run(["bash", SOURCE_CARD, "seal"] + list(more), env=env,
+                              capture_output=True, text=True)
+
+    def test_a_seal_that_is_only_tried_restarts_and_says_it_is_not_a_card_to_copy(self):
+        self.store(0)
+        p = self.seal("--restart")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("would: systemctl --no-block reboot", p.stdout)
+        self.assertNotIn("poweroff", p.stdout)
+        self.assertIn("NOT a card to copy", p.stdout)
 
     def store(self, turns):
         import sqlite3

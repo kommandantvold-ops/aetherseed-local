@@ -15,6 +15,11 @@
 #        tools/source_card.sh check   what a copy of this card would carry.
 #                                     Changes nothing. (sudo, to see it all)
 #   sudo tools/source_card.sh seal    make this card a source, and power off.
+#   sudo tools/source_card.sh seal --restart
+#                                     the same, but restart instead: to TRY a
+#                                     seal and watch a first boot. The unit
+#                                     then has its new identity - seal it
+#                                     again, without --restart, before copying.
 #
 # `seal` REFUSES a unit that has been started: one with a named companion, a
 # stored turn, a Wi-Fi of its own, or a steward's document. It is not a
@@ -157,7 +162,7 @@ $(printf '%s\n' "$why" | sed 's/^/  - /')"
       [ -d "$h" ] || continue
       case $(basename "$h") in aetherseed-kiosk) continue ;; esac
       run find "$h" -mindepth 1 -maxdepth 1 \( -name 'aetherseed-*' -o -name 'ptest*' -o -name 'step*' \
-          -o -name 'cart*.manifest' -o -name 'app-files-*.txt' -o -name 'hailort.log' \
+          -o -name 'cart*.manifest' -o -name 'app-files-*.txt' -o -name 'hailort.log' -o -name 'tests*.log' \
           -o -name .bash_history -o -name .xsession-errors -o -name .lesshst -o -name .python_history \
           -o -name .sudo_as_admin_successful \) -exec rm -rf {} +
     done
@@ -167,9 +172,14 @@ $(printf '%s\n' "$why" | sed 's/^/  - /')"
     run journalctl --vacuum-time=1s
     run find /var/log -type f \( -name '*.gz' -o -name '*.1' -o -name '*.old' \) -delete
 
-    say "sealed. Powering off - copy this card before it is booted again."
     run sync
-    run systemctl --no-block poweroff
+    if [ "${2:-}" = --restart ]; then
+      say "sealed, and restarting to try it. This is NOT a card to copy: seal again first."
+      run systemctl --no-block reboot
+    else
+      say "sealed. Powering off - copy this card before it is booted again."
+      run systemctl --no-block poweroff
+    fi
     ;;
 
   *)
