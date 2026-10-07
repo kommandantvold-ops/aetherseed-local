@@ -72,6 +72,54 @@ SHUTDOWN_PATH = "/aetherseed/shutdown"
 SHUTDOWN_REQUEST = os.environ.get("AETHERSEED_SHUTDOWN_REQUEST",
                                   "/run/aetherseed-gui/shutdown-request")
 SHUTDOWN_CONFIRM = "shut down"
+
+# FIRST START (build log 66). A unit that is onboarded where it will live is
+# named there, and there it is also given the time and a passkey for its own
+# Wi-Fi - by whoever sits at ITS OWN SCREEN, once. Both need root, so this
+# server does with them what it does with a shutdown: it leaves a request in
+# its runtime directory, and services/aetherseed-first-start.path starts a
+# root oneshot (tools/first_start.sh) that does the two things and says how
+# it went. Three locks, each checked here and again by the root side:
+#   - the unit is ARMED: /etc/aetherseed/first-start exists (a card made a
+#     source by tools/source_card.sh has it; the first start removes it). A
+#     unit set up at a shell never has it, and this path then does nothing;
+#   - the request comes from loopback - the unit's own screen. A phone can
+#     only be on the unit's Wi-Fi once there is a passkey, so it cannot be
+#     what sets one; and the console is not served on a cable network at all;
+#   - what is asked is a date and time and a passkey, in their own shapes.
+# The passkey is written to the request (tmpfs, mode 600), read by root and
+# removed; it is never logged here and never sent back.
+FIRST_START_PATH = "/aetherseed/first-start"
+FIRST_START_FLAG = os.environ.get("AETHERSEED_FIRST_START_FLAG", "/etc/aetherseed/first-start")
+FIRST_START_REQUEST = os.environ.get("AETHERSEED_FIRST_START_REQUEST",
+                                     "/run/aetherseed-gui/first-start-request")
+FIRST_START_RESULT = os.environ.get("AETHERSEED_FIRST_START_RESULT",
+                                    "/run/aetherseed-gui/first-start-result")
+FIRST_START_WAIT = float(os.environ.get("AETHERSEED_FIRST_START_WAIT", "75"))
+_WHEN = re.compile(r"^(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[T ]([01]\d|2[0-3]):([0-5]\d)$")
+_FIRST_START_LOCK = threading.Lock()
+
+
+def first_start_armed():
+    return os.path.exists(FIRST_START_FLAG)
+
+
+def check_when(when):
+    """'YYYY-MM-DD HH:MM' if `when` is a date and time that exists, else None."""
+    m = _WHEN.match(when if isinstance(when, str) else "")
+    if not m:
+        return None
+    try:
+        time.strptime("%s-%s-%s %s:%s" % m.groups(), "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None                         # the 31st of February
+    return "%s-%s-%s %s:%s" % m.groups()
+
+
+def check_passkey(key):
+    """A WPA2 passkey: 8-63 printable ASCII characters (tools/hotspot.sh)."""
+    return (isinstance(key, str) and 8 <= len(key) <= 63
+            and all(32 <= ord(c) < 127 for c in key))
 # THE CONSOLE WAS SEEN. The page asks for /aetherseed/status every 15 seconds
 # for as long as it is loaded, so "the browser is showing the console" has a
 # cheap witness: this file's modification time, touched on every status poll.
@@ -267,6 +315,10 @@ class Console(http.server.SimpleHTTPRequestHandler):
                    else "training" if self.path.endswith("/training") else "page")
             self._relay("GET")
             return
+        if self.path == FIRST_START_PATH:
+            _tally("status")
+            self._first_start_state()
+            return
         if self.path == "/":
             self.path = "/index.html"
         if self.path not in ("/index.html",):
@@ -316,6 +368,96 @@ class Console(http.server.SimpleHTTPRequestHandler):
               in ("127.0.0.1", "::1") else "a screen on the unit's Wi-Fi"), flush=True)
         self._json(202, {"shutting_down": True})
 
+    def _own_screen(self):
+        return self.client_address[0] in ("127.0.0.1", "::1")
+
+    def _first_start_state(self):
+        # What the page needs to decide whether to show the first-start step:
+        # is this unit armed for it, is this screen the unit's own, and what
+        # the unit's clock says now (to start the date and time fields from).
+        self._json(200, {"armed": first_start_armed(), "own_screen": self._own_screen(),
+                         "now": time.strftime("%Y-%m-%dT%H:%M")})
+
+    def _first_start(self):
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            self._json(415, {"error": "expected application/json"})
+            return
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        if n > 4096:
+            self.close_connection = True
+            self._json(400, {"error": "not a first start", "code": "bad_request"})
+            return
+        try:
+            data = json.loads(self.rfile.read(n) if n else b"{}")
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if not self._own_screen():
+            self._json(403, {"error": "A unit is started for the first time at its own screen.",
+                             "code": "not_own_screen"})
+            return
+        if not first_start_armed():
+            self._json(409, {"error": "This unit has been started before.", "code": "not_armed"})
+            return
+        when = check_when(data.get("when"))
+        if not when:
+            self._json(400, {"error": "That is not a date and time I can set.", "code": "bad_when"})
+            return
+        key = data.get("passkey")
+        if not check_passkey(key):
+            self._json(400, {"error": "The passkey must be 8 to 63 plain characters.",
+                             "code": "bad_passkey"})
+            return
+        if not _FIRST_START_LOCK.acquire(blocking=False):
+            self._json(409, {"error": "A first start is already under way.", "code": "busy"})
+            return
+        try:
+            try:
+                os.unlink(FIRST_START_RESULT)
+            except OSError:
+                pass
+            try:
+                fd = os.open(FIRST_START_REQUEST, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    f.write(when + "\n" + key + "\n")
+            except OSError as e:
+                print(f"[gui] first start asked for but could not be filed: {e!r}", flush=True)
+                self._json(503, {"error": "The first start is not available on this unit.",
+                                 "code": "unavailable"})
+                return
+            del key
+            print("[gui] first start asked for at the unit's own screen", flush=True)
+            deadline = time.monotonic() + FIRST_START_WAIT
+            lines = None
+            while time.monotonic() < deadline:
+                try:
+                    with open(FIRST_START_RESULT, encoding="utf-8") as f:
+                        lines = f.read().split("\n")
+                    break
+                except OSError:
+                    time.sleep(0.25)
+            if lines is None:
+                # Nobody took it: do not leave a passkey lying in /run.
+                try:
+                    os.unlink(FIRST_START_REQUEST)
+                except OSError:
+                    pass
+                self._json(504, {"error": "The unit did not answer. Try again.", "code": "timeout"})
+                return
+            if lines[0] == "ok":
+                print("[gui] first start done", flush=True)
+                self._json(200, {"ok": True, "network": lines[1] if len(lines) > 1 else ""})
+            else:
+                # root's side: "error", a word the page has a sentence for in
+                # each language, and root's own sentence
+                code = lines[1] if len(lines) > 1 and re.fullmatch(r"[a-z_]{1,24}", lines[1]) else "refused"
+                said = lines[2] if len(lines) > 2 and lines[2] else "It could not be done."
+                print(f"[gui] first start refused: {said}", flush=True)
+                self._json(422, {"error": said, "code": code})
+        finally:
+            _FIRST_START_LOCK.release()
+
     def _upload(self):
         n = int(self.headers.get("Content-Length", 0) or 0)
         name = self.headers.get("X-Filename") or ""
@@ -340,6 +482,10 @@ class Console(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == SHUTDOWN_PATH:
             self._shutdown()
+            return
+        if self.path == FIRST_START_PATH:
+            _tally("setup")
+            self._first_start()
             return
         if self.path == UPLOAD_PATH:
             self._upload()

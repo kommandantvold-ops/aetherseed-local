@@ -163,6 +163,12 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
 .doc{border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px; background:var(--surface-2)}
 .doc .name{font-size:15px; color:var(--ink); overflow-wrap:anywhere}
 .doc .acts{margin-top:8px}
+.card .when{display:flex; gap:8px; align-items:flex-end}
+.card .when label{flex:2 1 0; min-width:0; display:flex; flex-direction:column; gap:4px;
+  color:var(--ink-3); font-size:12px}
+.card .when label.wide{flex:3 1 0}
+.card .when label.gap{margin-left:14px}
+.card .when input{text-align:center; padding-left:6px; padding-right:6px}
 .card .row.left{justify-content:flex-start}
 .card .row.left .send{margin-left:0}
 .card .help.how{margin:14px 0 0}
@@ -312,6 +318,25 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
       <div class="row">
         <button type="button" id="backBtn"></button>
         <button type="submit" class="send" id="nameGo"></button>
+      </div>
+    </form>
+    <form id="stepStart" novalidate hidden>
+      <h1 id="startTitle"></h1>
+      <p class="help" id="whenHelp"></p>
+      <div class="when">
+        <label><span id="dayLabel"></span><input id="dayInput" inputmode="numeric" maxlength="2" autocomplete="off"></label>
+        <label><span id="monthLabel"></span><input id="monthInput" inputmode="numeric" maxlength="2" autocomplete="off"></label>
+        <label class="wide"><span id="yearLabel"></span><input id="yearInput" inputmode="numeric" maxlength="4" autocomplete="off"></label>
+        <label class="gap"><span id="hourLabel"></span><input id="hourInput" inputmode="numeric" maxlength="2" autocomplete="off"></label>
+        <label><span id="minuteLabel"></span><input id="minuteInput" inputmode="numeric" maxlength="2" autocomplete="off"></label>
+      </div>
+      <p class="help second" id="keyHelp"></p>
+      <input id="keyInput" maxlength="63" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <p class="err" id="startError" hidden></p>
+      <p class="help second" id="startDone" hidden></p>
+      <div class="row">
+        <span></span>
+        <button type="submit" class="send" id="startGo"></button>
       </div>
     </form>
   </div>
@@ -468,6 +493,20 @@ const T = {
     noAnswer: 'The companion did not answer.', cutOff: 'The answer was cut off.',
     noRecord: 'Could not read the record.',
     nameTitle: 'What would you like to call your companion?',
+    startTitle: (n) => `Two more things before ${n} starts`,
+    whenHelp: 'The date and time now. This unit has no clock battery and asks no network for the time, so it only knows what you tell it here.',
+    keyHelp: (n) => `A passkey for ${n}’s own Wi-Fi, 8 to 63 characters. With it, a phone or laptop can join that network and use this same screen. Write it down — it is shown here once and cannot be read back later.`,
+    whenLabels: { day: 'Day', month: 'Month', year: 'Year', hour: 'Hour (0–23)', minute: 'Minute' },
+    startGo: 'Start', startWorking: 'Setting the clock and the Wi-Fi…',
+    startDone: (net) => `Done. The Wi-Fi is called “${net}”. It is on whenever no network cable is plugged in; on a phone that has joined it, type 10.42.0.1:2077 in the browser’s address line.`,
+    startOpen: 'Open the console',
+    startErrors: { bad_when: 'That is not a date and time I can set.',
+      bad_passkey: 'The passkey must be 8 to 63 plain characters — letters, digits and signs, no æ, ø or å.',
+      not_own_screen: 'A unit is started for the first time at its own screen.',
+      not_armed: 'This unit has been started before.', busy: 'A first start is already under way.',
+      timeout: 'The unit did not answer. Try again.', unavailable: 'The first start is not available on this unit.',
+      clock: 'The clock could not be set.', no_name: 'Name your companion first.',
+      wifi: 'The unit’s Wi-Fi could not be set up. Try again; if it keeps failing, the unit needs whoever installed it.' },
     nameHelp: 'Letters, digits, spaces and hyphens — up to 24 characters.',
     back: 'Back', go: 'Continue',
     errors: { required: 'Please choose a name.', too_long: 'At most 24 characters.',
@@ -618,6 +657,20 @@ const T = {
     noAnswer: 'Følgesvennen svarte ikke.', cutOff: 'Svaret ble avbrutt.',
     noRecord: 'Kunne ikke lese loggen.',
     nameTitle: 'Hva vil du kalle følgesvennen din?',
+    startTitle: (n) => `To ting til før ${n} starter`,
+    whenHelp: 'Dato og klokkeslett nå. Denne enheten har ikke klokkebatteri og spør ikke noe nettverk om tiden, så den vet bare det du skriver her.',
+    keyHelp: (n) => `En nøkkel til ${n} sitt eget Wi-Fi, 8 til 63 tegn. Med den kan en telefon eller en PC koble seg til det nettverket og bruke denne samme skjermen. Skriv den ned — den vises her én gang og kan ikke leses ut senere.`,
+    whenLabels: { day: 'Dag', month: 'Måned', year: 'År', hour: 'Time (0–23)', minute: 'Minutt' },
+    startGo: 'Start', startWorking: 'Stiller klokka og setter opp Wi-Fi …',
+    startDone: (net) => `Ferdig. Nettverket heter «${net}». Det er på når ingen nettverkskabel står i; på en telefon som er koblet til det, skriver du 10.42.0.1:2077 i adressefeltet i nettleseren.`,
+    startOpen: 'Åpne konsollen',
+    startErrors: { bad_when: 'Det er ikke en dato og et klokkeslett jeg kan stille.',
+      bad_passkey: 'Nøkkelen må være 8 til 63 vanlige tegn — bokstaver, tall og tegn, ikke æ, ø eller å.',
+      not_own_screen: 'En enhet startes for første gang på sin egen skjerm.',
+      not_armed: 'Denne enheten er startet før.', busy: 'En første oppstart er allerede i gang.',
+      timeout: 'Enheten svarte ikke. Prøv igjen.', unavailable: 'Første oppstart er ikke tilgjengelig på denne enheten.',
+      clock: 'Klokka kunne ikke stilles.', no_name: 'Gi følgesvennen et navn først.',
+      wifi: 'Enhetens Wi-Fi kunne ikke settes opp. Prøv igjen; hvis det fortsatt ikke går, trenger enheten den som installerte den.' },
     nameHelp: 'Bokstaver, tall, mellomrom og bindestrek — opptil 24 tegn.',
     back: 'Tilbake', go: 'Fortsett',
     errors: { required: 'Velg et navn.', too_long: 'Høyst 24 tegn.',
@@ -1513,12 +1566,103 @@ $('stepName').onsubmit = async (e) => {
       err.hidden = false; return;
     }
     applyCompanion(d.companion);
+    if (await needsFirstStart()) { showStart(); return; }
     $('setup').hidden = true;
     send.disabled = false; input.disabled = false; input.focus();
   } catch {
     err.textContent = s.errors.network; err.hidden = false;
   } finally {
     $('nameGo').disabled = false;
+  }
+};
+
+// ---- first start, on a unit onboarded where it will live (build log 66) ------
+// After the name: the date and time, and a passkey for the unit's own Wi-Fi.
+// Only at the unit's own screen, and only on a unit armed for it - the server
+// says which (/aetherseed/first-start), and refuses anything else itself.
+// The date as five fields with their names on them, not the browser's own
+// date box: that one writes 7 October as 10/07/2026 or 07.10.2026 by a
+// setting nobody at the screen chose, and the day is what must not be misread.
+const WHEN = ['day', 'month', 'year', 'hour', 'minute'];
+let firstStart = null, startDone = false;
+function typedWhen() {
+  const v = {};
+  for (const k of WHEN) {
+    const raw = $(k + 'Input').value.trim();
+    if (!/^\d{1,4}$/.test(raw)) return null;
+    v[k] = raw;
+  }
+  if (v.year.length !== 4) return null;
+  const two = (x) => x.padStart(2, '0');
+  return `${v.year}-${two(v.month)}-${two(v.day)}T${two(v.hour)}:${two(v.minute)}`;
+}
+async function needsFirstStart() {
+  if (startDone) return false;
+  try {
+    const r = await fetch('/aetherseed/first-start');
+    firstStart = r.ok ? await r.json() : null;
+  } catch { firstStart = null; }
+  return !!(firstStart && firstStart.armed && firstStart.own_screen);
+}
+
+function showStart() {
+  const s = t(), setup = $('setup');
+  $('startTitle').textContent = s.startTitle(name || s.sub);
+  $('whenHelp').textContent = s.whenHelp;
+  $('keyHelp').textContent = s.keyHelp(name || s.sub);
+  $('startGo').textContent = s.startGo;
+  $('startError').hidden = true; $('startDone').hidden = true;
+  for (const k of WHEN) $(k + 'Label').textContent = s.whenLabels[k];
+  if ($('stepStart').hidden) {
+    // from the unit's own clock, to be corrected: 2026-10-07T15:30
+    const now = (firstStart && firstStart.now) || '';
+    $('yearInput').value = now.slice(0, 4); $('monthInput').value = now.slice(5, 7);
+    $('dayInput').value = now.slice(8, 10);
+    $('hourInput').value = now.slice(11, 13); $('minuteInput').value = now.slice(14, 16);
+    $('keyInput').value = '';
+  }
+  $('stepLang').hidden = true; $('stepName').hidden = true; $('stepStart').hidden = false;
+  setup.hidden = false;
+  send.disabled = true; input.disabled = true;
+  $('keyInput').focus();
+}
+
+$('stepStart').onsubmit = async (e) => {
+  e.preventDefault();
+  const s = t(), err = $('startError'), go = $('startGo');
+  if (startDone) {                       // the button now reads "Open the console"
+    $('setup').hidden = true; $('stepStart').hidden = true;
+    send.disabled = false; input.disabled = false; input.focus();
+    return;
+  }
+  err.hidden = true;
+  const when = typedWhen();
+  if (!when) { err.textContent = s.startErrors.bad_when; err.hidden = false; return; }
+  const key = $('keyInput').value;
+  if (key.length < 8 || key.length > 63 || /[^ -~]/.test(key)) {
+    err.textContent = s.startErrors.bad_passkey; err.hidden = false; return;
+  }
+  go.disabled = true; go.textContent = s.startWorking;
+  try {
+    const r = await fetch('/aetherseed/first-start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ when, passkey: key })
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      err.textContent = s.startErrors[d.code] || d.error || s.errors.network;
+      err.hidden = false; go.textContent = s.startGo; return;
+    }
+    startDone = true;
+    for (const k of WHEN) $(k + 'Input').disabled = true;
+    $('keyInput').disabled = true;
+    $('startDone').textContent = s.startDone(d.network || name || '');
+    $('startDone').hidden = false;
+    go.textContent = s.startOpen;
+  } catch {
+    err.textContent = s.errors.network; err.hidden = false; go.textContent = s.startGo;
+  } finally {
+    go.disabled = false;
   }
 };
 
@@ -1550,12 +1694,16 @@ function ringLine(s, r) {
   return parts.join(' · ');
 }
 
+let startChecked = false;
 async function status() {
   try {
     const d = await (await fetch('/aetherseed/status')).json();
     const c = d.companion || { configured: false };
     if (c.configured) {
       if (c.name !== name || c.language !== lang || (c.steward || null) !== stewardName) applyCompanion(c);
+      // named, and the first start not finished (a restart in between, or the
+      // Wi-Fi would not come up): the unit's own screen goes on from there
+      if (!startChecked) { startChecked = true; if (await needsFirstStart()) showStart(); }
     } else {
       name = null;
       showSetup(d.languages);

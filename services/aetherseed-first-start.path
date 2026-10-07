@@ -1,0 +1,20 @@
+# AetherSeed Companion - watch for a first start asked for at the unit's screen.
+#
+# The console (aetherseed-gui, unprivileged, NoNewPrivileges) cannot set the
+# clock or put up a Wi-Fi network and must not be able to. On a unit that is
+# onboarded where it will live (build log 66) the first-start screen leaves a
+# request in the console's own runtime directory; this unit sees it and starts
+# aetherseed-first-start.service, which runs as root and does exactly two
+# things with it, once: tools/first_start.sh. /run is tmpfs, so no request
+# outlives a boot.
+
+[Unit]
+Description=AetherSeed Companion - first start asked for at the unit's screen
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+
+[Path]
+PathExists=/run/aetherseed-gui/first-start-request
+Unit=aetherseed-first-start.service
+
+[Install]
+WantedBy=multi-user.target

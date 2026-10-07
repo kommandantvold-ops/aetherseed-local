@@ -39,6 +39,9 @@ IDENTITY_FILES=(
   /etc/systemd/system/aetherseed-keepalive.service
   /etc/systemd/system/aetherseed-shutdown.path
   /etc/systemd/system/aetherseed-shutdown.service
+  /etc/systemd/system/aetherseed-first-start.path
+  /etc/systemd/system/aetherseed-first-start.service
+  /etc/systemd/system/aetherseed-new-identity.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
   /etc/nftables.conf
   /etc/chromium/policies/managed/aetherseed.json
@@ -180,6 +183,12 @@ collect() {
   # network's name and never its passkey: those are the steward's, and two
   # units of one build differ in them.
   emit service.hotspot.enabled      "$(systemctl is-enabled aetherseed-hotspot 2>/dev/null || echo unknown)"
+  # The first start at the unit's own screen (build log 66): whether this
+  # unit can be onboarded where it will live. Not whether it is ARMED for
+  # one - that is the unit's state, like its name, and a source and the unit
+  # it became are the same cartridge.
+  emit service.first_start.enabled  "$(systemctl is-enabled aetherseed-first-start.path 2>/dev/null || echo unknown)"
+  emit service.new_identity.enabled "$(systemctl is-enabled aetherseed-new-identity.service 2>/dev/null || echo unknown)"
   # Nothing the unit starts leaves it (build log 55): what would call out is
   # off, and the cartridge says so.
   emit service.avahi.enabled        "$(systemctl is-enabled avahi-daemon 2>/dev/null || echo unknown)"

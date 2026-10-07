@@ -1,0 +1,30 @@
+# AetherSeed Companion - an identity of its own for a card copied from a source.
+#
+# A copy of a card has the card's SSH host keys and machine id (build log 66).
+# tools/source_card.sh seal deletes the source's host keys and leaves
+# /etc/aetherseed/new-identity; at the next boot - of the source, or of any
+# copy of it - this unit makes new host keys and a new machine id, removes
+# the flag, and restarts the unit once so that nothing is left running under
+# the old id. Without the flag it does nothing, on any unit, ever.
+#
+# Not systemd's own "first boot" (an empty /etc/machine-id): that also
+# re-applies the distribution's presets, and would switch back on what
+# INSTALL 2 and 14 switched off.
+
+[Unit]
+Description=AetherSeed Companion - a new identity for a card copied from a source
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=sysinit.target ssh.service sshd-keygen.service NetworkManager.service
+ConditionPathExists=/etc/aetherseed/new-identity
+ConditionPathIsReadWrite=/etc
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub && /usr/bin/ssh-keygen -A'
+ExecStart=/bin/sh -c 'rm -f /etc/machine-id /var/lib/dbus/machine-id && /usr/bin/systemd-machine-id-setup && ln -sf /etc/machine-id /var/lib/dbus/machine-id'
+ExecStart=/bin/sh -c 'rm -f /etc/aetherseed/new-identity && [ ! -e /etc/aetherseed/new-identity ] && /usr/bin/systemctl --no-block reboot'
+
+[Install]
+WantedBy=sysinit.target
