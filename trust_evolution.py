@@ -236,6 +236,32 @@ class TrustEvolution:
         self._update_tier()
         self._save_state()
 
+    def grant_level(self, role: str, details: str = "") -> str:
+        """Her steward grants her a level she earned in training (build log 67).
+
+        A level is read from her standing (_update_tier), so a grant RAISES
+        HER STANDING to the level's own threshold - never lowers it - and is
+        logged as the steward's grant. Like every level it takes effect at the
+        next start, and like every level it can be lost: standing moves both
+        ways. Returns the level she then holds."""
+        idx = next((i for i, t in enumerate(TIERS) if t["role"].lower() == (role or "").lower()), None)
+        if idx is None:
+            raise ValueError("no such level: %r" % role)
+        need = float(TIERS[idx]["min_resonance"])
+        before = float(self.state["resonance"])
+        if before < need:
+            self.state["resonance"] = need
+        self.state["events"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "steward_grant",
+            "score": max(0.0, need - before),
+            "details": details or "granted %s by the steward" % TIERS[idx]["role"].lower(),
+            "resonance_after": self.state["resonance"]})
+        self.state["events"] = self.state["events"][-100:]
+        self._update_tier()
+        self._save_state()
+        return self.get_trust_level_name()
+
     def _update_tier(self):
         """Determine current trust tier from standing, then from the curriculum.
 

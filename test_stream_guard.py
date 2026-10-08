@@ -432,6 +432,19 @@ class TestStreamGuard(unittest.TestCase):
             self.assertNotIn("[", (line.get("message") or {}).get("content", ""))
         self.assertEqual(text, "It is from " + self.TRUE + ".")
 
+    def test_a_tag_word_named_rather_than_recited_stays_as_a_word(self):
+        # build log 67: "the answer is marked [Unverified]." became "marked ."
+        for chunks, want in (
+            (["The", " answer", " is", " marked", " [Unverified]", "."], "The answer is marked unverified."),
+            (["Lines", " with", " the", " [Fiction]", " tag", " are", " stories", "."],
+             "Lines with the fiction tag are stories."),
+            (["A", " [Known]", " cartridge", " is", " one", " build", "."], "A cartridge is one build."),
+        ):
+            with self.subTest(chunks="".join(chunks)):
+                lines, text, ai = self.run_chunks(chunks)
+                self.assertEqual(ai, want)
+                self.assertEqual(text, ai)
+
     def test_what_is_not_one_of_her_tags_is_left(self):
         for chunks in (["AetherSeed", " is", " from", " [Unknown]", "."],
                        ["Your", " [Steward told you]", " line", "."],

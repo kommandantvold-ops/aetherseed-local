@@ -422,6 +422,45 @@ class TheLoop(unittest.TestCase):
         with open(os.path.join(self.dir, "runs", "%03d" % run, "turns.jsonl")) as f:
             return [json.loads(l) for l in f]
 
+    # ---- a real level, earned in a whole run (build log 67) ------------------
+    def test_a_whole_run_at_98_percent_offers_the_next_level_and_nothing_changes(self):
+        was = T.RUN_SECONDS
+        T.RUN_SECONDS = 30                       # "a whole run", made short for the test
+        self.addCleanup(setattr, T, "RUN_SECONDS", was)
+        was_min = T.OFFER_MIN_ANSWERS
+        T.OFFER_MIN_ANSWERS = 10
+        self.addCleanup(setattr, T, "OFFER_MIN_ANSWERS", was_min)
+        held = {"level": "observer"}
+        pupil = _Pupil(self.dir)                 # right every time
+        loop = self.loop(pupil, earned_now=lambda: held["level"])
+        loop.start(seconds=30)
+        self.wait(loop, "finished")
+        summary = loop.history()[0]
+        self.assertEqual(summary["level_offer"]["offered"], "reader")
+        o = loop.status()["offer"]
+        self.assertEqual((o["from"], o["to"], o["share"]), ("observer", "reader", 100.0))
+        self.assertGreaterEqual(o["asked"], 1)
+        # an offer is only an offer: once she holds another level it is stale
+        held["level"] = "reader"
+        self.assertIsNone(loop.status()["offer"])
+        held["level"] = "observer"
+        loop.withdraw_offer()
+        self.assertIsNone(loop.offer())
+
+    def test_below_98_percent_or_not_a_whole_run_offers_nothing(self):
+        loop = self.loop(_Pupil(self.dir))
+        base = {"run": 3, "budget": T.RUN_SECONDS, "hers_asked": 600, "hers_declined": 0}
+        self.assertTrue(loop._make_offer(dict(base, hers_right=588))["qualifies"])       # 98.0 %
+        self.assertFalse(loop._make_offer(dict(base, hers_right=587))["qualifies"])      # 97.8 %
+        self.assertFalse(loop._make_offer(dict(base, hers_right=600, budget=3600))["qualifies"])
+        self.assertFalse(loop._make_offer(dict(base, hers_asked=200, hers_right=200))["qualifies"])
+        # "I don't know" counts as not right: the share is of everything she was asked
+        r = loop._make_offer(dict(base, hers_right=580, hers_declined=12))
+        self.assertEqual((r["qualifies"], r["share"]), (False, 96.7))
+        # one level at a time, and none above the top
+        loop2 = self.loop(_Pupil(self.dir), earned_now=lambda: "autonomous")
+        self.assertIsNone(loop2._make_offer(dict(base, hers_right=600))["offered"])
+
     def test_a_run_goes_through_every_level_and_ends_near_its_time(self):
         pupil = _Pupil(self.dir)
         loop = self.loop(pupil)
@@ -975,6 +1014,27 @@ class AtTheProxy(_Proxy):
         self.ask(said)
         self.assertIn("[Unverified - an earlier answer of yours that may be wrong] [Episode] "
                       "Trainer: Training round 1 is over.", self.system_sent())
+
+    def test_only_the_steward_grants_an_offered_level_and_it_is_one_step(self):
+        from trust_evolution import TrustEvolution
+        tmp = tempfile.mkdtemp()
+        saved = proxy.trust
+        proxy.trust = TrustEvolution(os.path.join(tmp, "trust.json"))
+        self.addCleanup(setattr, proxy, "trust", saved)
+        loop = proxy.training_loop()
+        self.assertEqual(self.post("/aetherseed/training", {"action": "grant"})[0], 409)   # nothing on offer
+        os.makedirs(proxy.TRAINING_DIR, exist_ok=True)
+        with open(os.path.join(proxy.TRAINING_DIR, "offer.json"), "w") as f:
+            json.dump({"run": 9, "from": "observer", "to": "reader", "right": 590, "asked": 600,
+                       "declined": 0, "share": 98.3}, f)
+        self.assertEqual(self.get("/aetherseed/training")["offer"]["to"], "reader")
+        status, d = self.post("/aetherseed/training", {"action": "grant"})
+        self.assertEqual(status, 200, d)
+        self.assertEqual(proxy.trust.get_trust_level_name(), "reader")
+        self.assertEqual(proxy.trust.state["resonance"], 50)
+        self.assertEqual(proxy.trust.state["events"][-1]["type"], "steward_grant")
+        self.assertIsNone(d["offer"], "granted once, and gone")
+        self.assertEqual(self.post("/aetherseed/training", {"action": "grant"})[0], 409)
 
     def test_two_keys_that_passed_wrong_answers_on_a_copy(self):
         tasks = {t["id"]: t for t in T._self_pool()}

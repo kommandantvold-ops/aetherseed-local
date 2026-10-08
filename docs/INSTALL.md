@@ -980,7 +980,7 @@ cd ~/aetherseed-main
 sudo install -o root -g root -m 644 logic/clock.py logic/trust_record.py logic/training.py \
     logic/steward.py logic/provenance.py logic/token_budget.py logic/facts.py \
     logic/attribution.py /opt/aetherseed/logic/
-sudo install -o root -g root -m 644 proxy.py aetherroot.py /opt/aetherseed/
+sudo install -o root -g root -m 644 proxy.py aetherroot.py trust_evolution.py /opt/aetherseed/
 sudo install -o root -g root -m 644 gui/index.html gui/serve.py /opt/aetherseed/gui/
 sudo install -o root -g root -m 644 training/withdraw_corrections.py /opt/aetherseed/training/
 sudo systemctl restart aetherseed-proxy aetherseed-gui aetherseed-kiosk
@@ -1029,6 +1029,22 @@ sudo -u aetherseed /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/
   answer this build's key passes. `withdraw` undoes only those named, only
   with `--yes`; nothing is deleted, `corrections.log` says why, and it
   counts against Claude in her record.
+
+- **A real level, earned in training.** Andreas: *"when she has achieved a
+  high enough score she can earn a new trust level outside of training.
+  should be 98-100% success rate"* - over **a whole run** (one that ran its
+  full four hours), **offered to the steward**, **one level** at a time,
+  and **"I don't know" counts as not right**. A run in which at least 98 %
+  of everything she herself was asked was right (and at least 300 of her
+  answers) leaves an offer on the Training screen: *Grant reader* / *Not
+  now*. Granted - only at the unit's own console - her standing is raised
+  to that level's threshold and the level takes effect at the next start;
+  like any level it can be lost again as her standing moves. Nothing
+  changes until he grants it. Her runs so far: 89.9 % to 94.4 %.
+- **A tag word named, not recited, stays as a word**: "the answer is marked
+  [Unverified]." is shown as "marked unverified." (after marked, tagged,
+  labelled, called, as, with, the). Taken out, a right answer had read
+  "marked ." and been failed.
 
 The record and the trust answers are in English only in this build.
 

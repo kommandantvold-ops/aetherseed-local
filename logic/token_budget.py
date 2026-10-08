@@ -725,7 +725,22 @@ def strip_bare_tags(text: str, start: int = 0):
     if not text or "[" not in text[start:]:
         return text, 0
     head, tail = text[:start], text[start:]
-    tail, n = _BARE_TAG.subn("", tail)
+    whole = head + tail
+    def take(m):
+        # A tag word NAMED, not recited (build log 67): "the answer is marked
+        # [Unverified]." Taken out, the right answer read "marked ." - and
+        # was failed (run 4, 7 Oct). After "marked", "tagged", "labelled",
+        # "called", "as", "with" or "the", the word stays, without brackets.
+        i = start + m.start()
+        before = whole[max(0, i - 12):i].lower()
+        # (only what comes BEFORE the tag is read: in a stream what follows
+        # it has not arrived when the tag is decided, and the stored answer
+        # must be the shown one)
+        if re.search(r"\b(?:marked|tagged|labell?ed|called|as|with|the)\s*$", before):
+            word = m.group(0).strip()[1:-1].lower()
+            return word + (" " if m.group(0).endswith((" ", "\t")) else "")
+        return ""
+    tail, n = _BARE_TAG.subn(take, tail)
     if n and (head or tail):
         # "a  cartridge" where the word stood between two spaces
         tail = re.sub(r"(?<=\S) {2,}(?=\S)", " ", tail)

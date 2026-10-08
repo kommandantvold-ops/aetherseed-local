@@ -249,7 +249,8 @@ def training_loop():
                 backup=_training_backup,
                 settings=lambda: {"name": _settings()[0], "steward": _steward()},
                 real_level=lambda: spark.gate.trust_level,
-                remembered=_training_remembered)
+                remembered=_training_remembered,
+                earned_now=lambda: trust.get_trust_level_name())
         return _TRAINING_LOOP
 
 
@@ -2026,6 +2027,28 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 ok, why = loop.resume()
             elif action == "stop":
                 ok, why = loop.stop()
+            elif action in ("grant", "decline"):
+                # A level she earned in a whole run (build log 67): granted
+                # only by the steward, at the unit's own console.
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    self._send_json({"error": "only on the device"}, status=403)
+                    return
+                offer = loop.offer()
+                if not offer:
+                    ok, why = False, "there is no level on offer"
+                elif action == "decline":
+                    loop.withdraw_offer()
+                    ok, why = True, ""
+                else:
+                    held = trust.grant_level(
+                        offer["to"], "granted by the steward after training run %d: %s of %s "
+                        "of her own answers right (%s %%)" % (offer["run"], offer["right"],
+                                                              offer["asked"], offer["share"]))
+                    loop.withdraw_offer()
+                    print(f"[training] the steward granted {offer['to']} (run {offer['run']}, "
+                          f"{offer['share']} %); she holds {held} from the next start", flush=True)
+                    ok, why = held == offer["to"], ("" if held == offer["to"] else
+                                                    "the level did not change (%s)" % held)
             else:
                 self._send_json({"error": "unknown action", "code": "action"}, status=400)
                 return

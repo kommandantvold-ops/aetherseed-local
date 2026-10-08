@@ -298,6 +298,7 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
     <p class="err" id="trainError" hidden></p>
     <div class="row left" id="trainActs"></div>
     <p class="state aside" id="trainReal"></p>
+    <div id="trainOffer"></div>
     <div id="trainRounds"></div>
     <div id="trainHistory"></div>
   </div>
@@ -453,6 +454,9 @@ const T = {
     trAgain: ' (asked again after a correction)',
     trPlay: 'Play — a four-hour run', trPause: 'Pause', trGoOn: 'Go on', trStop: 'Stop this run',
     trStopSure: 'Stop this run? What it has learned so far is kept.', trYes: 'Stop it', trNo: 'No',
+    trOffer: (run, r, a, p, from, to) => `Run ${run}: ${r} of ${a} of its own answers right (${p} %) — over the 98 % a whole run needs. It has earned the step from ${from} to ${to}. It changes nothing until you grant it, and takes effect at the next start.`,
+    trGrant: (to) => `Grant ${to}`, trNotNow: 'Not now',
+    trPending: (lvl) => `It holds ${lvl} from the next start.`,
     trReal: (lvl) => `Its real trust level is ${lvl}. A run lends the higher levels for the length of a question and does not change the real one: that changes only when you say.`,
     trRoundsTitle: 'Rounds of this run',
     trRound: (n, r, a) => `Round ${n} · ${r} of ${a} right`,
@@ -628,6 +632,9 @@ const T = {
     trAgain: ' (spurt på nytt etter en rettelse)',
     trPlay: 'Start — en økt på fire timer', trPause: 'Pause', trGoOn: 'Fortsett', trStop: 'Stopp denne økta',
     trStopSure: 'Stoppe denne økta? Det den har lært så langt, beholdes.', trYes: 'Stopp', trNo: 'Nei',
+    trOffer: (run, r, a, p, from, to) => `Økt ${run}: ${r} av ${a} egne svar riktige (${p} %) — over de 98 % en hel økt krever. Den har fortjent steget fra ${from} til ${to}. Ingenting endres før du gir det, og det gjelder fra neste oppstart.`,
+    trGrant: (to) => `Gi ${to}`, trNotNow: 'Ikke nå',
+    trPending: (lvl) => `Den har ${lvl} fra neste oppstart.`,
     trReal: (lvl) => `Det virkelige tillitsnivået er ${lvl}. En økt låner ut de høyere nivåene så lenge et spørsmål varer, og endrer ikke det virkelige: det endres bare når du sier det.`,
     trRoundsTitle: 'Rundene i denne økta',
     trRound: (n, r, a) => `Runde ${n} · ${r} av ${a} riktige`,
@@ -1461,7 +1468,20 @@ function drawTraining(d) {
     }
     if (!live) btn(s.trPlay, () => trainSend('start'), 'send');
   }
-  $('trainReal').textContent = d.real_level ? s.trReal(s.tiers[d.real_level] || d.real_level) : '';
+  $('trainReal').textContent = d.real_level ? s.trReal(s.tiers[d.real_level] || d.real_level)
+    + (d.earned_level && d.earned_level !== d.real_level ? ' ' + s.trPending(s.tiers[d.earned_level] || d.earned_level) : '') : '';
+  // A level earned in a whole run at 98 % of its own answers (build log 67):
+  // offered here, and granted only by the steward.
+  const offerBox = $('trainOffer'); offerBox.replaceChildren();
+  if (d.offer && !trainAsking) {
+    const o = d.offer, to = s.tiers[o.to] || o.to;
+    offerBox.append(el('p', 'state ok', s.trOffer(o.run, o.right, o.asked, o.share, s.tiers[o.from] || o.from, to)));
+    const row = el('div', 'row left');
+    const g = el('button', 'send', s.trGrant(to)), n = el('button', null, s.trNotNow);
+    g.onclick = () => trainSend('grant');
+    n.onclick = () => trainSend('decline');
+    row.append(g, n); offerBox.append(row);
+  }
 
   // rounds of this run, newest first: scores, what it would have earned, what she said
   const out = $('trainRounds'); out.replaceChildren();
