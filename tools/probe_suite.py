@@ -26,7 +26,8 @@ caught the invented Nature Machine Intelligence DOI in step 8b.
 
 Runs through the committed call_hailo_chat - so the token budget, the
 sanitizers and all four generation bounds are live - with AetherRoot stubbed,
-so results do not depend on what the unit happens to remember.
+on a throwaway home (an empty memory in a temporary directory), so results do
+not depend on what the unit happens to remember.
 """
 import json
 import os
@@ -44,17 +45,15 @@ for cand in (os.environ.get("AETHERSEED_TOKENIZER"),
         os.environ["AETHERSEED_TOKENIZER"] = cand
         break
 
-for _name, _attrs in (("aetherroot", ["AetherRoot"]),
-                      ("aetherspark", ["AetherSpark"]),
-                      ("trust_evolution", ["TrustEvolution"]),
-                      ("intent_detection", ["detect_intent", "execute_intent"])):
-    _m = types.ModuleType(_name)
-    for _a in _attrs:
-        setattr(_m, _a, lambda *x, **k: types.SimpleNamespace(
-            get_trust_level_name=lambda: "Seed", retrieve_context=lambda *_: "",
-            store_episode=lambda **_: 1, store_interaction=lambda *_, **__: None,
-            get_status=lambda: {"episodes": 0, "willingness_mean": 0.0}))
-    sys.modules[_name] = _m
+# What the unit remembers must not decide the result. This used to stub
+# AetherRoot and its neighbours; the proxy has since come to import more from
+# them than the stubs gave (found on Xena, build log 68), so instead the real
+# modules run on a THROWAWAY HOME: an empty memory in a temporary directory,
+# never the unit's. Nothing is written anywhere else.
+import tempfile                                 # noqa: E402
+_PROBE_HOME = tempfile.mkdtemp(prefix="probe-home-")
+os.environ["HOME"] = _PROBE_HOME
+os.environ.pop("AETHERSEED_UNIT_KNOWLEDGE", None)
 
 import proxy                                    # noqa: E402
 from logic.prompt_builder import MUSTARDSEED    # noqa: E402
