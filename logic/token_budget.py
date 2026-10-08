@@ -516,6 +516,7 @@ _LEADING_ARTEFACTS = (
     # and the same leak if she opens an answer with one.
     "[Unverified - an earlier answer of yours that may be wrong]",
     "[Marked right by your steward]",
+    "[A right assumption of yours - your steward checked it]",
     "[Passed a check in training]",
     "[Episode]",
     "[Pattern]",
@@ -688,6 +689,7 @@ _TAG_MARKERS = (
     "[Episode]",
     "[Passed a check in training]",
     "[Marked right by your steward]",
+    "[A right assumption of yours",
     "[Unverified - an earlier answer of yours",
     "[Corrected by your steward",
     "[Corrected in training",
@@ -710,9 +712,9 @@ _BLOCK_MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
 # capitals. "[Unknown]" is not one of ours (she writes it where she does not
 # know) and "[Steward told you]" is still an attribution: both are left.
 _BARE_TAGS = ("[Known]", "[Corrected]", "[Correction]", "[Unverified]", "[Fiction]",
-              "[Passed]", "[Pattern]", "[Steward told me]")
+              "[Passed]", "[Pattern]", "[Steward told me]", "[Assumption]")
 _BARE_TAG = re.compile(
-    r"\[(?:known|corrected|correction|unverified|fiction|passed|pattern|steward told me)\][ \t]?",
+    r"\[(?:known|corrected|correction|unverified|fiction|passed|pattern|steward told me|assumption)\][ \t]?",
     re.I)
 
 

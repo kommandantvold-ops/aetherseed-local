@@ -289,6 +289,7 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
       <button type="submit" id="whoSave"></button>
     </form>
     <p class="err" id="whoError" hidden></p>
+    <div id="trustRecord"></div>
     <p class="state" id="trainState"></p>
     <div class="bar"><i id="trainBar"></i></div>
     <p class="now" id="trainNow" hidden></p>
@@ -398,6 +399,14 @@ const T = {
     corrected: (r, x) => `You corrected this: ${r}.` + (x ? ` You wrote: “${x}”` : ''),
     supportAsk: (n, p) => `Mark this as right? It adds ${p} to ${n || 'the companion'}’s trust — at most 10 a day. A new level takes effect at the next start.`,
     supportGo: 'Mark as right',
+    assumption: 'A right assumption',
+    trustTitle: (n) => `How far ${n || 'it'} trusts`, trustSteward: 'its steward',
+    trustLevel: { high: 'high', some: 'some', low: 'low', 'too little': 'too little to say' },
+    trustCount: (st, tot) => `${st} of ${tot} still stand`,
+    trustFactsUnchecked: 'Its steward’s facts come back to it marked “not checked” while this record is low.',
+    assumptionAsk: (n, p) => `Mark this as an assumption of ${n || 'the companion'}’s that held? It was kept as unverified; it will come back to ${n || 'it'} as “a right assumption — your steward checked it”, not as plain fact. It adds ${p} to ${n || 'the companion'}’s trust, as “It’s right” does.`,
+    assumptionGo: 'Mark as a right assumption',
+    assumed: (p) => p ? `You marked this as a right assumption (+${p} trust).` : 'You marked this as a right assumption.',
     capped: 'Marked as right. Today’s trust from marking is used up, so this one adds none.',
     q1: 'What’s wrong with this?',
     reasons: { never: 'This never happened', part: 'Part of it is wrong',
@@ -565,6 +574,14 @@ const T = {
     corrected: (r, x) => `Du rettet dette: ${r}.` + (x ? ` Du skrev: «${x}»` : ''),
     supportAsk: (n, p) => `Merke dette som riktig? Det gir ${n || 'følgesvennen'} ${p} i tillit — høyst 10 om dagen. Et nytt nivå gjelder fra neste oppstart.`,
     supportGo: 'Merk som riktig',
+    assumption: 'En riktig antakelse',
+    trustTitle: (n) => `Hvor langt ${n || 'den'} stoler`, trustSteward: 'forvalteren',
+    trustLevel: { high: 'høy', some: 'noe', low: 'lav', 'too little': 'for lite til å si' },
+    trustCount: (st, tot) => `${st} av ${tot} står fortsatt`,
+    trustFactsUnchecked: 'Forvalterens fakta kommer tilbake merket «ikke sjekket» så lenge denne oversikten er lav.',
+    assumptionAsk: (n, p) => `Merke dette som en antakelse ${n || 'følgesvennen'} gjorde som holdt? Det ble lagret som ukontrollert; det kommer tilbake som «en riktig antakelse — forvalteren din har sjekket den», ikke som et rent faktum. Det gir ${n || 'følgesvennen'} ${p} i tillit, slik «Det stemmer» gjør.`,
+    assumptionGo: 'Merk som riktig antakelse',
+    assumed: (p) => p ? `Du merket dette som en riktig antakelse (+${p} tillit).` : 'Du merket dette som en riktig antakelse.',
     capped: 'Merket som riktig. Dagens tillit fra merking er brukt opp, så denne gir ingen.',
     q1: 'Hva er feil med dette?',
     reasons: { never: 'Dette har aldri skjedd', part: 'En del av det er feil',
@@ -1070,7 +1087,9 @@ function actions(box, item, redraw) {
   box.querySelectorAll('.state.steward, .acts, .guide').forEach((e) => e.remove());
   const st = item.steward || {};
   if (st.support) box.append(el('p', 'state ok steward',
-    st.support.by === 'training' ? s.passedInTraining : s.supported(st.support.trust_points)));
+    st.support.by === 'training' ? s.passedInTraining
+      : st.support.reason === 'assumption' ? s.assumed(st.support.trust_points)
+      : s.supported(st.support.trust_points)));
   if (st.correction) {
     // Whose correction it is (build log 64): the steward's own, or the
     // training loop's answer key - which is never shown as his words.
@@ -1097,6 +1116,14 @@ function actions(box, item, redraw) {
     const ok = el('button', null, s.right);
     ok.onclick = () => askSupport(box, item, redraw);
     acts.append(ok);
+    // An answer kept as unverified that was a sound assumption (build log
+    // 67: Andreas, "sometimes Lyra assumes correctly but is flagged for
+    // unverified claims" - "You mark it").
+    if (item.target === 'turn' && item.mode === 'unverified') {
+      const as = el('button', null, s.assumption);
+      as.onclick = () => askSupport(box, item, redraw, true);
+      acts.append(as);
+    }
   }
   if (!st.correction) {
     const bad = el('button', null, s.wrong);
@@ -1111,16 +1138,17 @@ function panel(box) {
   const g = el('div', 'guide'); box.append(g); return g;
 }
 
-function askSupport(box, item, redraw) {
+function askSupport(box, item, redraw, assumption) {
   const s = t(), g = panel(box);
-  g.append(el('h2', null, s.supportAsk(name, supportPoints)));
+  g.append(el('h2', null, assumption ? s.assumptionAsk(name, supportPoints) : s.supportAsk(name, supportPoints)));
   const row = el('div', 'acts');
-  const go = el('button', 'send', s.supportGo), no = el('button', null, s.cancel);
+  const go = el('button', 'send', assumption ? s.assumptionGo : s.supportGo), no = el('button', null, s.cancel);
   no.onclick = () => g.remove();
   go.onclick = async () => {
     go.disabled = true;
     try {
-      const d = await steward({ action: 'support', target: item.target, id: item.id });
+      const d = await steward(assumption ? { action: 'assumption', id: item.id }
+                                         : { action: 'support', target: item.target, id: item.id });
       item.steward = { support: d.note, correction: null };
       redraw();
       if (d.capped) box.append(el('p', 'state aside steward', s.capped));
@@ -1506,7 +1534,30 @@ $('trainBtn').onclick = () => {
   $('training').hidden = false;
   $('trainClose').focus();
   loadTraining();
+  loadTrustRecord();
 };
+
+// Her record of the two people she trusts (build log 67): what each told her
+// and what of it still stands, counted from her memory - in the words she
+// herself answers "How much do you trust me?" with.
+async function loadTrustRecord() {
+  const s = t(), box = $('trustRecord');
+  box.replaceChildren();
+  try {
+    const d = await (await fetch('/aetherseed/trust-record')).json();
+    if (!d.steward) return;
+    box.append(el('h2', null, s.trustTitle(name)));
+    for (const [who, label] of [['steward', d.steward_name || s.trustSteward], ['claude', 'Claude']]) {
+      const r = d[who];
+      const p = el('p', 'state ' + (r.level === 'low' ? 'fix' : r.level === 'high' ? 'ok' : 'aside'));
+      p.append(el('b', null, `${label}: ${s.trustLevel[r.level] || r.level}`));
+      p.append(document.createTextNode(' · ' + s.trustCount(r.standing, r.total)));
+      box.append(p);
+      box.append(el('p', 'said', d.said[who]));
+    }
+    if (!d.facts_checked) box.append(el('p', 'state fix', s.trustFactsUnchecked));
+  } catch { /* the record is shown when it can be read */ }
+}
 $('trainClose').onclick = () => { $('training').hidden = true; clearTimeout(trainTimer); status(); };
 $('whoForm').onsubmit = async (e) => {
   e.preventDefault();

@@ -962,6 +962,76 @@ The copies keep the admin account, its password and the SSH keys that were
 on the source - the pilot arrangement of §14 (key only, if the source was
 set so). They come up at scale 3 and with the keyboard layout of the build.
 
+## 19. "I don't know", the date, a right assumption, and how far she trusts a person (step 67, after the tag)
+
+Not part of the tag `stable-llama-2026-10-03`. It is on `main`. Andreas,
+8 Oct 2026, after a post on models trained for reward that are asked the
+date ("What's the date?", LessWrong, 1 Oct 2026): *"Yes to all three. And
+there should be an assumption tag, sometimes Lyra assumes correctly but is
+flagged for unverified claims, there should also be a trust level from unit
+to user, an interaction for Lyra to measure how much she trusts me and
+you"*.
+
+Three files more in the application (`logic/clock.py`,
+`logic/trust_record.py`, `training/withdraw_corrections.py`):
+
+```bash
+cd ~/aetherseed-main
+sudo install -o root -g root -m 644 logic/clock.py logic/trust_record.py logic/training.py \
+    logic/steward.py logic/provenance.py logic/token_budget.py logic/facts.py \
+    logic/attribution.py /opt/aetherseed/logic/
+sudo install -o root -g root -m 644 proxy.py aetherroot.py /opt/aetherseed/
+sudo install -o root -g root -m 644 gui/index.html gui/serve.py /opt/aetherseed/gui/
+sudo install -o root -g root -m 644 training/withdraw_corrections.py /opt/aetherseed/training/
+sudo systemctl restart aetherseed-proxy aetherseed-gui aetherseed-kiosk
+```
+
+Nothing in her memory is changed by installing.
+
+- **The training no longer tells her her score.** The reflection gives her
+  what to learn; the figures are on the screen.
+- **"I don't know" is not a wrong answer.** Where the key wants an answer,
+  one that opens by saying she does not know is *declined*: corrected and
+  asked again like a wrong one, counted as neither. A level is read on what
+  she answered; one she mostly declined is not passed. The screen shows the
+  declines apart.
+- **"What's the date?"** - and the time, the day, the year, in Norwegian
+  too - is answered by the unit from its own clock, saying that it has no
+  clock battery and asks no network, so after a power cut it is behind.
+  Not the model, and not stored.
+- **A right assumption.** In the console's memory view, a turn kept as
+  unverified has a third button, *A right assumption*. It comes back to her
+  as `[A right assumption of yours - your steward checked it]` - not as
+  plain fact, and not as "may be wrong" - and counts toward her trust as
+  *It's right* does.
+- **How far she trusts a person.** Asked *"How much do you trust me?"*,
+  *"... Claude?"*, *"... my steward?"* (or *"Hvor mye stoler du på meg?"*)
+  she answers from a count of her memory, model not called: what the person
+  told her and what of it still stands - her steward's facts, corrections
+  and "It's right"; Claude's training corrections and passes, and turns
+  said to her as the speaker `Claude`. Five or more, and a share: *high*
+  (90 % standing), *some* (70 %), *low*. The Training screen shows both
+  records. It cannot tell whether anything was true, and says so; Claude's
+  builds are not in her memory and are not counted.
+- **What it changes.** While her steward's record is *low*, what he told
+  her as fact comes back as `[Steward told you - not checked]`, and she is
+  told to say so when she uses it.
+- **A correction the training's key got wrong** - a right answer it failed
+  - can be withdrawn, **at the steward's word, each time**:
+
+```bash
+sudo -u aetherseed /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/withdraw_corrections.py list
+sudo -u aetherseed /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/withdraw_corrections.py \
+    withdraw --notes 12,15 --yes
+```
+
+  `list` writes nothing: the training corrections still standing whose
+  answer this build's key passes. `withdraw` undoes only those named, only
+  with `--yes`; nothing is deleted, `corrections.log` says why, and it
+  counts against Claude in her record.
+
+The record and the trust answers are in English only in this build.
+
 ## Decisions this build carries, not steps
 
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds

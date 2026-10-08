@@ -221,6 +221,9 @@ SUPPORTED_LABEL = "[Marked right by your steward]"
 # 64). The words say what happened and no more: a check passed. The check
 # reads for words of the answer key; it is not the steward calling it right.
 PASSED_LABEL = "[Passed a check in training]"
+# An answer of hers the build's own reading had kept as unverified, and her
+# steward has since marked as a right assumption (build log 67).
+ASSUMPTION_LABEL = "[A right assumption of yours - your steward checked it]"
 CORRECTION_REASONS = {
     "never": "this never happened",
     "part": "part of it is wrong",
@@ -232,7 +235,8 @@ TRUE_MAX = 140           # characters of "what is true" carried on the line
 # One line of the system prompt, only on a turn where a tagged line is shown.
 TAG_NOTE = ("Some memory lines carry a tag. [Unverified] and [Corrected] lines are earlier "
             "answers of yours that were unchecked or wrong: do not repeat them as fact. "
-            "Where a correction says what is true, answer with that.")
+            "Where a correction says what is true, answer with that. A [A right assumption] "
+            "line is an assumption of yours that your steward checked: it held.")
 
 
 def memory_tag(mode: str, correction=None, supported=False) -> str:
@@ -264,6 +268,8 @@ def memory_tag(mode: str, correction=None, supported=False) -> str:
         # earlier answer of yours that may be wrong" - and asked again she
         # said "Reader". A story stays a story whoever marks it.
         by = supported.get("by") if isinstance(supported, dict) else "steward"
+        if isinstance(supported, dict) and supported.get("reason") == "assumption":
+            return ASSUMPTION_LABEL
         return PASSED_LABEL if by == "training" else SUPPORTED_LABEL
     if mode == UNVERIFIED:
         return UNVERIFIED_LABEL

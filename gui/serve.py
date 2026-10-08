@@ -146,7 +146,7 @@ def _console_seen():
 # string (?before=&q=&limit=), so it is matched on its path alone.
 # /aetherseed/shelf: the steward's own documents and how far each is read (62).
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", "/api/tags",
-               "/aetherseed/shelf", "/aetherseed/training")
+               "/aetherseed/shelf", "/aetherseed/training", "/aetherseed/trust-record")
 PROXIED_GET_QUERY = ("/aetherseed/memories",)
 
 # The page's own script is pinned by the hash of its bytes.
@@ -312,7 +312,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
                    else "record" if self.path.endswith("/record")
                    else "rings" if self.path.endswith("/rings")
                    else "shelf" if self.path.endswith("/shelf")
-                   else "training" if self.path.endswith("/training") else "page")
+                   else "training" if self.path.endswith("/training")
+                   else "record" if self.path.endswith("/trust-record") else "page")
             self._relay("GET")
             return
         if self.path == FIRST_START_PATH:

@@ -172,7 +172,7 @@ def declined(task, reply, ok):
 # says, it is not right.
 _TAG_SAID = re.compile(
     r"\[(?:Corrected|Unverified|Passed a check|Fiction,|Episode|Known|Truncat|Ring\]|"
-    r"MEMORY CONTEXT|WORKSPACE DATA|Marked right)|^\s*(?:unverified|corrected)\s*[.:]", re.I)
+    r"MEMORY CONTEXT|WORKSPACE DATA|Marked right|A right assumption|Assumption\])|^\s*(?:unverified|corrected)\s*[.:]", re.I)
 
 
 def now():

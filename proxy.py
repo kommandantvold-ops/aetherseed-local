@@ -36,6 +36,7 @@ from logic.gate_answers import (is_level_question, level_text, refusal_text, tod
                                 tool_text, TOLD_BY_THE_UNIT, is_ladder_question,
                                 ladder_text, only_asks_for_the_file, file_text)
 from logic.clock import is_date_question, date_text
+from logic import trust_record
 
 # ============================================================
 # CONFIGURATION
@@ -61,7 +62,7 @@ from logic import training
 from logic import steward
 from logic import library as lib
 from logic import own_shelf
-from logic.facts import FACT_TAG, FACT_NOTE
+from logic.facts import FACT_TAG, FACT_NOTE, FACT_TAG_UNCHECKED, FACT_NOTE_UNCHECKED
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
@@ -1259,6 +1260,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._answer_from_the_record(model, user_msg)
             return
 
+        # ---- HOW FAR SHE TRUSTS A PERSON: their record (build log 67) ----
+        about = trust_record.trust_question(user_msg, _steward())
+        if about:
+            print(f"[trust] the record of {about} told from her memory (model not called)",
+                  flush=True)
+            self._serve_plain(model, trust_record.answer(root.store, about, speaker, _steward()),
+                              source="record", mode="record")
+            return
+
         # ---- HER TAGS AND CORRECTIONS ----
         # Counted and quoted from the notes themselves, model not called
         # (build log 64): what her steward corrected, what training did.
@@ -1443,8 +1453,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except TypeError:
             # a root without the report argument (older code, test stand-ins)
             memory_context = root.retrieve_context(user_msg, request_mode=request_mode)
-        if memory_context and FACT_TAG in memory_context:
+        if memory_context and FACT_TAG[:-1] in memory_context:
             system_prompt += "\n" + FACT_NOTE
+            if FACT_TAG_UNCHECKED in memory_context:
+                system_prompt += " " + FACT_NOTE_UNCHECKED
         # Nothing is set aside (build log 64): a turn that is not plain fact
         # comes back with its tag, and this line says what a tag asks of her.
         # The check below is given the block WITHOUT those lines: what she
@@ -1812,6 +1824,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 },
             })
             return
+        if self.path == "/aetherseed/trust-record":
+            # Her record of the people she trusts (build log 67): counted from
+            # her memory, with the words she answers in.
+            try:
+                st, cl = trust_record.steward_record(root.store), trust_record.claude_record(root.store)
+                self._send_json({"steward": st, "claude": cl,
+                                 "steward_name": _steward(),
+                                 "facts_checked": st["level"] != "low",
+                                 "min_record": trust_record.MIN_RECORD,
+                                 "said": {"steward": trust_record.steward_text(st, _steward()),
+                                          "claude": trust_record.claude_text(cl)}})
+            except Exception as e:
+                print(f"[trust] the record could not be read: {e!r}", flush=True)
+                self._send_json({"error": "the record could not be read"}, status=500)
+            return
         if self.path == "/aetherseed/rings":
             # The ring tree: every ring, what it chose, her own words (labelled
             # by the page), the turns it took - and what the steward has done
@@ -1913,6 +1940,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if action == "support":
                 out = steward.support(root.store, trust, req.get("target"), req.get("id"),
                                       log_path=log)
+            elif action == "assumption":
+                out = steward.right_assumption(root.store, trust, req.get("id"), log_path=log)
             elif action == "correct":
                 out = steward.correct(root.store, req.get("target"), req.get("id"),
                                       req.get("reason"), req.get("text") or "",

@@ -1144,6 +1144,14 @@ class AetherRoot:
         lines, used, ids = [], 0, []
         index, by_id = self._facts_index()
         query = fact_query(user_msg)
+        checked = True
+        if index is not None and query.strip():
+            # how the steward's facts come back depends on his record (67)
+            from logic.trust_record import steward_facts_checked
+            try:
+                checked = steward_facts_checked(self.store)
+            except Exception:
+                checked = True
         if index is not None and query.strip():
             budget = self.config.get("facts_budget_chars", FACTS_BUDGET_CHARS)
             for r in index.rank(query):
@@ -1152,7 +1160,7 @@ class AetherRoot:
                 if r["score"] < FACT_SCORE_THRESHOLD:
                     break                      # ranked by score: nothing below qualifies
                 f = by_id[r["id"]]
-                line = sanitize_injected(fact_line(f["text"], f["source"]))
+                line = sanitize_injected(fact_line(f["text"], f["source"], checked))
                 if used + len(line) > budget:
                     continue                   # a shorter one may still fit
                 lines.append(line)

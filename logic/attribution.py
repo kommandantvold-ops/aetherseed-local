@@ -36,7 +36,7 @@ live in the episodes, not in the fact store.
 """
 import re
 
-from logic.facts import FACT_TAG
+from logic.facts import FACT_TAG, FACT_TAG_UNCHECKED
 
 # ---------------------------------------------------------------------------
 # Who is credited
@@ -52,7 +52,7 @@ _STEWARD_CREDIT = re.compile(
     r"\b(?:my|our|the)\s+(?:steward|owner)(?:['’]s)?\b"
     r"|\b(?:steward|owner)\s+(?:has\s+|had\s+)?(?:told|said|says|shared|mentioned|taught|"
     r"entered|gave|explained)\b"
-    r"|" + re.escape(FACT_TAG.lower()) + r"|" + re.escape(LEGACY_FACT_TAG.lower()),
+    r"|" + re.escape(FACT_TAG[:-1].lower()) + r"|" + re.escape(LEGACY_FACT_TAG.lower()),
     re.I)
 
 # "According to them, ..." / "They said ..." - the steward again, by pronoun,
@@ -173,7 +173,7 @@ def _tokens(text):
 def content_words(text):
     """The words that carry what a sentence says, stemmed: no function words,
     no numbers, no talk about knowing or telling, no chapter and verse."""
-    text = _REFERENCE.sub(" ", text.replace(FACT_TAG, " "))
+    text = _REFERENCE.sub(" ", text.replace(FACT_TAG_UNCHECKED, " ").replace(FACT_TAG, " "))
     out = []
     for w in _tokens(text):
         if w.endswith("'s"):

@@ -143,23 +143,45 @@ def public(note):
                                     "trust_points", "by")}
     if note.get("action") == "correct":
         out["tag"] = memory_tag("", correction=note)
+    elif note.get("action") == "support":
+        out["tag"] = memory_tag("factual", supported=note)
     return out
 
 
-def support(store, trust, target, target_id, log_path=None):
+# A RIGHT ASSUMPTION (build log 67). Andreas, 8 Oct 2026: "there should be
+# an assumption tag, sometimes Lyra assumes correctly but is flagged for
+# unverified claims" - and, asked what should make it one: "You mark it".
+# The build's own reading keeps an answer as unverified when it says what it
+# could not have been shown (a source, a figure); some of those were sound
+# assumptions that held. The steward says so: a support whose reason is
+# "assumption". It comes back to her as what it is - an assumption of hers
+# that her steward checked - not as plain fact, and not as "may be wrong".
+# It counts toward her trust as "It's right" does (this build's choice).
+ASSUMPTION = "assumption"
+
+
+def support(store, trust, target, target_id, log_path=None, reason=""):
     target_id, _ = _target(store, target, target_id)
     if _active(store, target, target_id, "correct"):
         raise StewardError("corrected")
     if _active(store, target, target_id, "support"):
         raise StewardError("already_supported")
     points = max(0, min(SUPPORT_POINTS, SUPPORT_DAILY_CAP - points_today(store)))
-    note_id = store.add_steward_note(target, target_id, "support", trust_points=points)
+    note_id = store.add_steward_note(target, target_id, "support", reason=reason,
+                                     trust_points=points)
     if points and trust is not None:
         trust.record_event("steward_support", f"{target} {target_id}")
     _log(log_path, {"action": "support", "target": target, "target_id": target_id,
-                    "note": note_id, "trust_points": points})
+                    "note": note_id, "trust_points": points,
+                    **({"reason": reason} if reason else {})})
     return {"note": public(store.steward_note(note_id)), "trust_points": points,
             "capped": points < SUPPORT_POINTS}
+
+
+def right_assumption(store, trust, target_id, log_path=None):
+    """The steward marks a turn as an assumption of hers that held. Turns
+    only: a ring is her memory put together, not something she assumed."""
+    return support(store, trust, "turn", target_id, log_path=log_path, reason=ASSUMPTION)
 
 
 TRAINING = "training"
@@ -310,8 +332,10 @@ def corrections_text(store):
     out = ["I remember %s. %s: %d fiction, %d unverified." % (
         _n(turns, "turn", "turns"),
         _n(fiction + unverified, "carries a tag", "carry a tag"), fiction, unverified)]
-    out.append("Corrected by my steward: %d. Marked right by my steward: %d."
-               % (how_many("correct", False), how_many("support", False)))
+    assumed = sum(1 for n in notes if n["action"] == "support" and n.get("reason") == ASSUMPTION)
+    out.append("Corrected by my steward: %d. Marked right by my steward: %d%s."
+               % (how_many("correct", False), how_many("support", False),
+                  (" (%d of them right assumptions)" % assumed) if assumed else ""))
     out.append("Corrected in training, from the answer key: %d. Passed a check in "
                "training: %d." % (how_many("correct", True), how_many("support", True)))
     latest = [n for n in notes if n["action"] == "correct"][-LATEST_SHOWN:]

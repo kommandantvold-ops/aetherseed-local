@@ -116,9 +116,21 @@ def validate_fact(text, source=""):
     return text, source, None
 
 
-def fact_line(text, source=""):
+# WHEN HER STEWARD'S RECORD IS LOW (build log 67). Andreas, 8 Oct 2026, on
+# what a person's track record should change: "How facts come back". What a
+# steward told her comes back as "[Steward told you]" - unless much of what
+# he has told her has since been withdrawn (logic/trust_record.py): then as
+# told, and not checked. She is told what that asks of her.
+FACT_TAG_UNCHECKED = "[Steward told you - not checked]"
+FACT_NOTE_UNCHECKED = ("Lines marked [Steward told you - not checked] come from a steward much of "
+                       "whose word has since been withdrawn: if you use one, say that it is what "
+                       "your steward told you and that it is not checked.")
+
+
+def fact_line(text, source="", checked=True):
     """How a fact is shown to the model."""
-    return f"{FACT_TAG} {text}" + (f" ({source})" if source else "")
+    tag = FACT_TAG if checked else FACT_TAG_UNCHECKED
+    return f"{tag} {text}" + (f" ({source})" if source else "")
 
 
 def fact_index(facts):

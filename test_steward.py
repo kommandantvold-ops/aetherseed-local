@@ -250,6 +250,43 @@ class Supporting(_Store):
         self.assertEqual(self.store.set_aside_ring_ids(), set())
 
 
+class ARightAssumption(_Store):
+    """Build log 67. Andreas, 8 Oct 2026: "there should be an assumption tag,
+    sometimes Lyra assumes correctly but is flagged for unverified claims" -
+    "You mark it"."""
+
+    def test_it_is_a_support_that_says_it_was_an_assumption(self):
+        self.store.set_episode_mode(self.moon, "unverified")
+        out = S.right_assumption(self.store, self.trust, self.moon, log_path=self.log)
+        self.assertEqual(out["note"]["reason"], S.ASSUMPTION)
+        self.assertEqual(out["note"]["tag"], "[A right assumption of yours - your steward checked it]")
+        self.assertEqual(self.trust.state["resonance"], S.SUPPORT_POINTS, "it counts as 'It's right' does")
+        self.assertEqual(self.log_lines()[-1]["reason"], "assumption")
+        # what was said is not changed: it is not made plain fact
+        self.assertEqual(self.store.episode(self.moon)["mode"], "unverified")
+
+    def test_it_comes_back_to_her_as_an_assumption_that_held_not_as_may_be_wrong(self):
+        self.store.set_episode_mode(self.moon, "unverified")
+        S.right_assumption(self.store, self.trust, self.moon)
+        ctx = self.root.retrieve_context("where do I live")
+        self.assertIn("[A right assumption of yours - your steward checked it] [Episode]", ctx)
+        self.assertNotIn("[Unverified - an earlier answer of yours that may be wrong] [Episode] "
+                         "Steward: where do I live", ctx)
+
+    def test_it_is_for_turns_and_can_be_undone(self):
+        with self.assertRaises(S.StewardError):
+            S.right_assumption(self.store, self.trust, 999999)
+        out = S.right_assumption(self.store, self.trust, self.cat)
+        S.undo(self.store, self.trust, out["note"]["id"])
+        self.assertEqual(self.trust.state["resonance"], 0)
+        self.assertEqual(S.status_for(self.store, "turn", [self.cat]), {})
+
+    def test_her_record_counts_them(self):
+        S.right_assumption(self.store, self.trust, self.moon)
+        self.assertIn("Marked right by my steward: 1 (1 of them right assumptions).",
+                      S.corrections_text(self.store))
+
+
 class TheTurnsList(_Store):
 
     def test_newest_first_paged_and_searched(self):
@@ -327,6 +364,12 @@ class AtTheProxy(unittest.TestCase):
                          {"action": "support", "target": "turn", "id": self.turn})
         self.assertEqual((st, d["trust_points"]), (200, 2))
         self.assertEqual(self.proxy.trust.state["resonance"], 2)
+
+    def test_a_right_assumption_through_the_route(self):
+        st, d = self.req("POST", "/aetherseed/steward", {"action": "assumption", "id": self.turn})
+        self.assertEqual((st, d["note"]["reason"]), (200, "assumption"))
+        st, m = self.req("GET", "/aetherseed/memories")
+        self.assertEqual(m["turns"][0]["steward"]["support"]["reason"], "assumption")
 
     def test_refusals_carry_a_code(self):
         st, d = self.req("POST", "/aetherseed/steward",
