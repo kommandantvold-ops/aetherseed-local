@@ -1786,10 +1786,22 @@ function ringLine(s, r) {
 let startChecked = false;
 async function status() {
   try {
-    const d = await (await fetch('/aetherseed/status')).json();
-    const c = d.companion || { configured: false };
+    // A proxy that does not answer is "down", never "not set up" (build log
+    // 68e): on Xena, with the proxy stopped for a test, the console fell back
+    // to the first-run screen and asked a named unit for a language and a name.
+    const r = await fetch('/aetherseed/status');
+    if (!r.ok) throw new Error('status ' + r.status);
+    const d = await r.json();
+    if (!d || typeof d.companion !== 'object' || d.companion === null) throw new Error('no companion');
+    const c = d.companion;
     if (c.configured) {
       if (c.name !== name || c.language !== lang || (c.steward || null) !== stewardName) applyCompanion(c);
+      // set up after all - the setup screen was shown while it could not be
+      // read: back to the console (not while the first start is on screen)
+      if (!$('setup').hidden && $('stepStart').hidden) {
+        $('setup').hidden = true;
+        send.disabled = false; input.disabled = false;
+      }
       // named, and the first start not finished (a restart in between, or the
       // Wi-Fi would not come up): the unit's own screen goes on from there
       if (!startChecked) { startChecked = true; if (await needsFirstStart()) showStart(); }
