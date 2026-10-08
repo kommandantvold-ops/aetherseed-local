@@ -35,6 +35,7 @@ from intent_detection import detect_intent, execute_intent, in_workspace
 from logic.gate_answers import (is_level_question, level_text, refusal_text, todo_text,
                                 tool_text, TOLD_BY_THE_UNIT, is_ladder_question,
                                 ladder_text, only_asks_for_the_file, file_text)
+from logic.clock import is_date_question, date_text
 
 # ============================================================
 # CONFIGURATION
@@ -1309,6 +1310,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             print("[gate] trust level answered from the gate (model not called)",
                   flush=True)
             self._serve_plain(model, text, source="gate", mode="gate", used_tools=True)
+            return
+
+        # ---- THE DATE: the unit's clock, said by the unit (build log 67) ----
+        if is_date_question(user_msg):
+            print("[clock] the date told from the unit's clock (model not called)", flush=True)
+            self._serve_plain(model, date_text(language=_settings()[1]), source="clock",
+                              mode="clock")
             return
 
         # ---- ITS TRUST LEVELS, IN ORDER ----
