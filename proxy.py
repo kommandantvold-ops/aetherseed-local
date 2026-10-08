@@ -67,7 +67,7 @@ from logic.facts import FACT_TAG, FACT_NOTE, FACT_TAG_UNCHECKED, FACT_NOTE_UNCHE
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
-from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
+from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected, MODELS,
                                 sanitize_model_output, first_paragraph,
                                 ends_sentence, cut_at_scaffold_marker,
                                 strip_leading_artefacts, opening_may_be_artefact,
@@ -1826,7 +1826,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "soft_stop_tokens": SOFT_STOP_TOKENS,
                     "num_predict": GENERATION_OPTIONS.get("num_predict"),
                     "wall_clock_s": MAX_GENERATION_SECONDS,
-                    "prompt_ceiling": 864,
+                    "prompt_ceiling": MODELS[MODEL]["ceiling"],   # the served model's (build log 68)
                 },
             })
             return

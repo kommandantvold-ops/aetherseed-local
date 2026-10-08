@@ -100,5 +100,19 @@ class TheWarmUpAsksForIt(unittest.TestCase):
         self.assertIsNone(re.search(r"llama3\.2:3b\"", unit))
 
 
+
+class TheStatusSaysTheServedCeiling(unittest.TestCase):
+    """Andreas, 8 Oct: "Xena is up I see in the gui that prompt ceiling is
+    still 864, is that correct?" - it was not: the status said 864 on every
+    unit while the guard on Xena used 2785."""
+
+    def test_the_status_reads_the_served_models_ceiling(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "proxy.py")) as f:
+            src = f.read()
+        self.assertIn('"prompt_ceiling": MODELS[MODEL]["ceiling"]', src)
+        self.assertNotIn('"prompt_ceiling": 864', src)
+
+
 if __name__ == "__main__":
     unittest.main()
