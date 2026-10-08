@@ -90,13 +90,19 @@ def ask(model, msgs, timeout=180):
 
 def restart_server(model):
     subprocess.run(["sudo", "systemctl", "restart", "hailo-ollama"], check=True)
+    up = False
     for _ in range(60):
         time.sleep(2)
-        try:
-            with urllib.request.urlopen(URL + "/hailo/v1/list", timeout=5):
-                break
-        except Exception:
-            continue
+        # /hailo/v1/list is 5.1.1's; HailoRT 5.4.0's server answers /api/tags
+        for path in ("/api/tags", "/hailo/v1/list"):
+            try:
+                with urllib.request.urlopen(URL + path, timeout=5):
+                    up = True
+                    break
+            except Exception:
+                continue
+        if up:
+            break
     # load the model again with a tiny prompt, so the next timing is not a load
     ask(model, [{"role": "user", "content": "hi"}])
 

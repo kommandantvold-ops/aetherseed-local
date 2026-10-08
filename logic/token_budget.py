@@ -99,6 +99,23 @@ MODELS = {
         "ceiling": 2592,
         "tokenizer": "qwen2.5-instruct-1.5b.tokenizer.json",
     },
+    # HailoRT 5.4.0 (plan claude/runtime-540-llama1b-plan.md, Andreas 8 Oct;
+    # first on Xena): the 5.4.0 GenAI zoo's Llama3.2-1B-Instruct.hef,
+    # 1,402,376,894 bytes, sha256 0a0d378c...ee40536e (Hailo publishes none).
+    # Its output heads are 4 x 32064 = 128256, the 3B's vocabulary, so the
+    # 3B's tokenizer.json is the one. Ceiling measured on Xena 8 Oct 2026
+    # (her clock said 5 Oct) with tools/measure_ceiling.py, firmware 5.4.0:
+    # 2785 works and 2786 fails, each twice on a fresh server. Past it: no
+    # error and no lines at all - silent, as on 5.1.1. Not a whole number of
+    # 96-token chunks as before: 2784 = 29 x 96, so this count is one more
+    # than the server's own - unexplained (perhaps the begin-of-text token);
+    # SAFETY_MARGIN covers it. Hailo's "context 2048" was wrong the other way.
+    "llama3.2:1b": {
+        "vocab": 128256,
+        "template": "llama3",
+        "ceiling": 2785,
+        "tokenizer": "tokenizer.json",
+    },
 }
 
 
