@@ -712,9 +712,14 @@ _BLOCK_MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
 # capitals. "[Unknown]" is not one of ours (she writes it where she does not
 # know) and "[Steward told you]" is still an attribution: both are left.
 _BARE_TAGS = ("[Known]", "[Corrected]", "[Correction]", "[Unverified]", "[Fiction]",
-              "[Passed]", "[Pattern]", "[Steward told me]", "[Assumption]")
+              "[Passed]", "[Pattern]", "[Steward told me]", "[Assumption]",
+              # Her own answer ending "... 40 liters of water. [A right
+              # assumption]" (copy check of step 67, 8 Oct 2026): the mark is
+              # her steward's to give, never hers to give herself.
+              "[A right assumption]", "[Right assumption]")
 _BARE_TAG = re.compile(
-    r"\[(?:known|corrected|correction|unverified|fiction|passed|pattern|steward told me|assumption)\][ \t]?",
+    r"\[(?:known|corrected|correction|unverified|fiction|passed|pattern|steward told me|assumption|"
+    r"a right assumption|right assumption)\][ \t]?",
     re.I)
 
 

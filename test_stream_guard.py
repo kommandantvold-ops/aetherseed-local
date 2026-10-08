@@ -445,6 +445,20 @@ class TestStreamGuard(unittest.TestCase):
                 self.assertEqual(ai, want)
                 self.assertEqual(text, ai)
 
+    def test_she_cannot_mark_her_own_answer_a_right_assumption(self):
+        # copy check of step 67, 8 Oct 2026: "... 40 liters of water. [A right
+        # assumption]" - the mark is her steward's to give, not hers.
+        for chunks, want in (
+            (["There", " are", " 40", " litres", ".", " [A", " right", " assumption", "]"],
+             "There are 40 litres."),
+            (["It", " is", " 40", " [Right assumption]", " litres", "."], "It is 40 litres."),
+            (["It", " was", " marked", " [A right assumption]", "."], "It was marked a right assumption."),
+        ):
+            with self.subTest(chunks="".join(chunks)):
+                lines, text, ai = self.run_chunks(chunks)
+                self.assertEqual(ai.rstrip(), want)
+                self.assertEqual(text, ai)
+
     def test_what_is_not_one_of_her_tags_is_left(self):
         for chunks in (["AetherSeed", " is", " from", " [Unknown]", "."],
                        ["Your", " [Steward told you]", " line", "."],
