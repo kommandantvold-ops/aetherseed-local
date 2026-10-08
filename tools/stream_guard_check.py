@@ -77,7 +77,7 @@ walls = []
 for i, (prompt, system) in enumerate(runs, 1):
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
     t0 = time.time()
-    raw, ai = proxy.call_hailo_chat("llama3.2:3b", msgs)
+    raw, ai = proxy.call_hailo_chat(proxy.MODEL, msgs)
     dt = round(time.time() - t0, 1)
     walls.append(dt)
     try:

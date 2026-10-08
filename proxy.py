@@ -37,6 +37,7 @@ from logic.gate_answers import (is_level_question, level_text, refusal_text, tod
                                 ladder_text, only_asks_for_the_file, file_text)
 from logic.clock import is_date_question, date_text
 from logic import trust_record
+from logic import served
 
 # ============================================================
 # CONFIGURATION
@@ -275,7 +276,10 @@ STORE_FAILURES = 0
 # ---- a ring in her own words (logic/rings.py) ------------------------------
 # Asked for after a ring closes, in the background, one ring at a time. Only
 # the proxy can reach the model, so this lives here rather than in AetherRoot.
-MODEL = "llama3.2:3b"
+# The model this unit serves is the unit's own setting (logic/served.py,
+# build log 68): llama3.2:3b on Lyra and the pilots, llama3.2:1b on a unit on
+# HailoRT 5.4.0. A name without a measured ceiling stops the proxy here.
+MODEL = served.served_model()
 _OWN_WORDS_LOCK = threading.Lock()
 
 
@@ -1208,10 +1212,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         gate = lesson["gate"] if lesson else getattr(spark, "gate", None)
 
         messages = data.get("messages", [])
-        # The served model unless the caller names one (every caller in this
-        # repository names llama3.2:3b). Was "manifests:qwen3", a v1 name
-        # hailo-ollama has never served on this unit.
-        model = data.get("model") or MODEL
+        # The unit serves one model, its own (logic/served.py, build log 68),
+        # whatever model a caller names: callers written for the 3B named
+        # "llama3.2:3b", and a unit on the 1B has no such model. Was
+        # data.get("model") or MODEL; before that "manifests:qwen3".
+        model = MODEL
 
         if not messages:
             self._proxy_passthrough("POST", body)
@@ -1813,7 +1818,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "facts": rs.get("facts"),
                 "store_failures": STORE_FAILURES,
                 "willingness": rs.get("willingness_mean"),
-                "model": "llama3.2:3b",
+                "model": MODEL,
                 "companion": companion.public(companion.load(COMPANION_FILE)),
                 "languages": companion.language_choices(),
                 "bounds": {

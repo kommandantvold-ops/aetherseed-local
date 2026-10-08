@@ -1,0 +1,5 @@
+# HailoRT 5.4.0's driver names the device /dev/h1x-0 (subsystem hailo1x), and
+# Hailo's own rule (/lib/udev/rules.d) makes it 0666 - any process on the unit
+# could use the NPU. As /dev/hailo0 was on 5.1.1 (99-aetherseed-hailo.rules):
+# the hailo group only. Build log 68; installed only on a 5.4.0 unit.
+SUBSYSTEM=="hailo1x", MODE="0660", GROUP="hailo"

@@ -23,6 +23,8 @@ WorkingDirectory=/opt/aetherseed
 ExecStart=/opt/aetherseed/venv/bin/python3 /opt/aetherseed/proxy.py
 Environment=HOME=/var/lib/aetherseed
 Environment=PYTHONUNBUFFERED=1
+# The unit's own model (logic/served.py, build log 68); absent = llama3.2:3b.
+EnvironmentFile=-/etc/aetherseed/model.env
 Environment=AETHERSEED_TOKENIZER=/var/lib/aetherseed/tokenizer.json
 # Loopback by default. A UI on another machine needs 0.0.0.0 here - a
 # deliberate, visible change, not a shipped default.

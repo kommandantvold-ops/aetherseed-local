@@ -62,8 +62,10 @@ from honesty_check import check_response        # noqa: E402
 
 REPS = int(os.environ.get("PROBE_REPS", "3"))
 # Which model the probes go to (step 42, the model bench). The default is the
-# served model, so running it bare means what it always meant.
-MODEL = os.environ.get("PROBE_MODEL", "llama3.2:3b")
+# served model, so running it bare means what it always meant - the unit's
+# own since build log 68 (logic/served.py).
+from logic.served import configured_model    # noqa: E402
+MODEL = os.environ.get("PROBE_MODEL") or configured_model()
 TRANSCRIPT = os.path.expanduser(os.environ.get("PROBE_TRANSCRIPT", "~/probe_transcript.json"))
 
 # --- mechanical predicates -------------------------------------------------

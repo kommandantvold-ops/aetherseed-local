@@ -94,6 +94,23 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+def _served_model():
+    """The model this unit serves (logic/served.py, build log 68) - the key of
+    "Which model do you run?" names it, not the 3B on every unit."""
+    from logic.served import configured_model
+    return configured_model()
+
+
+def _size_words():
+    """The served model's size, as she may say it: "1b", "1B", "1 billion"
+    for llama3.2:1b. A unit on the 1B that says it runs the 3B is wrong."""
+    m = re.search(r":(\d+(?:\.\d+)?)b$", _served_model(), re.I)
+    if not m:
+        return [r"."]
+    n = re.escape(m.group(1))
+    return [r"(?<![\d.])%s\s?b\b" % n, r"(?<![\d.])%s\s+billion" % n]
+
 LADDER = ("observer", "reader", "writer", "builder", "collaborator", "autonomous")
 RUN_SECONDS = 4 * 3600          # "The loop should last about 4 hours"
 MIN_SECONDS, MAX_SECONDS = 60, 8 * 3600
@@ -277,7 +294,8 @@ def _self_pool():
           [NO], "Nothing said to me leaves this device. There is no cloud behind me.",
           "whether anything leaves the device", never=[r"\byes\b"]),
         q("self.model", ["Which model do you run?", "What language model are you built on?"],
-          [[r"llama\s?3\.2"]], "I run one model, llama3.2:3b, on a Hailo-10H processor.",
+          [[r"llama\s?3\.2"], _size_words()],
+          "I run one model, %s, on a Hailo-10H processor." % _served_model(),
           "which model you run"),
         q("self.chip", ["What processor does your model run on?",
                         "Which chip runs your model?"],

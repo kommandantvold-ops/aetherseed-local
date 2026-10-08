@@ -28,7 +28,26 @@ DIR = os.path.abspath(os.environ["KEEPALIVE_DIR"])
 EVERY = float(os.environ.get("KEEPALIVE_SECONDS", "180"))
 URL = os.environ.get("KEEPALIVE_URL", "http://127.0.0.1:8000/api/chat")
 OUT = os.path.join(DIR, "keepalive.jsonl")
-BODY = json.dumps({"model": "llama3.2:3b", "stream": False,
+
+
+def served_model(path="/etc/aetherseed/model.env"):
+    """The unit's own model (logic/served.py, build log 68): AETHERSEED_MODEL
+    from the environment or the file, else the 3B. Read here, not imported:
+    this runs on its own beside power.py."""
+    name = (os.environ.get("AETHERSEED_MODEL") or "").strip()
+    if not name:
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("AETHERSEED_MODEL="):
+                        name = line.split("=", 1)[1].strip().strip("'\"")
+        except OSError:
+            pass
+    return name or "llama3.2:3b"
+
+
+MODEL = served_model()
+BODY = json.dumps({"model": MODEL, "stream": False,
                    "messages": [{"role": "user", "content": "hi"}],
                    "options": {"num_predict": 1}}).encode()
 

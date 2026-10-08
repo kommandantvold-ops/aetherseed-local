@@ -374,6 +374,13 @@ def _default_path() -> Path:
 # duplicate id is rejected - so the build still wins on what the node is.
 UNIT_PREFIX = "unit."
 
+MODEL_MARK = "{model}"
+
+
+def _served_name():
+    from logic.served import configured_model
+    return configured_model()
+
 
 def _unit_path() -> Path:
     return Path(os.environ.get("AETHERSEED_UNIT_KNOWLEDGE")
@@ -445,6 +452,11 @@ def _parse_into(path: Path, entries: List[Dict], errors: List[str], seen: set,
             errors.append(f"{where} ({eid}): unit ids must start with {prefix}")
             continue
         text = (e.get("text") or "").strip()
+        # "{model}" is the model this unit serves (logic/served.py, build
+        # log 68): the curriculum is one file for every unit, and a unit on
+        # the 1B must not say it runs the 3B.
+        if MODEL_MARK in text:
+            text = text.replace(MODEL_MARK, _served_name())
         if not text:
             errors.append(f"line {lineno} ({eid}): empty text")
             continue

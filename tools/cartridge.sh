@@ -43,6 +43,11 @@ IDENTITY_FILES=(
   /etc/systemd/system/aetherseed-first-start.service
   /etc/systemd/system/aetherseed-new-identity.service
   /etc/udev/rules.d/99-aetherseed-hailo.rules
+  # build log 68: the unit's own model, and HailoRT 5.4.0's drop-in and device
+  # rule - MISSING on a unit on 5.1.1 serving the 3B, which is what they say.
+  /etc/aetherseed/model.env
+  /etc/systemd/system/hailo-ollama.service.d/hailort-540.conf
+  /etc/udev/rules.d/99-aetherseed-hailo1x.rules
   /etc/nftables.conf
   /etc/chromium/policies/managed/aetherseed.json
   /etc/systemd/timesyncd.conf.d/aetherseed.conf
@@ -79,7 +84,7 @@ collect() {
   while IFS=' ' read -r pkg ver; do
     emit "pkg.$pkg" "$ver"
   done < <(installed_packages \
-           | grep -E '^(h10-hailort|h10-hailort-pcie-driver|hailo-gen-ai-model-zoo|python3-h10-hailort|dkms)=' \
+           | grep -E '^(h10-hailort|h10-hailort-pcie-driver|hailo-gen-ai-model-zoo|python3-h10-hailort|hailort|dkms)=' \
            | tr '=' ' ')
 
   # Only genuinely installed packages: dpkg-query -W also lists ones that are
@@ -156,6 +161,10 @@ collect() {
   done
 
   emit device.node_mode  "$(stat -c '%a %U:%G' /dev/hailo0 2>/dev/null || echo MISSING)"
+  # HailoRT 5.4.0 names it /dev/h1x-0 (build log 68); only a 5.4.0 unit has it
+  if [ -e /dev/h1x-0 ]; then
+    emit device.h1x_node_mode "$(stat -c '%a %U:%G' /dev/h1x-0)"
+  fi
   emit service.hailo_ollama.enabled "$(systemctl is-enabled hailo-ollama 2>/dev/null || echo unknown)"
   emit service.proxy.enabled        "$(systemctl is-enabled aetherseed-proxy 2>/dev/null || echo unknown)"
   emit service.nftables.enabled     "$(systemctl is-enabled nftables 2>/dev/null || echo unknown)"

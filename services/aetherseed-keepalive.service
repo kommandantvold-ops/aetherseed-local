@@ -27,6 +27,8 @@ StateDirectory=aetherseed-keepalive
 Environment=KEEPALIVE_DIR=/var/lib/aetherseed-keepalive
 Environment=KEEPALIVE_SECONDS=180
 Environment=PYTHONUNBUFFERED=1
+# The unit's own model (logic/served.py, build log 68); absent = llama3.2:3b.
+EnvironmentFile=-/etc/aetherseed/model.env
 ExecStart=/usr/bin/python3 /opt/aetherseed/tools/keepalive.py
 Restart=always
 RestartSec=10

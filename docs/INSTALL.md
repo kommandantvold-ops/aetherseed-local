@@ -1048,6 +1048,96 @@ sudo -u aetherseed /opt/aetherseed/venv/bin/python3 -B /opt/aetherseed/training/
 
 The record and the trust answers are in English only in this build.
 
+## 20. A unit on HailoRT 5.4.0 serving Llama 3.2 1B (step 68, after the tag)
+
+Not part of the tag. Andreas, 8 Oct 2026, on the plan
+`claude/runtime-540-llama1b-plan.md`: *"All of that looks good, I have
+connected Xena she can get the 540 upgrade"*. **This replaces §3, §4 and §5
+on such a unit**; everything else is as for any unit. There is no Llama 3B
+for HailoRT 5.4.0: a unit on it serves the 1B. Lyra and the pilots stay on
+5.1.1 and the 3B, and nothing here changes them.
+
+The packages come from Hailo's Developer Zone (a login), **not** from
+Raspberry Pi's repository, which carries 5.1.1 only. Checked on 8 Oct:
+
+| file | sha256 |
+|---|---|
+| `hailort_5.4.0_arm64.deb` (package `hailort`) | `db7065eecf3eef52279db8410cea367b9941c92a8f6bea88db09c27d7b4bc15d` |
+| `hailort-pcie-driver_5.4.0_all.deb` (package `h10-hailort-pcie-driver`) | `0674a935d55de627b702fd16bce50b87c2ead454451dec68a51a0fb5b07306ac` |
+| `hailo_gen_ai_model_zoo_5.4.0_arm64.deb` | `78500dfdd08705a6acf66ed81699029904ce4306dcb437e205e6392443d17eda` |
+| `Llama3.2-1B-Instruct.hef`, 1,402,376,894 bytes, public: `https://dev-public.hailo.ai/v5.4.0/blob/Llama3.2-1B-Instruct.hef` | `0a0d378c530fb120d81ffcd1bde1b367c7bb1ce6e2d8f3fb8166558eee40536e` |
+
+Hailo publishes no hash for the model: this one is from two whole fetches
+that agreed. The Python wheel, the USB driver and the integration tool are
+not needed: the Companion talks to hailo-ollama over HTTP.
+
+**Hailo's runtime package is named `hailort`.** It conflicts with Raspberry
+Pi's `h10-hailort`, so none of Raspberry Pi's Hailo packages may be on the
+unit. A 4.x `hailort` (Hailo-8) is a different thing: never that.
+
+```bash
+# on a unit that has §3-§5 already: take Raspberry Pi's 5.1.1 off first
+sudo systemctl disable --now aetherseed-keepalive aetherseed-proxy aetherseed-warmup hailo-ollama
+sudo dpkg -r python3-h10-hailort hailo-gen-ai-model-zoo h10-hailort   # removes /usr/share/hailo-ollama
+# (needs build-essential and dkms, as §3)
+sudo dpkg -i hailort_5.4.0_arm64.deb hailort-pcie-driver_5.4.0_all.deb   # DKMS builds hailo1x_pci
+sudo dpkg -i hailo_gen_ai_model_zoo_5.4.0_arm64.deb
+sudo apt-mark hold hailort h10-hailort-pcie-driver hailo-gen-ai-model-zoo
+sudo chmod -R go-w /usr/share/hailo-ollama          # its postinst makes the folder world-writable
+sudo reboot
+```
+
+Check: `sudo hailortcli fw-control identify` shows `HAILO10H` and
+`Firmware Version: 5.4.0 (release,app)`; `hailortcli --version` 5.4.0; the
+kernel still `6.18.50+rpt-rpi-2712`; the device is **`/dev/h1x-0`** (not
+`/dev/hailo0`). The firmware is loaded from the card at every boot
+(`dmesg`: "Firmware loaded in ... ms") - a card with 5.1.1 brings its own.
+
+The model, its `.sha256` beside it (5.4.0's server will not use a file
+without one), the server's drop-in, the device rule, and the unit's model:
+
+```bash
+B=/usr/share/hailo-ollama/models/blob
+sudo install -d -o root -g root -m 755 $B
+sudo install -o root -g root -m 644 Llama3.2-1B-Instruct.hef $B/
+echo 0a0d378c530fb120d81ffcd1bde1b367c7bb1ce6e2d8f3fb8166558eee40536e | sudo tee $B/Llama3.2-1B-Instruct.hef.sha256 >/dev/null
+sudo chmod 644 $B/Llama3.2-1B-Instruct.hef.sha256
+cd ~/aetherseed-main
+sudo install -d /etc/systemd/system/hailo-ollama.service.d
+sudo install -o root -g root -m 644 services/hailo-ollama.hailort540.conf \
+    /etc/systemd/system/hailo-ollama.service.d/hailort-540.conf
+sudo install -o root -g root -m 644 services/99-aetherseed-hailo1x.rules /etc/udev/rules.d/
+sudo install -d -o root -g root -m 755 /etc/aetherseed
+echo AETHERSEED_MODEL=llama3.2:1b | sudo tee /etc/aetherseed/model.env >/dev/null
+sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hailo1x
+sudo systemctl daemon-reload
+sudo systemctl enable --now hailo-ollama aetherseed-warmup aetherseed-proxy aetherseed-keepalive
+```
+
+What the drop-in is for (each found on Xena): the device's new name, in the
+start check and the device allow-list; `OLLAMA_HOST=127.0.0.1:8000`, since
+5.4.0 reads no config file and otherwise listens on every interface;
+`XDG_DATA_HOME=/usr/share`, since it looks for a model only under
+`$XDG_DATA_HOME/hailo-ollama/models/blob/`, by default the service
+account's own writable home. `/etc/xdg/hailo-ollama/hailo-ollama.json` is
+not used on 5.4.0.
+
+Check: `curl -s 127.0.0.1:8000/api/tags` lists `llama3.2:1b`;
+`ss -ltn` shows `127.0.0.1:8000` and not `0.0.0.0:8000`; `ls -l /dev/h1x-0`
+is `crw-rw---- root hailo`; the proxy's status says `"model": "llama3.2:1b"`.
+
+**The model is the unit's own setting** (`logic/served.py`):
+`/etc/aetherseed/model.env`, one line, read by the proxy, the warm-up and
+the keepalive; absent, the unit serves `llama3.2:3b` as before. A name the
+build has no measured ceiling for stops the proxy rather than being served
+on a guess. What she says about her model - the curriculum's line and the
+training key - names the model the unit serves.
+
+**Measured on Xena** (build log 68): prompt ceiling **2785** tokens (3B:
+864), past it nothing at all comes back, as on 5.1.1; about 9.9 tokens a
+second on a short prompt (3B: 2.66); first token 0.35 s on a short prompt,
+about 10 s on a full one; the first load about 7.6 s.
+
 ## Decisions this build carries, not steps
 
 - **The keepalive** (`aetherseed-keepalive`) is an R&D instrument — it holds
