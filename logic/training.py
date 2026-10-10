@@ -323,8 +323,12 @@ def _self_pool():
     """Herself and her ecosystem: every truth is a line of her curriculum
     (knowledge/companion.en.jsonl), shortened to fit a correction's tag."""
     return [
+        # (Andreas, 10 Oct: "if she describes herself correctly but doesnt
+        # use companion that is fine" - "a small language model on a device
+        # in this room, with software around it" was failed for the word)
         q("self.what", ["What are you?", "What sort of thing are you?"],
-          [["companion"], ["model", "small", "device"]],
+          [["companion", "language model", r"\bmodel\b", r"\bai\b"],
+           ["small", "device", "local", "room", "this unit"]],
           "I am an AetherSeed Companion: a small language model on a device in this room.",
           "what you are"),
         q("self.local", ["Does anything I say to you leave this device?",
