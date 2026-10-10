@@ -36,7 +36,7 @@ class TheSetting(unittest.TestCase):
                          "llama3.2:3b")
 
     def test_an_unknown_model_is_refused_not_served(self):
-        self.write("AETHERSEED_MODEL=qwen3:1.7b\n")
+        self.write("AETHERSEED_MODEL=deepseek_r1:1.5b\n")
         with self.assertRaises(served.UnknownModel):
             served.served_model({}, self.file)
 
