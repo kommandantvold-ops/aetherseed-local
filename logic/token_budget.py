@@ -120,13 +120,37 @@ MODELS = {
     # "qwen tests on Xena, first 2.5-1.5b"). Served as "qwen2.5:1.5b" - not
     # the 5.1.1 zoo's "qwen2.5-instruct:1.5b" above, a different file.
     # Tokenizer: Qwen/Qwen2.5-1.5B-Instruct's, as for the 5.1.1 file - to be
-    # checked against this HEF's output heads. Ceiling NOT measured: counted,
-    # not served, until it is.
+    # checked against this HEF's output heads: 4 x 37984 = 151936, Qwen2.5's
+    # padded size, as the 5.1.1 file. File 2,464,582,493 bytes, sha256
+    # 0856a10c...cdf5b8d05 (two whole fetches agreed; Hailo publishes none).
+    # Ceiling measured on Xena 10 Oct 2026, firmware 5.4.0: 2592 works and
+    # 2593 fails, twice each on a fresh server - the same as the 5.1.1 file
+    # on Lyra (27 x 96). Past it: nothing at all, as before.
     "qwen2.5:1.5b": {
         "vocab": 151665,
         "template": "chatml",
-        "ceiling": None,
+        "ceiling": 2592,
         "tokenizer": "qwen2.5-instruct-1.5b.tokenizer.json",
+    },
+    # HailoRT 5.4.0's "Qwen3-1.7B-Instruct.hef" (build log 69), served as
+    # "qwen3:1.7b": 2,880,748,478 bytes, sha256 cc9b9d1c...ad6f17821. Inside,
+    # its networks are named "Qwen3-VL-2B-Instruct-LLM" - the language part of
+    # Hailo's Qwen3-VL-2B; whether that is the very model Qwen3-1.7B is not
+    # known. Output heads 4 x 37984; tokenizer Qwen/Qwen3-1.7B's, 151643 +
+    # 26 added. Asked bare on Xena it did not think aloud, with or without
+    # "/no_think". Ceiling measured on Xena 10 Oct 2026: 1556 works and 1557
+    # fails (twice each, fresh server) - counted by THIS template, which puts
+    # Qwen2.5's default system line (some 20 tokens) in front of a prompt that
+    # has none, as measure_ceiling's prompts have not. Qwen3's own template
+    # adds no such line, so the server's limit is 1536 = 16 x 96, the step
+    # every model here has shown. The Companion always sends a system message,
+    # where this count and the server's agree: 1536, not 1556 (an inference -
+    # 1537-1556 with a system message is not tried).
+    "qwen3:1.7b": {
+        "vocab": 151669,
+        "template": "chatml",
+        "ceiling": 1536,
+        "tokenizer": "qwen3-1.7b.tokenizer.json",
     },
 }
 
