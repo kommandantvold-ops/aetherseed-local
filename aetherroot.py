@@ -13,11 +13,13 @@ Architecture:
   - 64-dim willingness vector (evolves with interaction)
   - Resonance-weighted retrieval (not just similarity)
 
-Dependencies: sqlite3 (stdlib), numpy, json, hashlib, datetime
-Optional: scikit-learn (for TF-IDF), requests (for Ollama embeddings)
+Dependencies: sqlite3 (stdlib), numpy, json, hashlib, datetime.
+Embeddings are the hashed TF-IDF below; nothing else is implemented.
 """
 
+import io
 import sqlite3
+import threading
 import numpy as np
 import json
 import hashlib
@@ -26,6 +28,67 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Sequence, Tuple
+
+
+# ============================================================
+# FILES THAT SURVIVE A POWER CUT (build log 71)
+# ============================================================
+#
+# logic/clock.py: the board has no clock battery, and power cuts are expected.
+# Measured 10 Oct 2026: embedder_state.json or willingness.npy cut in half -
+# what a cut in the middle of a write leaves - and AetherRoot(), which proxy.py
+# builds when it is imported, raised; the proxy did not start. Both files were
+# rewritten after every stored turn with a plain write.
+
+def atomic_write(path, data) -> None:
+    """Write `data` (bytes or str) to `path` so that a power cut leaves the old
+    file or the new one, never half of one: written beside it, flushed to the
+    card, then renamed over it (a rename is atomic on Linux)."""
+    path = Path(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    tmp = path.with_name("%s.tmp-%d-%d" % (path.name, os.getpid(), threading.get_ident()))
+    # 0o666 less the umask - the mode a plain write would have given it
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(str(tmp), os.stat(str(path)).st_mode & 0o7777)   # keep the old mode
+        except OSError:
+            pass
+        os.replace(str(tmp), str(path))
+    except BaseException:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            pass
+        raise
+    try:                                   # and the rename itself to the card
+        dfd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
+def set_aside(path, why) -> Optional[Path]:
+    """An unreadable state file is kept, renamed, never deleted - and said so
+    in the journal. Returns where it went (None if it could not be moved)."""
+    path = Path(path)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    dest = path.with_name("%s.bad-%s" % (path.name, stamp))
+    try:
+        os.replace(str(path), str(dest))
+    except OSError:
+        dest = None
+    print("[aetherroot] %s unreadable (%s); kept as %s" % (
+        path.name, why, dest.name if dest else "it was (could not be moved)"), flush=True)
+    return dest
 
 # ============================================================
 # CONFIGURATION
@@ -47,7 +110,7 @@ DEFAULT_CONFIG = {
     "willingness_dim": 64,
     "willingness_drift": 0.02,      # slow drift per interaction
     "db_path": "memory.db",
-    "embedding_method": "tfidf"     # "tfidf" | "ollama" | "sentence_transformers"
+    "embedding_method": "tfidf"     # the only method implemented
 }
 
 # Provenance modes by what memory does with them (logic/provenance.py).
@@ -120,23 +183,42 @@ class TFIDFEmbedder:
             self.idf[t] = self.idf.get(t, 0) + 1
 
     def save_state(self, path: Path):
-        """Persist vocabulary stats."""
+        """Persist vocabulary stats - atomically (build log 71)."""
         state = {
             "vocab": self.vocab,
             "idf": self.idf,
             "doc_count": self.doc_count,
             "dim": self.dim
         }
-        path.write_text(json.dumps(state), encoding="utf-8")
+        atomic_write(path, json.dumps(state))
 
-    def load_state(self, path: Path):
-        """Load vocabulary stats."""
-        if path.exists():
+    def load_state(self, path: Path) -> str:
+        """Load vocabulary stats. Returns "ok", "absent", or "bad" - a file
+        that cannot be read is set aside, not fatal (build log 71): the stats
+        are word counts over the stored turns, and AetherRoot counts them
+        again from the episodes table."""
+        if not path.exists():
+            return "absent"
+        try:
             state = json.loads(path.read_text(encoding="utf-8"))
-            self.vocab = state.get("vocab", {})
-            self.idf = state.get("idf", {})
-            self.doc_count = state.get("doc_count", 0)
-            self.dim = state.get("dim", self.dim)
+            if not isinstance(state, dict):
+                raise ValueError("not a JSON object")
+            vocab = state.get("vocab", {})
+            idf = state.get("idf", {})
+            doc_count = int(state.get("doc_count", 0))
+            dim = int(state.get("dim", self.dim))
+        except (OSError, ValueError, TypeError) as exc:
+            set_aside(path, repr(exc)[:120])
+            return "bad"
+        self.vocab, self.idf, self.doc_count, self.dim = vocab, idf, doc_count, dim
+        return "ok"
+
+    def rebuild_stats(self, texts) -> None:
+        """Count the words again over `texts`, as update_stats did one turn at
+        a time."""
+        self.idf, self.doc_count = {}, 0
+        for text in texts:
+            self.update_stats(text)
 
 
 # ============================================================
@@ -315,21 +397,27 @@ class MemoryStore:
     def store_episode(self, session_id: str, user_msg: str, ai_msg: str,
                       embedding: np.ndarray, resonance: float = 0.5,
                       topic_tags: str = "", mode: str = "factual",
-                      speaker: str = "") -> int:
+                      speaker: str = "", consolidated: bool = False) -> int:
         """Store a conversation turn. Returns the episode ID.
 
         `mode` records how the turn came to be said - see logic/provenance.py.
         It defaults to 'factual' because that is what every caller predating it
         meant, not because factual is a safe assumption.
+
+        `consolidated=True` stores a turn that will never join a ring (a
+        training turn) as taken, in the same INSERT (build log 71): stored as
+        waiting and marked in a second commit, a ring closing on another
+        thread in between could take it.
         """
         cur = self.conn.execute(
             """INSERT INTO episodes
                (timestamp, session_id, user_msg, ai_msg, embedding, resonance,
-                topic_tags, mode, speaker)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                topic_tags, mode, speaker, consolidated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (datetime.now(timezone.utc).isoformat(),
              session_id, user_msg, ai_msg,
-             embedding.tobytes(), resonance, topic_tags, mode, speaker or "")
+             embedding.tobytes(), resonance, topic_tags, mode, speaker or "",
+             1 if consolidated else 0)
         )
         self.conn.commit()
         return cur.lastrowid
@@ -346,7 +434,10 @@ class MemoryStore:
                    "speaker"]
         where, args = _episode_filter(unconsolidated_only, modes)
         query = "SELECT " + ", ".join(columns) + " FROM episodes" + where
-        query += " ORDER BY timestamp DESC"
+        # Newest first by id, not by timestamp (build log 71): the clock starts
+        # behind after a power cut (logic/clock.py), so a timestamp can run
+        # backwards; the id only ever grows.
+        query += " ORDER BY id DESC"
 
         rows = self.conn.execute(query, args).fetchall()
         results = []
@@ -358,10 +449,13 @@ class MemoryStore:
 
     def store_semantic(self, content: str, embedding: np.ndarray,
                        source_ids: List[int], confidence: float,
-                       resonance_avg: float, ring_no: Optional[int] = None) -> int:
-        """Store a consolidated semantic memory - a ring when ring_no is given."""
+                       resonance_avg: float, ring_no: Optional[int] = None,
+                       conn: Optional[sqlite3.Connection] = None) -> int:
+        """Store a consolidated semantic memory - a ring when ring_no is given.
+        With `conn`, written inside that connection's open transaction and not
+        committed here (a ring is closed in one transaction - build log 71)."""
         now = datetime.now(timezone.utc).isoformat()
-        cur = self.conn.execute(
+        cur = (conn or self.conn).execute(
             """INSERT INTO semantic
                (content, embedding, source_ids, confidence, resonance_avg, created_at,
                 updated_at, ring_no)
@@ -370,7 +464,8 @@ class MemoryStore:
              ",".join(str(i) for i in source_ids),
              confidence, resonance_avg, now, now, ring_no)
         )
-        self.conn.commit()
+        if conn is None:
+            self.conn.commit()
         return cur.lastrowid
 
     _SEMANTIC_COLUMNS = ["id", "content", "embedding", "source_ids", "confidence",
@@ -414,16 +509,18 @@ class MemoryStore:
         return {row[0]: row[1] for row in rows}
 
     def store_growth_event(self, event_type: str, description: str,
-                           resonance: float = None, willingness: np.ndarray = None):
-        """Log a growth event."""
-        self.conn.execute(
+                           resonance: float = None, willingness: np.ndarray = None,
+                           conn: Optional[sqlite3.Connection] = None):
+        """Log a growth event (with `conn`: in its transaction, uncommitted)."""
+        (conn or self.conn).execute(
             """INSERT INTO growth (timestamp, event_type, description, resonance, willingness)
                VALUES (?, ?, ?, ?, ?)""",
             (datetime.now(timezone.utc).isoformat(),
              event_type, description, resonance,
              willingness.tobytes() if willingness is not None else None)
         )
-        self.conn.commit()
+        if conn is None:
+            self.conn.commit()
 
     def store_probe_result(self, probe_name: str, score: float, details: str = ""):
         """Log a probe result."""
@@ -442,14 +539,16 @@ class MemoryStore:
         columns = ["id", "timestamp", "probe_name", "score", "details"]
         return [dict(zip(columns, row)) for row in rows]
 
-    def mark_consolidated(self, episode_ids: List[int]):
-        """Mark episodes as consolidated."""
+    def mark_consolidated(self, episode_ids: List[int],
+                          conn: Optional[sqlite3.Connection] = None):
+        """Mark episodes as consolidated (with `conn`: in its transaction)."""
         placeholders = ",".join("?" * len(episode_ids))
-        self.conn.execute(
+        (conn or self.conn).execute(
             f"UPDATE episodes SET consolidated = 1 WHERE id IN ({placeholders})",
             episode_ids
         )
-        self.conn.commit()
+        if conn is None:
+            self.conn.commit()
 
     def get_episode_count(self, unconsolidated_only: bool = True,
                           modes: Optional[Sequence[str]] = None) -> int:
@@ -657,9 +756,19 @@ class WillingnessVector:
     def __init__(self, dim: int = 64, path: Optional[Path] = None):
         self.dim = dim
         self.path = path
+        self.vector = None
         if path and path.exists():
-            self.vector = np.load(path)
-        else:
+            # A file that cannot be read is set aside and the vector starts
+            # again (build log 71): it is shown as a mean on the status page
+            # and decides nothing she says.
+            try:
+                v = np.load(path, allow_pickle=False)
+                if v.shape != (dim,):
+                    raise ValueError("shape %r, not (%d,)" % (v.shape, dim))
+                self.vector = v.astype(np.float32)
+            except (OSError, ValueError, EOFError) as exc:
+                set_aside(path, repr(exc)[:120])
+        if self.vector is None:
             # Initialize with gaussian centered at 0.5
             self.vector = np.clip(
                 np.random.normal(0.5, 0.15, dim).astype(np.float32),
@@ -674,9 +783,11 @@ class WillingnessVector:
         ).astype(np.float32)
 
     def save(self):
-        """Persist to disk."""
+        """Persist to disk - atomically (build log 71)."""
         if self.path:
-            np.save(self.path, self.vector)
+            buf = io.BytesIO()
+            np.save(buf, self.vector)
+            atomic_write(self.path, buf.getvalue())
 
     def mean(self) -> float:
         """Overall willingness level."""
@@ -715,12 +826,17 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 def recency_score(timestamp_str: str) -> float:
     """Score from 0 to 1 based on how recent the memory is.
-    1.0 = now, decays with half-life of ~7 days."""
+    1.0 = now, decays with half-life of ~7 days.
+
+    Never above 1 (build log 71): after a power cut the clock starts behind
+    (logic/clock.py), and a turn stored before it then lies in the "future".
+    Unclamped, a turn a day ahead scored 1.11 and one a year ahead 4.6e15 -
+    ahead of everything said since boot, for good."""
     try:
         ts = datetime.fromisoformat(timestamp_str)
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        delta = (datetime.now(timezone.utc) - ts).total_seconds()
+        delta = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
         half_life = 7 * 24 * 3600  # 7 days
         return float(np.exp(-0.693 * delta / half_life))
     except Exception:
@@ -830,13 +946,31 @@ class AetherRoot:
         self.root_dir = Path(root_dir)
         self.root_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load or create config
+        # Load or create config. The file's values over the defaults (build
+        # log 71): until then the file was used as it stood, so a key added to
+        # DEFAULT_CONFIG after a unit's first boot never reached that unit.
+        # A value the file holds still wins - and is named in the journal when
+        # it differs from today's default, so an old one can be seen.
         self.config_path = self.root_dir / "config.json"
+        self.config = json.loads(json.dumps(DEFAULT_CONFIG))     # a deep copy
+        on_file = None
         if self.config_path.exists():
-            self.config = json.loads(self.config_path.read_text())
+            try:
+                on_file = json.loads(self.config_path.read_text(encoding="utf-8"))
+                if not isinstance(on_file, dict):
+                    raise ValueError("not a JSON object")
+            except (OSError, ValueError) as exc:
+                set_aside(self.config_path, repr(exc)[:120])
+                on_file = None
+        if on_file is None:
+            atomic_write(self.config_path, json.dumps(self.config, indent=2))
         else:
-            self.config = DEFAULT_CONFIG.copy()
-            self.config_path.write_text(json.dumps(self.config, indent=2))
+            self.config.update(on_file)
+            differs = ["%s=%s (default %s)" % (k, json.dumps(on_file[k]), json.dumps(v))
+                       for k, v in DEFAULT_CONFIG.items() if k in on_file and on_file[k] != v]
+            if differs:
+                print("[aetherroot] config.json differs from the defaults: " + "; ".join(differs),
+                      flush=True)
 
         # Initialize components
         db_path = str(self.root_dir / self.config["db_path"])
@@ -844,7 +978,19 @@ class AetherRoot:
 
         self.embedder = TFIDFEmbedder(dim=self.config["embedding_dim"])
         embedder_state = self.root_dir / "embedder_state.json"
-        self.embedder.load_state(embedder_state)
+        if self.embedder.load_state(embedder_state) != "ok":
+            # Absent or set aside: the word counts are counted again from the
+            # turns themselves, as store_interaction counted them (71).
+            n = self.store.get_episode_count(unconsolidated_only=False)
+            if n:
+                self.embedder.rebuild_stats(
+                    "%s %s" % (u, a) for u, a in
+                    self.store.conn.execute("SELECT user_msg, ai_msg FROM episodes ORDER BY id"))
+                self.embedder.save_state(embedder_state)
+                print("[aetherroot] word counts rebuilt from %d stored turns" % n, flush=True)
+
+        # One ring closes at a time (build log 71) - see _trigger_consolidation.
+        self._ring_lock = threading.Lock()
 
         self.willingness = WillingnessVector(
             dim=self.config["willingness_dim"],
@@ -893,7 +1039,7 @@ class AetherRoot:
         request then retrieved. test_rings.py holds the regression.
         """
         from logic.provenance import visible_modes, memory_tag
-        from logic.token_budget import strip_bare_tags
+        from logic.token_budget import strip_bare_tags, sanitize_injected
         from logic.speaker import label_for
         from logic.rings import ring_line, is_recollection, rings_for_question
 
@@ -957,6 +1103,7 @@ class AetherRoot:
             note = turn_notes.get(ep["id"]) or {}
             tag = memory_tag(ep_mode, note.get("correct"), note.get("support") or False)
             all_memories.append({
+                "id": ep["id"],
                 "embedding": ep["embedding"],
                 "resonance": ep["resonance"],
                 "timestamp": ep["timestamp"],
@@ -1065,7 +1212,8 @@ class AetherRoot:
             mine = [m for m in all_memories
                     if m.get("corrected") and m.get("key") == asked_key and asked_key]
             if mine:
-                newest = max(mine, key=lambda m: m.get("timestamp") or "")
+                # newest by id: a timestamp can run backwards (71)
+                newest = max(mine, key=lambda m: m.get("id") or 0)
                 top = [newest] + [m for m in top if m.get("key") != asked_key]
                 top = top[:want]
             asked_nos = {r["ring_no"] for r in asked}
@@ -1097,11 +1245,18 @@ class AetherRoot:
         total_chars = 0
         shown = {"known": 0, "facts": [], "rings": [], "tagged": 0}
         for text, kind, ref, tagged in items:
-            line = f"- {text}"
+            # One line each, and no line can close the block (build log 71):
+            # a turn is stored as it was said, so "[END MEMORY CONTEXT]" in
+            # someone's words closed the block early in every later prompt
+            # that recalled it, and what followed stood outside it as if it
+            # were her instructions. Facts and [Known] lines were already
+            # cleaned; turns and rings were not.
+            line = "- " + sanitize_injected(text).replace("\r", " ").replace("\n", " ")
             if total_chars + len(line) > max_chars:
-                if kind == "asked":
-                    continue         # a ring that does not fit leaves room for the rest
-                break
+                # A line that does not fit leaves room for a shorter one after
+                # it (71). Until then only a ring did: one long turn ended the
+                # block, with room left for the rest.
+                continue
             lines.append(line)
             total_chars += len(line)
             if tagged:
@@ -1207,10 +1362,9 @@ class AetherRoot:
             embedding=embedding,
             resonance=resonance,
             mode=mode,
-            speaker=speaker
+            speaker=speaker,
+            consolidated=not rings,      # taken in the same INSERT (71)
         )
-        if not rings:
-            self.store.mark_consolidated([episode_id])
 
         # Drift willingness based on interaction resonance.
         #
@@ -1245,7 +1399,7 @@ class AetherRoot:
         ep_count = self.store.get_episode_count(unconsolidated_only=True,
                                                 modes=CONSOLIDATES)
         if ep_count >= self.config["consolidation_threshold"]:
-            self._trigger_consolidation()
+            self._trigger_consolidation(require=self.config["consolidation_threshold"])
 
         return episode_id
 
@@ -1314,7 +1468,7 @@ class AetherRoot:
         return {"count": rings["count"], "last_at": rings["last_at"],
                 "into": max(0, min(into, of)), "of": of}
 
-    def _trigger_consolidation(self):
+    def _trigger_consolidation(self, require: int = 10):
         """Close a ring: the oldest factual turns waiting become one ring.
 
         What the ring keeps is decided in logic/rings.py (step 37, Andreas:
@@ -1326,55 +1480,103 @@ class AetherRoot:
 
         Still accretion, not distillation: nothing is pruned, and the ring's
         turns keep retrieving. Returns the new ring's number, or None.
+
+        ONE RING AT A TIME, IN ONE TRANSACTION (build log 71). Measured 10 Oct
+        2026: two threads closing a ring at once on 50 waiting turns made rings
+        1 and 2 of the SAME twenty turns - each read the waiting turns before
+        the other marked them - and a cut between the three separate commits
+        left a ring whose turns still waited (made again) or no growth row
+        (its number given twice). Now: a lock in this process; the waiting
+        turns read and the ring, the marks and the growth row written on a
+        connection of its own under BEGIN IMMEDIATE, so another writer - in
+        this process or not - waits, and reads the turns as taken after it;
+        and the number is one past the highest given, whichever record
+        holds it. `require`: how many must be waiting, counted inside the
+        transaction (the trigger passes the threshold; 10, the old floor,
+        for a direct call).
         """
         from logic.rings import themes, representative, ring_content, tokens
         from logic.speaker import label_for
 
-        episodes = self.store.get_all_episodes(unconsolidated_only=True,
-                                               modes=CONSOLIDATES)
-        if len(episodes) < 10:
-            return None
+        if not self._ring_lock.acquire(blocking=False):
+            return None          # one is closing now; the next turn tries again
+        try:
+            size = self.config.get("consolidation_batch",
+                                   DEFAULT_CONFIG["consolidation_batch"])
+            # How common each word is across everything said to the node, so
+            # that a word every turn contains cannot pass for what this ring
+            # was about. Read before the write lock is taken: only words.
+            doc_freq, n_all = {}, 0
+            for (msg,) in self.store.conn.execute("SELECT user_msg FROM episodes"):
+                n_all += 1
+                for t in set(tokens(msg)):
+                    doc_freq[t] = doc_freq.get(t, 0) + 1
 
-        size = self.config.get("consolidation_batch", DEFAULT_CONFIG["consolidation_batch"])
-        batch = episodes[-size:]  # oldest `size` unconsolidated factual
-        if len(batch) < 5:
-            return None
-        batch = list(reversed(batch))          # oldest first, as it was said
+            conn = sqlite3.connect(self.store.db_path, timeout=10, isolation_level=None)
+            try:
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError as exc:
+                    print(f"[rings] not closed this turn: {exc!r}", flush=True)
+                    return None
+                try:
+                    where, args = _episode_filter(True, CONSOLIDATES)
+                    waiting = conn.execute("SELECT COUNT(*) FROM episodes" + where,
+                                           args).fetchone()[0]
+                    rows = conn.execute(
+                        "SELECT id, user_msg, embedding, resonance, speaker FROM episodes"
+                        + where + " ORDER BY id ASC LIMIT ?", args + [size]).fetchall()
+                    # oldest `size` waiting factual turns, oldest first as said
+                    if waiting < max(require, 10) or len(rows) < 5:
+                        conn.execute("ROLLBACK")
+                        return None
+                    batch = [{"id": r[0], "user_msg": r[1],
+                              "embedding": np.frombuffer(r[2], dtype=np.float32),
+                              "resonance": r[3], "speaker": r[4]} for r in rows]
+                    words = themes([ep["user_msg"] for ep in batch], doc_freq,
+                                   max(n_all, len(batch)))
+                    rep = batch[representative([ep["embedding"] for ep in batch])]
+                    content = ring_content(words, label_for(rep.get("speaker")),
+                                           rep["user_msg"])
+                    highest = max(
+                        conn.execute("SELECT COALESCE(MAX(ring_no), 0) FROM semantic"
+                                     ).fetchone()[0],
+                        conn.execute("SELECT COUNT(*) FROM growth "
+                                     "WHERE event_type = 'consolidation'").fetchone()[0])
+                    ring_no = highest + 1
+                    avg_embedding = np.mean([ep["embedding"] for ep in batch], axis=0)
+                    avg_resonance = float(np.mean([ep["resonance"] for ep in batch]))
+                    source_ids = [ep["id"] for ep in batch]
 
-        # How common each word is across everything said to the node, so that
-        # a word every turn contains cannot pass for what this ring was about.
-        everything = self.store.get_all_episodes()
-        doc_freq = {}
-        for ep in everything:
-            for t in set(tokens(ep["user_msg"])):
-                doc_freq[t] = doc_freq.get(t, 0) + 1
-        words = themes([ep["user_msg"] for ep in batch], doc_freq, len(everything))
-        rep = batch[representative([ep["embedding"] for ep in batch])]
-        content = ring_content(words, label_for(rep.get("speaker")), rep["user_msg"])
-
-        ring_no = self.store.get_rings()["count"] + 1
-        avg_embedding = np.mean([ep["embedding"] for ep in batch], axis=0)
-        avg_resonance = np.mean([ep["resonance"] for ep in batch])
-        source_ids = [ep["id"] for ep in batch]
-
-        self.store.store_semantic(
-            content=content,
-            embedding=avg_embedding,
-            source_ids=source_ids,
-            confidence=0.6,
-            resonance_avg=avg_resonance,
-            ring_no=ring_no,
-        )
-
-        self.store.mark_consolidated(source_ids)
-
-        self.store.store_growth_event(
-            event_type="consolidation",
-            description=f"Ring {ring_no}: {len(batch)} episodes",
-            resonance=avg_resonance,
-            willingness=self.willingness.snapshot()
-        )
-        return ring_no
+                    self.store.store_semantic(
+                        content=content,
+                        embedding=avg_embedding,
+                        source_ids=source_ids,
+                        confidence=0.6,
+                        resonance_avg=avg_resonance,
+                        ring_no=ring_no,
+                        conn=conn,
+                    )
+                    self.store.mark_consolidated(source_ids, conn=conn)
+                    self.store.store_growth_event(
+                        event_type="consolidation",
+                        description=f"Ring {ring_no}: {len(batch)} episodes",
+                        resonance=avg_resonance,
+                        willingness=self.willingness.snapshot(),
+                        conn=conn,
+                    )
+                    conn.execute("COMMIT")
+                    return ring_no
+                except BaseException:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        pass
+                    raise
+            finally:
+                conn.close()
+        finally:
+            self._ring_lock.release()
 
     def augment_system_prompt(self, base_prompt: str, user_msg: str) -> str:
         """Augment the system prompt with retrieved memory context."""

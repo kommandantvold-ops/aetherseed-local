@@ -53,18 +53,25 @@ _WORDS = (
 _PERCENT_OF = re.compile(r"(\d+(?:\.\d+)?)\s*(?:%|percent)\s+of\s+", re.I)
 _TOKEN = re.compile(r"\s*(?:(\d+(?:\.\d+)?|\.\d+)|(\*\*|[-+*/%()]))")
 _ALLOWED = re.compile(r"^[\d\s.+\-*/%()]+$")
+# A comma INSIDE a number - between two digits - is the one this tool will not
+# guess at. Any other comma is a sentence's (build log 71).
+_NUMBER_COMMA = re.compile(r"(?<=\d)\s*,\s*(?=\d)")
+# ", please" and the like at the end, "please," at the start: manners, not sums
+_COURTESY = re.compile(r"(?:^\s*(?:please|pls)\s*,?\s+|\s*,?\s*(?:please|pls|thanks|thank\s+you)\s*$)",
+                       re.I)
 
 
 def normalise(text: str) -> str:
     """The expression as the parser reads it: words and other signs made into
     + - * / ** . Raises ToolError for what it will not guess at."""
     t = (text or "").strip().strip("?!").strip().rstrip(".").strip()
+    t = _COURTESY.sub("", t).strip().strip("?!").strip().rstrip(".").strip(" ,:;")
     t = t.rstrip("=").strip()
     if not t:
         raise ToolError("There is nothing to calculate.")
     if len(t) > MAX_EXPRESSION:
         raise ToolError("That is too long for me to calculate.")
-    if "," in t:
+    if _NUMBER_COMMA.search(t):
         # 1,500 is fifteen hundred to one reader and one and a half to another.
         raise ToolError("I can't tell what a comma in a number means. "
                         "Write 1500 for fifteen hundred and 1.5 for one and a half.")
@@ -83,7 +90,16 @@ def looks_like_arithmetic(text: str) -> bool:
     try:
         t = normalise(text)
     except ToolError as e:
-        return "comma" in str(e)          # arithmetic, and it will be told why not
+        if "comma" not in str(e):
+            return False
+        # Arithmetic but for a comma inside a number: taken, and told why not.
+        # Until build log 71 ANY comma did this, so "Evaluate my essay,
+        # thanks" and "calculate 2+2, please" got the comma refusal and the
+        # model was never asked.
+        try:
+            t = normalise(_NUMBER_COMMA.sub("", text or ""))
+        except ToolError:
+            return False
     return bool(_ALLOWED.match(t)) and bool(re.search(r"\d", t))
 
 
@@ -202,7 +218,23 @@ def value_text(v: Fraction) -> str:
         out = _decimal(v)
         if len(out.split(".")[1]) <= 12:
             return out
-    return "%s/%s (about %s)" % (v.numerator, v.denominator, "%.6f" % float(v))
+    return "%s/%s (about %s)" % (v.numerator, v.denominator, _about(v))
+
+
+def _about(v: Fraction) -> str:
+    """The rounded decimal shown beside a fraction. Six places, as always,
+    where a float holds every digit shown; outside that, seven significant
+    digits worked from the fraction itself (build log 71): "%.6f" of 10**30/3
+    printed 333333333333333316505293553664.000000 - digits a float made up -
+    and of 1/3000000, 0.000000."""
+    if Fraction(1, 1000) <= abs(v) < 10 ** 9:
+        return "%.6f" % float(v)
+    from decimal import Decimal, localcontext
+    with localcontext() as ctx:
+        ctx.prec = 7
+        d = Decimal(v.numerator) / Decimal(v.denominator)
+    mant, _, exp = format(d, ".6E").partition("E")
+    return "%s × 10^%d" % (mant, int(exp))
 
 
 def evaluate(text: str) -> Fraction:
@@ -220,7 +252,8 @@ def calculate(text: str) -> str:
     """The answer in words, or the reason there is none. Never raises."""
     try:
         v = evaluate(text)
-        shown = " ".join((text or "").strip().strip("?!").rstrip(".=").split())
+        shown = _COURTESY.sub("", (text or "").strip().strip("?!")).strip(" ,:;")
+        shown = " ".join(shown.strip("?!").rstrip(".=").split())
         return "%s = %s" % (shown, value_text(v))
     except ToolError as e:
         return str(e)
@@ -231,24 +264,51 @@ def calculate(text: str) -> str:
 # ---------------------------------------------------------------------------
 # count and compare: files of the workspace, and nowhere else
 # ---------------------------------------------------------------------------
-def _file(workspace, name):
-    """(path, text) of a workspace file, or ToolError."""
-    if not name:
-        raise ToolError("No file was named.")
+def resolve_in(workspace, name):
+    """(root, path) of what `name` names in the workspace, or ToolError when it
+    points outside it. Checked with relative_to - a string prefix let
+    "notes/../../aetherseed-workspace-backup/x" through to a sibling folder
+    (build log 71). The path may not exist.
+
+    A name that matches no file exactly but ONE file in that folder whatever
+    its capitals - "readme.md" for README.md - is taken as that file, and the
+    answer names it as it is written. Two such files, and it is not guessed."""
     root = Path(workspace).resolve()
     try:
         path = (root / name).resolve()
         path.relative_to(root)
     except (ValueError, OSError, RuntimeError):
         raise ToolError("I can only reach files in my workspace.")
+    if not path.exists():
+        try:
+            same = [p for p in path.parent.iterdir() if p.name.lower() == path.name.lower()]
+        except OSError:
+            same = []
+        if len(same) == 1:
+            try:
+                found = same[0].resolve()
+                found.relative_to(root)
+            except (ValueError, OSError, RuntimeError):
+                raise ToolError("I can only reach files in my workspace.")
+            path = found
+    return root, path
+
+
+def _file(workspace, name):
+    """(path, text, shown) of a workspace file - `shown` its name as written
+    in the workspace - or ToolError."""
+    if not name:
+        raise ToolError("No file was named.")
+    root, path = resolve_in(workspace, name)
     if not path.is_file():
         raise ToolError("There is no file %s in my workspace." % name)
+    shown = path.relative_to(root).as_posix()
     if path.stat().st_size > MAX_FILE_BYTES:
-        raise ToolError("%s is too large for me to read through." % name)
+        raise ToolError("%s is too large for me to read through." % shown)
     raw = path.read_bytes()
     if b"\x00" in raw:
-        raise ToolError("%s is not a text file." % name)
-    return path, raw.decode("utf-8", errors="replace")
+        raise ToolError("%s is not a text file." % shown)
+    return path, raw.decode("utf-8", errors="replace"), shown
 
 
 def _n(n, one, many=None):
@@ -257,7 +317,7 @@ def _n(n, one, many=None):
 
 def count(workspace, name, word=None) -> str:
     try:
-        _, text = _file(workspace, name)
+        _, text, name = _file(workspace, name)
     except ToolError as e:
         return str(e)
     if word:
@@ -277,8 +337,8 @@ def _shown(line):
 
 def compare(workspace, first, second) -> str:
     try:
-        _, a = _file(workspace, first)
-        _, b = _file(workspace, second)
+        _, a, first = _file(workspace, first)
+        _, b, second = _file(workspace, second)
     except ToolError as e:
         return str(e)
     la, lb = a.splitlines(), b.splitlines()

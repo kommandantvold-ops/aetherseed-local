@@ -248,9 +248,6 @@ INTENT_PATTERNS = [
 # INTENT DETECTOR
 # ============================================================
 
-_KEEPS_CAPITALS = frozenset({"todo_add", "note_write"})
-
-
 def _arithmetic(text: str) -> bool:
     from logic.exact_tools import looks_like_arithmetic
     return looks_like_arithmetic(text)
@@ -259,6 +256,8 @@ def _arithmetic(text: str) -> bool:
 def detect_intent(message: str) -> Optional[Dict]:
     """Detect the primary intent from a user message.
     Returns the intent dict with any captured groups, or None."""
+    if not isinstance(message, str):
+        return None                    # not text: no tool is asked for (71)
     lower = message.lower().strip()
 
     for intent_def in INTENT_PATTERNS:
@@ -269,13 +268,16 @@ def detect_intent(message: str) -> Optional[Dict]:
                 continue
             if match:
                 captures = match.groups()
-                # What is WRITTEN keeps the steward's capitals (build log
-                # 64): matched on the lowered message, a to-do "Call Martin"
-                # went into the file as "call martin". Where lowering does
-                # not move a letter, the same span of the message as typed
-                # is what is written. A file's name stays lowered, as before.
+                # What was typed keeps its capitals (build log 64 for what is
+                # written; 71 for every capture): matched on the lowered
+                # message, a to-do "Call Martin" went into the file as "call
+                # martin" - and a file's name was lowered too, so "Read the
+                # file README.md" was answered "There is no file readme.md in
+                # my workspace", a file that exists said not to. Where lowering
+                # does not move a letter, the same span of the message as
+                # typed is what is used.
                 stripped = message.strip()
-                if intent_def["intent"] in _KEEPS_CAPITALS and len(stripped) == len(lower):
+                if len(stripped) == len(lower):
                     captures = tuple(
                         stripped[match.start(i):match.end(i)] if g is not None else None
                         for i, g in enumerate(captures, 1))
@@ -398,12 +400,15 @@ def _read_file(filename: str) -> str:
     if not filename:
         return "[ERROR] No filename specified."
 
-    path = Path(workspace()) / filename
-    # Security: resolve and check it's within workspace
+    # Inside the workspace, checked with relative_to (build log 71): the
+    # string-prefix check before it read a sibling folder whose name begins
+    # with the workspace's. A name that differs only in capitals from one
+    # file is that file, named as it is written (logic/exact_tools.resolve_in).
+    from logic.exact_tools import resolve_in, ToolError
     try:
-        resolved = path.resolve()
-        if not str(resolved).startswith(str(Path(workspace()).resolve())):
-            return "[ERROR] Path outside workspace."
+        root, path = resolve_in(workspace(), filename)
+    except ToolError:
+        return "[ERROR] Path outside workspace."
     except Exception:
         return "[ERROR] Invalid path."
 
@@ -411,10 +416,11 @@ def _read_file(filename: str) -> str:
         return f"[ERROR] File not found: {filename}"
 
     try:
-        content = path.read_text(encoding="utf-8", errors="replace")
+        with open(path, encoding="utf-8", errors="replace") as f:
+            content = f.read(5001)           # no more than is shown, read
         if len(content) > 5000:
             content = content[:5000] + "\n... [truncated]"
-        return f"File: {filename}\n---\n{content}"
+        return f"File: {path.relative_to(root).as_posix()}\n---\n{content}"
     except Exception as e:
         return f"[ERROR] {e}"
 
@@ -436,6 +442,8 @@ def _append_todo(item: str) -> str:
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"- {item.strip()}\n")
+            f.flush()
+            os.fsync(f.fileno())             # on the card before "Added" (71)
         return f"Added to todo: {item.strip()}"
     except Exception as e:
         return f"[ERROR] {e}"
@@ -447,23 +455,29 @@ def _write_note(content: str) -> str:
     notes_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"note_{timestamp}.md"
-    path = notes_dir / filename
+    note_content = f"# Note — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{content}\n"
     # Two notes in one second took one name, and the second replaced the
     # first (seen when the unit, not the model, began to answer a write at
-    # once - build log 64e). A note is never written over another.
-    n = 2
-    while path.exists():
-        filename = f"note_{timestamp}_{n}.md"
+    # once - build log 64e). A note is never written over another: the name
+    # is taken by creating the file - "x" fails if it exists - not by looking
+    # first. Looking first, two threads in the same second both found the
+    # name free and one note was lost (build log 71, forced interleaving).
+    n = 1
+    while True:
+        filename = f"note_{timestamp}.md" if n == 1 else f"note_{timestamp}_{n}.md"
         path = notes_dir / filename
-        n += 1
-
-    try:
-        note_content = f"# Note — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{content}\n"
-        path.write_text(note_content, encoding="utf-8")
-        return f"Note saved: notes/{filename}"
-    except Exception as e:
-        return f"[ERROR] {e}"
+        try:
+            with open(path, "x", encoding="utf-8") as f:
+                f.write(note_content)
+                f.flush()
+                os.fsync(f.fileno())         # on the card before "saved" (71)
+            return f"Note saved: notes/{filename}"
+        except FileExistsError:
+            n += 1
+            if n > 1000:
+                return "[ERROR] Could not find a free name for the note."
+        except Exception as e:
+            return f"[ERROR] {e}"
 
 
 def _list_notes() -> str:
@@ -489,7 +503,11 @@ def _search_files(query: str) -> str:
         return "[ERROR] No search query."
 
     ws = Path(workspace())
-    matches = list(ws.rglob(f"*{query}*"))[:20]
+    # By name, whatever the capitals (build log 71): rglob is case-sensitive
+    # on Linux, and until 71 the name had been lowered on the way here.
+    q = query.lower()
+    matches = [p for p in sorted(ws.rglob("*"))
+               if q in (p.relative_to(ws).as_posix() if "/" in q else p.name).lower()][:20]
 
     if not matches:
         # Try content search

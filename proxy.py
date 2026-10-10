@@ -1215,6 +1215,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # the training loop, one at the level lent for its stage.
         gate = lesson["gate"] if lesson else getattr(spark, "gate", None)
 
+        # Text, or a plain refusal (build log 71). A message whose content is
+        # a list of parts - as some clients send - reached the checks below
+        # and raised, and the threaded server dropped the connection without
+        # a word in the journal.
+        if not isinstance(data, dict) or not isinstance(data.get("messages", []), list):
+            self._send_json({"error": "a chat request is an object with a list of messages"},
+                            status=400)
+            return
+        for msg in data.get("messages", []):
+            if not isinstance(msg, dict) or not isinstance(msg.get("content") or "", str):
+                self._send_json({"error": "each message is an object whose content is text"},
+                                status=400)
+                return
+
         messages = data.get("messages", [])
         # The unit serves one model, its own (logic/served.py, build log 68),
         # whatever model a caller names: callers written for the 3B named
@@ -2113,8 +2127,15 @@ class ThreadedHTTPServer(http.server.HTTPServer):
     def _handle(self, request, client_address):
         try:
             self.finish_request(request, client_address)
-        except Exception:
-            pass
+        except Exception as e:
+            # Said in the journal (build log 71): until then every error here
+            # was swallowed, and a client saw only a dropped connection.
+            print(f"[proxy] request from {client_address[0]} failed: {e!r}", flush=True)
+            try:
+                import traceback
+                traceback.print_exc()
+            except Exception:
+                pass
         finally:
             self.shutdown_request(request)
 

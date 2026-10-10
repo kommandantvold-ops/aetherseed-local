@@ -564,5 +564,36 @@ class TestScoring(unittest.TestCase):
         self.assertTrue(reading_soak.score_fact(p, "He called it Day.", {})["answered"])
 
 
+class TestContentThatIsNotText(_Proxy):
+    """Build log 71: a message whose content is a list of parts - as some
+    clients send - raised inside the turn, and the threaded server dropped the
+    connection without a word. Now a plain 400, and nothing stored."""
+
+    def post(self, body):
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=30)
+        c.request("POST", "/api/chat", body=json.dumps(body),
+                  headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        raw = r.read()
+        c.close()
+        return r.status, raw
+
+    def test_a_list_of_parts_is_refused_plainly(self):
+        status, raw = self.post({"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "What is my dog called?"}]}]})
+        self.assertEqual(status, 400)
+        self.assertIn("text", json.loads(raw)["error"])
+        self.assertEqual(proxy.root.store.get_episode_count(unconsolidated_only=False), 0)
+
+    def test_messages_that_are_not_a_list_are_refused_plainly(self):
+        status, _ = self.post({"messages": "What is my dog called?"})
+        self.assertEqual(status, 400)
+
+    def test_text_still_works(self):
+        status, text, _ = self.ask("My dog is called Pixel.")
+        self.assertEqual(status, 200)
+        self.assertTrue(text)
+
+
 if __name__ == "__main__":
     unittest.main()

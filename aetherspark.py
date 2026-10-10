@@ -158,9 +158,10 @@ class ToolRegistry:
         try:
             resolved = Path(path_str).expanduser().resolve()
             sandbox = self.sandbox_root.resolve()
-            if str(resolved).startswith(str(sandbox)):
-                return resolved
-            return None
+            # relative_to, not a string prefix (build log 71): "/x/ws-backup"
+            # starts with "/x/ws" and is not inside it.
+            resolved.relative_to(sandbox)
+            return resolved
         except Exception:
             return None
 

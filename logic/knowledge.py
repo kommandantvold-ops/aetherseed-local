@@ -110,9 +110,13 @@ _TOK = re.compile(r"[a-z0-9]+")
 # Words that carry no signal about WHICH entry is wanted. Deliberately small:
 # every word removed here is a word that can never distinguish two entries, and
 # an over-eager list is how "what are you" ends up with nothing to match on.
+# him/his/her/hers/himself/herself since build log 71: in no entry, each got
+# the highest weight there is - and the steward's facts use this list too
+# (logic/facts.py), so "Tell me about her" found a fact on "her" alone.
 _STOP = frozenset("""
 a an the and or but if then so of to in on at by for with from as is are was were be been being
 do does did doing have has had having i me my we our you your he she it its they them their
+him his her hers himself herself
 this that these those can could will would shall should may might must about into over under
 again more most other some such no nor not only own same too very s t just now here there
 when where why how what which who whom all any both each few please tell say said give get got

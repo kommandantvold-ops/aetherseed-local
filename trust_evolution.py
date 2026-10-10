@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 # Found 2026-09-21 when a stale ~/honesty_check.py on the dev unit was imported
 # by the tests instead of the real one (build log, step 22).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from aetherroot import AetherRoot
+from aetherroot import AetherRoot, atomic_write, set_aside
 
 # ============================================================
 # TRUST TIERS
@@ -177,9 +177,48 @@ class TrustEvolution:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state = self._load_state()
 
+    @property
+    def _last_good_path(self) -> Path:
+        return self.state_path.with_name(self.state_path.name + ".last-read")
+
     def _load_state(self) -> dict:
+        """Her trust as last written. A file that cannot be read no longer
+        stops the proxy starting (build log 71 - proxy.py builds this when it
+        is imported, and a power cut in the middle of a plain write leaves half
+        a file): it is kept, renamed, and her trust is taken from the copy made
+        the last time it was read whole (at the proxy's start, or when asked
+        for); with no such copy, she starts as a new unit does - said in the
+        journal, not hidden. A file that is ABSENT is a
+        new unit or a deliberate reset, and the copy is not used."""
         if self.state_path.exists():
-            return json.loads(self.state_path.read_text())
+            try:
+                state = json.loads(self.state_path.read_text(encoding="utf-8"))
+                if not isinstance(state, dict):
+                    raise ValueError("not a JSON object")
+            except (OSError, ValueError) as exc:
+                set_aside(self.state_path, repr(exc)[:120])
+                try:
+                    state = json.loads(self._last_good_path.read_text(encoding="utf-8"))
+                    if not isinstance(state, dict):
+                        raise ValueError("not a JSON object")
+                except (OSError, ValueError):
+                    print("[trust] no readable copy of her trust: "
+                          "it starts again as a new unit's", flush=True)
+                else:
+                    print("[trust] trust taken from the copy made when it was last read "
+                          "whole (%s)" % self._last_good_path.name, flush=True)
+                    self.state_path.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write(self.state_path, json.dumps(state, indent=2))
+                    return state
+            else:
+                text = json.dumps(state, indent=2)
+                try:
+                    lg = self._last_good_path
+                    if not lg.exists() or lg.read_text(encoding="utf-8") != text:
+                        atomic_write(lg, text)
+                except (OSError, ValueError):
+                    pass
+                return state
         return {
             "resonance": 0.0,
             "tier_index": 0,
@@ -193,7 +232,8 @@ class TrustEvolution:
         }
 
     def _save_state(self):
-        self.state_path.write_text(json.dumps(self.state, indent=2))
+        # atomically: the old record or the new one survives a cut (71)
+        atomic_write(self.state_path, json.dumps(self.state, indent=2))
 
     def record_event(self, event_type: str, details: str = ""):
         """Record a resonance event and recalculate trust."""

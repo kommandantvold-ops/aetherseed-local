@@ -232,6 +232,20 @@ class TestRetrieval(_Store):
         (top,) = index.rank(fact_query("What happened to Lot's wife?"))
         self.assertGreaterEqual(top["score"], 0.45)
 
+    def test_her_alone_finds_no_fact(self):
+        # Build log 71: "her" was not a stopword, so "Tell me about her" -
+        # anyone's vague question - pulled a fact about the steward's family
+        # at score 1.0, matched on "her" alone.
+        from logic.facts import fact_index, FACT_SCORE_THRESHOLD
+        index = fact_index([{"id": 1, "text": "Ada likes to sew her own clothes.",
+                             "source": ""}])
+        for vague in ("Tell me about her", "What did he do with his?", "Is it hers?"):
+            hits = [r for r in index.rank(fact_query(vague))
+                    if r["score"] >= FACT_SCORE_THRESHOLD]
+            self.assertEqual(hits, [], vague)
+        (top,) = index.rank(fact_query("Who likes to sew clothes?"))
+        self.assertGreaterEqual(top["score"], FACT_SCORE_THRESHOLD, "the real question still finds it")
+
     def test_the_note_explains_the_tag(self):
         self.assertIn(FACT_TAG, FACT_NOTE)
         self.assertIn("steward told you", FACT_NOTE)
