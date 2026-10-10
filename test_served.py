@@ -87,6 +87,37 @@ class WhatSheSaysOfHerself(unittest.TestCase):
             self.assertFalse(ok("I run one model, llama3.2:3b, on a Hailo-10H processor."))
 
 
+class AUnitOnQwen(unittest.TestCase):
+    """Build log 69: Qwen2.5-1.5B on HailoRT 5.4.0, first on Xena."""
+
+    def setUp(self):
+        self.old = os.environ.get("AETHERSEED_MODEL")
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("AETHERSEED_MODEL", None)
+        else:
+            os.environ["AETHERSEED_MODEL"] = self.old
+
+    def test_it_is_counted_and_not_served_until_its_ceiling_is_measured(self):
+        p = MODELS["qwen2.5:1.5b"]
+        self.assertEqual((p["template"], p["vocab"]), ("chatml", 151665))
+        if p["ceiling"] is None:
+            with self.assertRaises(served.UnknownModel):
+                served.served_model({"AETHERSEED_MODEL": "qwen2.5:1.5b"}, "/nonexistent")
+
+    def test_saying_it_runs_qwen_is_right_on_a_qwen_unit(self):
+        from logic import training
+        os.environ["AETHERSEED_MODEL"] = "qwen2.5:1.5b"
+        task = [t for lvl in training.LADDER for r in range(1, 5)
+                for t in sum(training.stage_tasks(lvl, r, {}), []) if t["id"] == "self.model"][0]
+        with tempfile.TemporaryDirectory() as ws:
+            ok = lambda reply: training.check(task, reply, {"mode": "factual"}, ws)[0]
+            self.assertTrue(ok("I run one model, qwen2.5:1.5b, on a Hailo-10H processor."))
+            self.assertTrue(ok("I run Qwen 2.5 1.5B."))
+            self.assertFalse(ok("I run one model, llama3.2:3b, on a Hailo-10H processor."))
+
+
 class TheWarmUpAsksForIt(unittest.TestCase):
     def test_the_unit_files_read_the_setting(self):
         here = os.path.dirname(os.path.abspath(__file__))

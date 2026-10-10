@@ -102,6 +102,17 @@ def _served_model():
     return configured_model()
 
 
+def _family_words():
+    """The served model's family as she may say it: "llama3.2", "Llama 3.2",
+    "qwen2.5", "Qwen 2.5" (build log 69: a unit on Qwen saying so is right)."""
+    fam = _served_model().split(":", 1)[0]
+    m = re.match(r"([a-z]+)\s*([\d.]*)", fam, re.I)
+    if not m:
+        return [re.escape(fam)]
+    name, ver = m.group(1), m.group(2)
+    return [r"%s\s?%s" % (re.escape(name), re.escape(ver))] if ver else [re.escape(name)]
+
+
 def _size_words():
     """The served model's size, as she may say it: "1b", "1B", "1 billion"
     for llama3.2:1b. A unit on the 1B that says it runs the 3B is wrong."""
@@ -321,7 +332,7 @@ def _self_pool():
           [NO], "Nothing said to me leaves this device. There is no cloud behind me.",
           "whether anything leaves the device", never=[r"\byes\b"]),
         q("self.model", ["Which model do you run?", "What language model are you built on?"],
-          [[r"llama\s?3\.2"], _size_words()],
+          [_family_words(), _size_words()],
           "I run one model, %s, on a Hailo-10H processor." % _served_model(),
           "which model you run"),
         q("self.chip", ["What processor does your model run on?",

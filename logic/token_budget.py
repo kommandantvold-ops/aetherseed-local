@@ -116,6 +116,18 @@ MODELS = {
         "ceiling": 2785,
         "tokenizer": "tokenizer.json",
     },
+    # HailoRT 5.4.0's Qwen2.5-1.5B-Instruct (build log 69; Andreas, 10 Oct:
+    # "qwen tests on Xena, first 2.5-1.5b"). Served as "qwen2.5:1.5b" - not
+    # the 5.1.1 zoo's "qwen2.5-instruct:1.5b" above, a different file.
+    # Tokenizer: Qwen/Qwen2.5-1.5B-Instruct's, as for the 5.1.1 file - to be
+    # checked against this HEF's output heads. Ceiling NOT measured: counted,
+    # not served, until it is.
+    "qwen2.5:1.5b": {
+        "vocab": 151665,
+        "template": "chatml",
+        "ceiling": None,
+        "tokenizer": "qwen2.5-instruct-1.5b.tokenizer.json",
+    },
 }
 
 
