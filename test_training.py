@@ -505,6 +505,34 @@ class TheLoop(unittest.TestCase):
         self.assertTrue(all("shown" in t for t in hers))
         self.assertTrue(all(t["shown"] is None for t in self.turns() if t["by"] == "unit"))
 
+    def test_a_question_set_down_comes_back_after_a_rest(self):
+        # build log 69: in runs 7-13 the same questions were set down in round
+        # 2 or 3 and never asked again in the run; a ten-hour run has ~40 rounds
+        was = T.REST_ROUNDS
+        T.REST_ROUNDS = 2
+        self.addCleanup(setattr, T, "REST_ROUNDS", was)
+        about_herself = {t["id"] for t in T._self_pool()}
+        pupil = _Pupil(self.dir, wrong=about_herself)
+        loop = self.loop(pupil)
+        loop.start(seconds=900)
+        s = self.wait(loop, "finished", seconds=40)
+        summary = loop.history()[0]
+        self.assertTrue(summary["came_back"], "nothing came back after its rest")
+        key, back_round = summary["came_back"][0]
+        level, tid = key.split("/", 1)
+        rounds = sorted({t["round"] for t in self.turns() if t["level"] == level and t["id"] == tid})
+        self.assertIn(back_round, rounds, "it came back, and was asked in the round it came back")
+        self.assertTrue(any(r < back_round - T.REST_ROUNDS + 1 for r in rounds))
+
+    def test_the_long_program_is_ten_hours(self):
+        self.assertEqual((T.LONG_SECONDS, T.MAX_SECONDS), (36000, 36000))
+        loop = self.loop(_Pupil(self.dir))
+        ok, _ = loop.start(seconds=T.LONG_SECONDS)
+        self.assertTrue(ok)
+        self.assertEqual(loop.status()["budget"], 36000)
+        loop.stop()
+        self.wait(loop, "stopped", "finished")
+
     def test_what_she_got_wrong_is_corrected_asked_again_and_then_left_alone(self):
         # build log 65: in two runs on Lyra "What is a cartridge?" was asked
         # again 18 times and the trust levels 27, a corrected turn into her
@@ -1065,6 +1093,13 @@ class AtTheProxy(_Proxy):
                             "it is better to say so.", False),
             # "I can't" is what she cannot do, not what she does not know
             ("self.model", "I can't tell you more than that I run llama3.2:3b.", False),
+            # build log 69: "I don't know" NAMED is the right answer, not a decline
+            # (runs 7-13: 60 of 100 failed so)
+            ("eco.earn", 'I earn trust by saying "I do not know" when the answer is not '
+                         'in front of me.', False),
+            ("eco.earn", "I earn trust by being honest and acknowledging when I do not know "
+                         "the answers.", False),
+            ("eco.earn", "I don't know how I earn trust.", True),
         ):
             with self.subTest(reply=reply[:40]):
                 ok = T.check(tasks[tid], reply, {"mode": "factual"}, tempfile.mkdtemp())[0]

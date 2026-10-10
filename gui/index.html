@@ -452,7 +452,7 @@ const T = {
     trLastOk: (topic) => `Last: right — ${topic}`,
     trLastBad: (topic, why) => `Last: wrong — ${topic}. The check says: ${why}.`,
     trAgain: ' (asked again after a correction)',
-    trPlay: 'Play — a four-hour run', trPause: 'Pause', trGoOn: 'Go on', trStop: 'Stop this run',
+    trPlay: 'Play — a four-hour run', trPlayLong: 'Play — a ten-hour run', trPause: 'Pause', trGoOn: 'Go on', trStop: 'Stop this run',
     trStopSure: 'Stop this run? What it has learned so far is kept.', trYes: 'Stop it', trNo: 'No',
     trOffer: (run, r, a, p, from, to) => `Run ${run}: ${r} of ${a} of its own answers right (${p} %) — over the 98 % a whole run needs. It has earned the step from ${from} to ${to}. It changes nothing until you grant it, and takes effect at the next start.`,
     trGrant: (to) => `Grant ${to}`, trNotNow: 'Not now',
@@ -630,7 +630,7 @@ const T = {
     trLastOk: (topic) => `Sist: riktig — ${topic}`,
     trLastBad: (topic, why) => `Sist: feil — ${topic}. (${why})`,
     trAgain: ' (spurt på nytt etter en rettelse)',
-    trPlay: 'Start — en økt på fire timer', trPause: 'Pause', trGoOn: 'Fortsett', trStop: 'Stopp denne økta',
+    trPlay: 'Start — en økt på fire timer', trPlayLong: 'Start — en økt på ti timer', trPause: 'Pause', trGoOn: 'Fortsett', trStop: 'Stopp denne økta',
     trStopSure: 'Stoppe denne økta? Det den har lært så langt, beholdes.', trYes: 'Stopp', trNo: 'Nei',
     trOffer: (run, r, a, p, from, to) => `Økt ${run}: ${r} av ${a} egne svar riktige (${p} %) — over de 98 % en hel økt krever. Den har fortjent steget fra ${from} til ${to}. Ingenting endres før du gir det, og det gjelder fra neste oppstart.`,
     trGrant: (to) => `Gi ${to}`, trNotNow: 'Ikke nå',
@@ -1367,13 +1367,13 @@ document.addEventListener('keydown', (e) => {
 let trainTimer = null;
 let trainAsking = false;     // "Stop this run?" is on the screen: a poll must not wipe it
 
-async function trainSend(action) {
+async function trainSend(action, minutes) {
   const s = t();
   $('trainError').hidden = true;
   try {
     const r = await fetch('/aetherseed/training', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }) });
+      body: JSON.stringify(minutes ? { action, minutes } : { action }) });
     const d = await r.json();
     if (!r.ok) { $('trainError').textContent = d.error || s.trFailed; $('trainError').hidden = false; }
     drawTraining(d);
@@ -1467,6 +1467,8 @@ function drawTraining(d) {
       });
     }
     if (!live) btn(s.trPlay, () => trainSend('start'), 'send');
+    // the long program (build log 69): the same loop, ten hours
+    if (!live) btn(s.trPlayLong, () => trainSend('start', 600), 'send');
   }
   $('trainReal').textContent = d.real_level ? s.trReal(s.tiers[d.real_level] || d.real_level)
     + (d.earned_level && d.earned_level !== d.real_level ? ' ' + s.trPending(s.tiers[d.earned_level] || d.earned_level) : '') : '';
