@@ -266,7 +266,7 @@ class TestModelProfiles(unittest.TestCase):
     def test_every_profile_names_a_template_the_counter_can_render(self):
         for name, p in MODELS.items():
             with self.subTest(model=name):
-                self.assertIn(p["template"], ("llama3", "chatml"))
+                self.assertIn(p["template"], ("llama3", "chatml", "chatml_qwen3"))
                 self.assertTrue(p["tokenizer"].endswith(".json"))
 
     def test_chatml_is_the_manifests_own_template(self):
@@ -392,3 +392,19 @@ class TestBudgetGuard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class Qwen3Template(unittest.TestCase):
+    """Build log 70: Qwen3's chatml has no default system line."""
+
+    def test_no_default_system_line_for_qwen3(self):
+        from logic.token_budget import TokenCounter
+        msgs = [{"role": "user", "content": "hi"}]
+        q25 = TokenCounter._render_chatml(msgs)
+        q3 = TokenCounter._render_chatml(msgs, default_system=False)
+        self.assertIn("You are Qwen", q25)
+        self.assertEqual(q3, "<|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n")
+        with_system = [{"role": "system", "content": "S"}] + msgs
+        self.assertEqual(TokenCounter._render_chatml(with_system),
+                         TokenCounter._render_chatml(with_system, default_system=False))
+

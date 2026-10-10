@@ -439,6 +439,11 @@ class TestStreamGuard(unittest.TestCase):
             (["Lines", " with", " the", " [Fiction]", " tag", " are", " stories", "."],
              "Lines with the fiction tag are stories."),
             (["A", " [Known]", " cartridge", " is", " one", " build", "."], "A cartridge is one build."),
+            # build log 70: a list of tag words is named, not recited
+            (["Fiction", ",", " unverified", ",", " and", " [Corrected]", "."],
+             "Fiction, unverified, and corrected."),
+            (["A", " tag", " like", " [Unverified]", " means", " may", " be", " wrong", "."],
+             "A tag like unverified means may be wrong."),
         ):
             with self.subTest(chunks="".join(chunks)):
                 lines, text, ai = self.run_chunks(chunks)

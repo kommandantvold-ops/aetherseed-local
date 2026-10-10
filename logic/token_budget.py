@@ -148,7 +148,7 @@ MODELS = {
     # 1537-1556 with a system message is not tried).
     "qwen3:1.7b": {
         "vocab": 151669,
-        "template": "chatml",
+        "template": "chatml_qwen3",   # no default system line (build log 70)
         "ceiling": 1536,
         "tokenizer": "qwen3-1.7b.tokenizer.json",
     },
@@ -282,6 +282,11 @@ class TokenCounter:
         """
         if self.template == "chatml":
             return self._render_chatml(messages)
+        if self.template == "chatml_qwen3":
+            # Qwen3's template puts no default system line in front of a
+            # prompt without one (build log 70: measured on Xena, our Qwen2.5
+            # count read 1556 where the server's limit is 1536).
+            return self._render_chatml(messages, default_system=False)
         if today is None:
             today = datetime.date.today().strftime("%d %b %Y")
 
@@ -305,7 +310,7 @@ class TokenCounter:
         return "".join(out)
 
     @staticmethod
-    def _render_chatml(messages: Iterable[dict]) -> str:
+    def _render_chatml(messages: Iterable[dict], default_system: bool = True) -> str:
         """Qwen2.5's template, no tools: the first system message (or Qwen's
         own default when there is none), every other message, then the
         assistant's opening. Content is not trimmed - this template does not."""
@@ -313,9 +318,11 @@ class TokenCounter:
         if msgs and msgs[0].get("role") == "system":
             out = ["<|im_start|>system\n" + (msgs[0].get("content") or "") + "<|im_end|>\n"]
             msgs = msgs[1:]
-        else:
+        elif default_system:
             out = ["<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. "
                    "You are a helpful assistant.<|im_end|>\n"]
+        else:
+            out = []
         for m in msgs:
             out.append("<|im_start|>" + m.get("role", "user") + "\n"
                        + (m.get("content") or "") + "<|im_end|>\n")
@@ -794,7 +801,13 @@ def strip_bare_tags(text: str, start: int = 0):
         # (only what comes BEFORE the tag is read: in a stream what follows
         # it has not arrived when the tag is decided, and the stored answer
         # must be the shown one)
-        if re.search(r"\b(?:marked|tagged|labell?ed|called|as|with|the)\s*$", before):
+        # A LIST of tag words is named too (build log 70, the audit of 10
+        # Oct): "can carry the tags: fiction, unverified, and [Corrected]."
+        # read "fiction, unverified, and ." - and was failed, in eco.tags, on
+        # Lyra's runs 7-13. After a comma, "and", "or", "like" or "tags:"
+        # the word stays.
+        if (re.search(r"\b(?:marked|tagged|labell?ed|called|as|with|the|and|or|like|tags?:?)\s*$", before)
+                or re.search(r",\s*$", before)):
             word = m.group(0).strip()[1:-1].lower()
             return word + (" " if m.group(0).endswith((" ", "\t")) else "")
         return ""
