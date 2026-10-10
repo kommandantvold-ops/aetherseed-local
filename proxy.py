@@ -273,6 +273,10 @@ def _steward():
 # marks the turn as not remembered.
 STORE_FAILURES = 0
 
+# The tool results that are a file's own content (build log 70): with one of
+# these in front of her, no past turn is shown - the file is the evidence.
+FILE_EVIDENCE = ("file_read", "summarize", "file_search")
+
 # ---- a ring in her own words (logic/rings.py) ------------------------------
 # Asked for after a ring closes, in the background, one ring at a time. Only
 # the proxy can reach the model, so this lives here rather than in AetherRoot.
@@ -1454,8 +1458,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         retrieval = {}
         try:
+            # When a FILE was read for this question, the file is the
+            # evidence: her past turns are left out (build log 70). Not for
+            # other workspace data - "Which is your lowest trust level?"
+            # brings the trust status, and her corrections must still come.
+            file_evidence = bool(workspace_data) and bool(intent) and \
+                intent.get("intent") in FILE_EVIDENCE
             memory_context = root.retrieve_context(user_msg, request_mode=request_mode,
-                                                   report=retrieval)
+                                                   report=retrieval,
+                                                   past=not file_evidence)
         except TypeError:
             # a root without the report argument (older code, test stand-ins)
             memory_context = root.retrieve_context(user_msg, request_mode=request_mode)

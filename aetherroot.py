@@ -868,7 +868,7 @@ class AetherRoot:
         self.session_id = str(uuid.uuid4())[:8]
 
     def retrieve_context(self, user_msg: str, request_mode: str = "factual",
-                         report: Optional[Dict] = None) -> str:
+                         report: Optional[Dict] = None, past: bool = True) -> str:
         """Retrieve relevant memories and format as context string.
 
         `request_mode` is what the CURRENT request asked for, and it decides
@@ -927,9 +927,19 @@ class AetherRoot:
                 print(f"[knowledge] not consulted this turn: {exc!r}", flush=True)
                 known = []
 
-        # Get episodic + semantic memories
-        episodes = self.store.get_all_episodes()
-        semantics = self.store.get_all_semantic()
+        # THE FILE IS THE EVIDENCE (build log 70; Andreas, 10 Oct: "Stop the
+        # runs and implement now"). When the question brought data from the
+        # workspace - a file read for it - her past turns are not shown: no
+        # episodes, no rings, no steward facts; only the build's own lines.
+        # Measured on a copy of Lyra (training/retrieval_replay.py): the
+        # 64-dimension embedder cannot tell topics apart, so "How many
+        # kilograms of rice?" was shown training turns about trust points,
+        # and she answered "The reader opens at 50 points" with the file in
+        # front of her. And a remembered answer about a file is stale the
+        # moment the file changes.
+        # Get episodic + semantic memories (none when the file is the evidence)
+        episodes = self.store.get_all_episodes() if past else []
+        semantics = self.store.get_all_semantic() if past else []
         # NOTHING IS SET ASIDE (build log 64). Every turn and every ring may
         # come back; what the steward - or the training loop's answer key -
         # said of one comes back with it, as its tag (logic/provenance.py).
@@ -1008,7 +1018,9 @@ class AetherRoot:
         # What the steward told the node (logic/facts.py): after the build's own
         # lines, before anything remembered. Word for word, always attributed,
         # at most two, within their own share of the block.
-        facts = self._fact_lines(user_msg, report)
+        facts = self._fact_lines(user_msg, report) if past else []
+        if report is not None:
+            report["past_left_out"] = not past
 
         # A question about what was read or talked about asks the RINGS first
         # (Andreas, 26 Sep; build log 40e, 41): in the reading soak none of the

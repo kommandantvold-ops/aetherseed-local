@@ -1138,6 +1138,20 @@ class AtTheProxy(_Proxy):
         self.assertNotIn("[Unverified - an earlier answer of yours that may be wrong] "
                          "[Episode] Trainer: " + said, sent)
 
+    def test_with_a_file_read_her_past_turns_are_not_shown(self):
+        # build log 70: "How many kilograms of rice?" was shown turns about
+        # trust points; the file is the evidence
+        SCRIPT["chunks"] = ["Builder", " opens", " at", " 500", " points", "."]
+        self.lesson("At how many points does builder open?", "observer")
+        proxy._training_mark("At how many points does builder open?", True, "")
+        self.ask("Read supplies.txt. How many points of rice are there?")
+        sent = self.system_sent()
+        self.assertIn("[WORKSPACE DATA]", sent)
+        self.assertNotIn("[Episode]", sent)
+        # ... and with other workspace data (the trust status) it still is
+        self.ask("At how many points does builder open? What is my trust level status?")
+        self.assertIn("[Episode]", self.system_sent())
+
     def test_the_loop_is_told_what_her_memory_already_holds(self):
         # build log 65: one checked turn of a wording, not one every round
         SCRIPT["chunks"] = ["Mustardseed", " is", " my", " charter", "."]
