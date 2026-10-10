@@ -52,6 +52,7 @@ line by line. On a new unit expect these lines, and only these, to differ:
 |---|---|---|
 | `packages.count`, `packages.digest` (and `kernel.release`) | the base image or apt state differs from Lyra's | flash the same image; never `apt upgrade` (step 1) |
 | `firmware.version` | a different bootloader/firmware; Lyra's bootloader is the 8 Dec 2025 release, firmware `2226a853` | leave the EEPROM alone, or accept the line |
+| `hailo.firmware.digest` (build log 70) | the Hailo chip's firmware files in `/lib/firmware/hailo/`, given to the chip at every boot: the same on every unit with the same PCIe driver package, different on a HailoRT 5.4.0 unit (§20) | a manifest captured before step 70 has no such line: capture again |
 
 **Any other difference is an install mistake.** Lyra's own package set is
 1650 packages with 9 held (the kernel); its image came up as Debian 13.7 with

@@ -76,6 +76,17 @@ collect() {
   emit kernel.release       "$(uname -r)"
   emit kernel.arch          "$(uname -m)"
   emit firmware.version     "$(vcgencmd version 2>/dev/null | tail -1 | tr -s ' ')"
+  # The Hailo chip's own firmware (build log 70). firmware.version above is
+  # the Raspberry Pi's. The Hailo-10H is given its firmware from the card at
+  # every boot (dmesg: "Firmware loaded in ... ms", build log 68), from these
+  # files, which the PCIe driver package installs: a different file here is
+  # a different chip at work, whatever the package version says.
+  if [ -d /lib/firmware/hailo ]; then
+    emit hailo.firmware.digest "$(cd /lib/firmware/hailo && find . -type f -print0 | LC_ALL=C sort -z \
+      | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+  else
+    emit hailo.firmware.digest MISSING
+  fi
 
   # Package set. The individual Hailo versions are called out because they are
   # the ones a reader cares about; the digest catches everything else drifting.
