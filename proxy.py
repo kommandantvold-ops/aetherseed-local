@@ -64,6 +64,7 @@ from logic import steward
 from logic import library as lib
 from logic import own_shelf
 from logic.facts import FACT_TAG, FACT_NOTE, FACT_TAG_UNCHECKED, FACT_NOTE_UNCHECKED
+from logic import shown as sent_block
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
@@ -1526,6 +1527,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # Forward to hailo-ollama
         try:
             stream = _Stream(self)
+            # The prompt is fitted here, before it goes, so that what is read
+            # after the turn is what was sent (build log 72). enforce_budget
+            # may drop memory lines from the tail of the block. Before this,
+            # everything after the turn read the block as retrieved:
+            # - the honesty check and the steward check counted a dropped line
+            #   as backing;
+            # - the trust scorer counted it as shown;
+            # - the training record said she was shown it;
+            # - the note explaining its tag stayed in the prompt without it.
+            # call_hailo_chat fits again and finds nothing more to drop.
+            messages, budget = enforce_budget(token_counter(model), messages)
+            if getattr(budget, "trimmed", False):
+                print(f"[token-budget] {budget.summary()}", flush=True)
+            sys_i = next((i for i, m in enumerate(messages) if m.get("role") == "system"), None)
+            if sys_i is not None and memory_context:
+                memory_context, trusted_context, retrieval = sent_block.settle(
+                    messages[sys_i]["content"], memory_context, trusted_context, retrieval)
+                if retrieval.get("lines_trimmed"):
+                    messages[sys_i]["content"], gone = sent_block.drop_notes(
+                        messages[sys_i]["content"], memory_context, retrieval.get("tagged"))
+                    print(f"[token-budget] {retrieval['lines_trimmed']} memory line(s) not "
+                          f"sent; read after the turn as not shown"
+                          + (f"; notes left out with them: {', '.join(gone)}" if gone else ""),
+                          flush=True)
             raw_response, ai_content = call_hailo_chat(model, messages, emit=stream)
         except PromptTooLarge as e:
             # Raised before anything is generated, so nothing has been sent.

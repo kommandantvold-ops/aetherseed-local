@@ -1242,6 +1242,7 @@ class AetherRoot:
                      m.get("ring_no"), bool(m.get("tagged"))) for m in top])
         lines = ["[MEMORY CONTEXT]"]
         trusted = []                 # the same block without its tagged lines
+        kinds = []                   # what each line of the block is (build log 72)
         total_chars = 0
         shown = {"known": 0, "facts": [], "rings": [], "tagged": 0}
         for text, kind, ref, tagged in items:
@@ -1258,6 +1259,7 @@ class AetherRoot:
                 # block, with room left for the rest.
                 continue
             lines.append(line)
+            kinds.append(kind)
             total_chars += len(line)
             if tagged:
                 shown["tagged"] += 1
@@ -1287,6 +1289,11 @@ class AetherRoot:
             report["tagged"] = shown["tagged"]
             report["trusted_context"] = "\n".join(
                 ["[MEMORY CONTEXT]"] + trusted + ["[END MEMORY CONTEXT]"]) if trusted else ""
+            # One entry per line of the block, in order: known, fact, asked,
+            # ring or memory. When the token budget drops lines from the tail
+            # of the block, logic/shown.py cuts this report to the lines that
+            # were sent (build log 72).
+            report["line_kinds"] = kinds
 
         return "\n".join(lines)
 

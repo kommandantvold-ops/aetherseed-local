@@ -1049,11 +1049,16 @@ def enforce_budget(counter: TokenCounter,
                 break
             before, body, after = parts
             lines = [l for l in body.split("\n") if l.strip()]
+            if lines:
+                lines.pop()
+                report.memory_entries_dropped += 1
             if not lines:
-                msgs[sys_idx]["content"] = (before + after).rstrip()
+                # The last line gone, the block goes with it (build log 72):
+                # it used to stay behind empty - "[MEMORY CONTEXT]" over
+                # nothing - whenever popping its last line was what made
+                # the prompt fit.
+                msgs[sys_idx]["content"] = before.rstrip() + after
                 break
-            lines.pop()
-            report.memory_entries_dropped += 1
             msgs[sys_idx]["content"] = (
                 before + _MEM_OPEN + "\n" + "\n".join(lines) + "\n" + _MEM_CLOSE + after
             )
