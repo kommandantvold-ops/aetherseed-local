@@ -22,8 +22,11 @@ The records:
 - provenance.log: every turn;
 - corrections.log: every correction and every change to the steward's facts;
 - trust_events.log: every event that moved her standing, and every grant;
-- control.log: every brake, and every release;
-- aetherroot/growth.log: every ring closed, and every wipe.
+- control.log: every brake and release, every change to what she may do,
+  every request to the steward and its answer;
+- aetherroot/growth.log: every ring closed, and every wipe;
+- prompts-YYYY-MM.log: every prompt the model was given and what came back,
+  a file a month; each body is also checked against its own hash.
 """
 import argparse
 import json
@@ -37,6 +40,7 @@ for _p in (os.path.dirname(HERE), "/opt/aetherseed"):
     if os.path.isfile(os.path.join(_p, "logic", "chain.py")) and _p not in sys.path:
         sys.path.insert(0, _p)
 from logic import chain  # noqa: E402
+from logic import prompts  # noqa: E402
 
 RECORDS = ("provenance.log", "corrections.log", "trust_events.log", "control.log",
            os.path.join("aetherroot", "growth.log"))
@@ -59,9 +63,15 @@ def journal_heads(unit="aetherseed-proxy"):
 def check(state_dir, with_journal=False):
     results = {}
     seen = journal_heads() if with_journal else None
-    for rel in RECORDS:
+    # and every month of prompts, each body against its own hash (72, G4)
+    try:
+        months = sorted(n for n in os.listdir(state_dir)
+                        if n.startswith("prompts-") and n.endswith(".log"))
+    except OSError:
+        months = []
+    for rel in RECORDS + tuple(months):
         path = os.path.join(state_dir, rel)
-        r = chain.verify(path)
+        r = prompts.verify(path) if rel in months else chain.verify(path)
         r["path"] = path
         r["exists"] = os.path.exists(path)
         if seen is not None:

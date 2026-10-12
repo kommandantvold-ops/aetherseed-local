@@ -70,6 +70,7 @@ from logic import shown as sent_block
 from logic import chain
 from logic import trust_control
 from logic import approvals
+from logic import prompts
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
@@ -126,6 +127,15 @@ except AttributeError:
 # can rewrite it, and the node can be asked to recite it - see
 # _answer_from_the_record(). Decided with Andreas 2026-09-19.
 PROVENANCE_LOG = os.path.expanduser("~/.aetherseed/provenance.log")
+
+
+def _prompts_log():
+    """Every prompt and what came back (build log 72, G4; logic/prompts.py),
+    beside provenance.log: one file a month, each its own chain, so checking
+    this month's never reads a year of them."""
+    from datetime import datetime as _dt, timezone as _tz
+    return os.path.join(os.path.dirname(PROVENANCE_LOG),
+                        "prompts-%s.log" % _dt.now(_tz.utc).strftime("%Y-%m"))
 # The steward's choices from first run: what the companion is called, and what
 # it speaks. See logic/companion.py.
 COMPANION_FILE = os.path.expanduser("~/.aetherseed/companion.json")
@@ -627,6 +637,11 @@ def record(entry: dict):
         os.makedirs(os.path.dirname(PROVENANCE_LOG), exist_ok=True)
         entry = dict(entry)
         entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # the prompt this turn sent, if it asked the model (72, G4): its
+        # whole text is in prompts-<month>.log under this hash
+        sent = prompts.last_sha256()
+        if sent and "prompt_sha256" not in entry:
+            entry["prompt_sha256"] = sent
         # One chained line (build log 72): changed, removed or put in
         # afterwards, it shows - tools/verify_chain.py. Its hash goes to the
         # journal, which the node's own files cannot rewrite.
@@ -752,6 +767,26 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
 
     data = json.dumps({"model": model, "messages": messages, "stream": True,
                        "options": GENERATION_OPTIONS}).encode()
+    # Every prompt is kept word for word with what came back, however the
+    # call ends (build log 72, G4; logic/prompts.py). The turn's line in
+    # provenance.log carries the same hash.
+    call = prompts.Call(_prompts_log(), data)
+    try:
+        raw, ai_content = _stream_reply(model, messages, emit, data)
+    except Braked as e:
+        call.done("braked", e.partial)
+        raise
+    except Exception as e:
+        call.done("failed: %r" % (e,))
+        raise
+    call.done("answered", ai_content)
+    return raw, ai_content
+
+
+def _stream_reply(model: str, messages: list, emit, data: bytes) -> tuple:
+    """The request and its stream: the second half of call_hailo_chat_unlocked,
+    split off in build log 72 so that every call is recorded however it ends.
+    Everything below is as it was."""
     req = urllib.request.Request(
         f"{HAILO_OLLAMA_URL}/api/chat",
         data=data,
@@ -1499,6 +1534,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "workspace": os.path.join(TRAINING_DIR, "workspace")}
 
     def _proxy_chat_augmented(self, body: bytes):
+        prompts.forget()                    # this turn's prompt, and no other (72)
         lesson = self._lesson(body)
         if lesson is None:
             return self._chat_turn(body)
@@ -2205,9 +2241,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # Her own account, checked now (build log 72): each chained record.
             out = []
             state_dir = os.path.dirname(PROVENANCE_LOG)
-            for rel in CHAINED_RECORDS:
+            # and this month's prompts, each body against its hash (72, G4)
+            month = os.path.basename(_prompts_log())
+            for rel in CHAINED_RECORDS + (month,):
                 path = os.path.join(state_dir, rel)
-                r = chain.verify(path)
+                r = prompts.verify(path) if rel == month else chain.verify(path)
                 out.append({"record": rel, "exists": os.path.exists(path),
                             "lines": r["lines"], "chained": r["chained"],
                             "started": r["started"], "ok": r["ok"],

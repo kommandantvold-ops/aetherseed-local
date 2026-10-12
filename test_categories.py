@@ -123,7 +123,9 @@ class TheRoutes(_Proxy):
         proxy.record({"prompt": "a", "answer": "b"})
         d = self.get("/aetherseed/records")
         names = [r["record"] for r in d["records"]]
-        self.assertEqual(names, list(proxy.CHAINED_RECORDS))
+        # and this month's prompts (build log 72, G4)
+        self.assertEqual(names, list(proxy.CHAINED_RECORDS)
+                         + [os.path.basename(proxy._prompts_log())])
         prov = d["records"][0]
         self.assertEqual((prov["ok"], prov["chained"], prov["exists"]), (True, 1, True))
 
