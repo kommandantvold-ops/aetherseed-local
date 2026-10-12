@@ -48,8 +48,8 @@ PROXIED_POST = ("/api/chat", "/aetherseed/setup", "/aetherseed/steward",
                 "/aetherseed/shelf/remove",
                 # build log 64: the training loop's buttons, and who her steward is
                 "/aetherseed/training", "/aetherseed/steward-name",
-                # build log 72: the steward's brake
-                "/aetherseed/brake")
+                # build log 72: the steward's brake; trust management
+                "/aetherseed/brake", "/aetherseed/trust")
 
 # THE STEWARD'S OWN SHELF (build log 62). Andreas, 5 Oct 2026: "a file upload
 # button in the gui, that adds documents to the library/workspace". The body
@@ -149,7 +149,7 @@ def _console_seen():
 # /aetherseed/shelf: the steward's own documents and how far each is read (62).
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", "/api/tags",
                "/aetherseed/shelf", "/aetherseed/training", "/aetherseed/trust-record",
-               "/aetherseed/brake")
+               "/aetherseed/brake", "/aetherseed/trust")
 PROXIED_GET_QUERY = ("/aetherseed/memories",)
 
 # The page's own script is pinned by the hash of its bytes.

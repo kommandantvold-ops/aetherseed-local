@@ -254,6 +254,16 @@ class TrustEvolution:
         score = RESONANCE_EVENTS.get(event_type, 0)
         if score == 0:
             return
+        if self.state.get("frozen"):
+            # Her steward has frozen her standing (build log 72): the event is
+            # recorded, as it would have been, and does not move it. Only he
+            # moves it now - a grant or a lowering - until he lifts the freeze.
+            self._chain_event({"timestamp": datetime.now(timezone.utc).isoformat(),
+                               "type": event_type, "score": score, "details": details,
+                               "applied": False, "why": "her standing is frozen",
+                               "resonance_after": self.state["resonance"]})
+            self._log_observation("%s (frozen)" % event_type, details)
+            return
 
         self.state["resonance"] += score
         if self.state["resonance"] < 0:
@@ -319,6 +329,53 @@ class TrustEvolution:
         self._update_tier()
         self._save_state()
         return self.get_trust_level_name()
+
+    def lower_level(self, role: str, details: str) -> str:
+        """Her steward lowers her to a level (build log 72): her standing is
+        set to that level's own threshold - never raised by this - and it is
+        logged as his, with his reason. Returns the level she then holds."""
+        idx = next((i for i, t in enumerate(TIERS) if t["role"].lower() == (role or "").lower()), None)
+        if idx is None:
+            raise ValueError("no such level: %r" % role)
+        to = float(TIERS[idx]["min_resonance"])
+        before = float(self.state["resonance"])
+        if before > to:
+            self.state["resonance"] = to
+        event = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "steward_lower",
+            "score": min(0.0, to - before),
+            "details": details or "lowered to %s by the steward" % TIERS[idx]["role"].lower(),
+            "resonance_after": self.state["resonance"]}
+        self.state["events"].append(event)
+        self.state["events"] = self.state["events"][-100:]
+        self._chain_event(event)
+        self._update_tier()
+        self._save_state()
+        return self.get_trust_level_name()
+
+    def freeze(self, by: str, reason: str) -> dict:
+        """Hold her standing where it is (build log 72): no event moves it
+        until the freeze is lifted. His grant or lowering still does."""
+        if not self.state.get("frozen"):
+            self.state["frozen"] = {"since": datetime.now(timezone.utc).isoformat(),
+                                    "by": by, "reason": reason}
+            self._chain_event({"timestamp": self.state["frozen"]["since"], "type": "freeze",
+                               "score": 0, "details": reason, "by": by,
+                               "resonance_after": self.state["resonance"]})
+            self._save_state()
+        return dict(self.state["frozen"])
+
+    def unfreeze(self, by: str, reason: str) -> None:
+        if self.state.get("frozen"):
+            self.state["frozen"] = None
+            self._chain_event({"timestamp": datetime.now(timezone.utc).isoformat(),
+                               "type": "unfreeze", "score": 0, "details": reason, "by": by,
+                               "resonance_after": self.state["resonance"]})
+            self._save_state()
+
+    def is_frozen(self) -> bool:
+        return bool(self.state.get("frozen"))
 
     def _update_tier(self):
         """Determine current trust tier from standing, then from the curriculum.

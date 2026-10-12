@@ -327,12 +327,34 @@ class SafetyGate:
         self.trust_level = config.get("trust_level", "observer")
         self.allowed_tiers = TRUST_PERMISSIONS.get(self.trust_level, [1])
         self.session_approved_tier2 = False
+        # The steward's own word on single tools (build log 72): a callable
+        # returning {tool: {"rule": "allow" | "block", "reason": ...}}, set by
+        # the proxy from logic/trust_control.py. None: no word, the tier decides.
+        self.overrides = None
         self.audit_path = Path(config.get("audit_log",
                                os.path.expanduser("~/.aetherseed/spark_audit.log")))
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
 
     def check(self, tool_name: str, tool_tier: int, params: Dict) -> Tuple[bool, str]:
         """Check if a tool call is allowed. Returns (allowed, reason)."""
+        # The steward's word on this one tool comes before her level (72): a
+        # block holds at any level, an allow opens it at any level. Network
+        # stays off when the unit has it off - that is the unit's, not a level.
+        rule = None
+        if self.overrides is not None:
+            try:
+                rule = (self.overrides() or {}).get(tool_name)
+            except Exception:
+                rule = {"rule": "block", "reason": "the steward's rules could not be read"}
+        if rule and rule.get("rule") == "block":
+            reason = "blocked by the steward: %s" % (rule.get("reason") or "no reason given")
+            self._audit(tool_name, params, "BLOCKED-BY-STEWARD", reason)
+            return False, reason
+        if rule and rule.get("rule") == "allow" and not (
+                tool_tier == 4 and not DEFAULT_SPARK_CONFIG.get("network_enabled")):
+            reason = "allowed by the steward: %s" % (rule.get("reason") or "no reason given")
+            self._audit(tool_name, params, "ALLOWED-BY-STEWARD", reason)
+            return True, reason
         # Is this tier allowed at current trust level?
         if tool_tier not in self.allowed_tiers:
             reason = (f"Tool '{tool_name}' requires tier {tool_tier}, "

@@ -37,6 +37,16 @@ _WHAT = {
     "count": ("count through a file", "Nothing was counted."),
     "count_word": ("count through a file", "Nothing was counted."),
     "compare": ("compare files", "Nothing was compared."),
+    # the reads: open at every level, unless the steward blocks one (72)
+    "file_read": ("read that file", "Nothing was read."),
+    "file_list": ("list my workspace", "Nothing was listed."),
+    "file_search": ("search the files", "Nothing was searched."),
+    "summarize": ("summarize that file", "Nothing was read."),
+    "todo_read": ("show your to-do list", "Nothing was shown."),
+    "note_list": ("list my notes", "Nothing was listed."),
+    "system_health": ("show my health", "Nothing was shown."),
+    "trust_status": ("show my trust status", "Nothing was shown."),
+    "log_read": ("read my growth log", "Nothing was shown."),
 }
 
 
@@ -46,6 +56,13 @@ def lowest_role_for(tier: int, permissions: dict) -> Optional[str]:
         if tier in permissions.get(role, ()):
             return role
     return None
+
+
+def blocked_text(tool: str) -> str:
+    """What the node says when its steward has blocked `tool` (build log 72):
+    not a level she has yet to reach - his word, at any level."""
+    what, after = _WHAT.get(tool, ("do that", "Nothing was changed."))
+    return f"I can't {what}: my steward has blocked it. {after}"
 
 
 def refusal_text(tool: str, tier: int, level: str, permissions: dict) -> str:

@@ -34,6 +34,7 @@ from aetherspark import AetherSpark, SafetyGate, TRUST_PERMISSIONS
 from trust_evolution import TrustEvolution
 from intent_detection import detect_intent, execute_intent, in_workspace
 from logic.gate_answers import (is_level_question, level_text, refusal_text, todo_text,
+                                blocked_text,
                                 tool_text, TOLD_BY_THE_UNIT, is_ladder_question,
                                 ladder_text, only_asks_for_the_file, file_text)
 from logic.clock import is_date_question, date_text
@@ -67,6 +68,7 @@ from logic import own_shelf
 from logic.facts import FACT_TAG, FACT_NOTE, FACT_TAG_UNCHECKED, FACT_NOTE_UNCHECKED
 from logic import shown as sent_block
 from logic import chain
+from logic import trust_control
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
@@ -107,6 +109,11 @@ spark = AetherSpark({
     "trust_level": trust_level,
     "audit_log": os.path.expanduser("~/.aetherseed/spark_audit.log")
 })
+try:
+    # the steward's rules on single tools, before her tier (build log 72)
+    spark.gate.overrides = lambda: _tool_rules()
+except AttributeError:
+    pass                                  # a stand-in spark (the tests' import)
 
 # The record the node cannot edit.
 #
@@ -234,6 +241,31 @@ def set_brake(on, by="the console", reason=""):
         except Exception as e:
             print(f"[brake] could not pause the training run: {e!r}", flush=True)
     return brake_state(), True, None
+
+
+# ---- TRUST MANAGEMENT (build log 72, T; logic/trust_control.py) -------------
+TRUST_CONTROL_FILE = os.path.expanduser("~/.aetherseed/trust_control.json")
+_TRUST_CONTROLS = {}
+
+
+def trust_controls():
+    key = (TRUST_CONTROL_FILE, CONTROL_LOG)
+    if key not in _TRUST_CONTROLS:
+        _TRUST_CONTROLS.clear()
+        _TRUST_CONTROLS[key] = trust_control.Controls(*key)
+    return _TRUST_CONTROLS[key]
+
+
+def _tool_rules():
+    return trust_controls().overrides()
+
+
+def _tools():
+    """{intent: tier}, {intent: description} - what the gate can be asked."""
+    import intent_detection as _I
+    pats = getattr(_I, "INTENT_PATTERNS", [])
+    return ({d["intent"]: d["tier"] for d in pats},
+            {d["intent"]: d.get("description", "") for d in pats})
 
 
 # ---- THE TRAINING LOOP (build log 64; logic/training.py) -------------------
@@ -1030,6 +1062,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # node repeating a line it shipped with is not a new fact about the
         # world, and storing it would let it re-enter later prompts as one.
 
+    def _trust_view(self):
+        tools, desc = _tools()
+        from trust_evolution import TIERS
+        return trust_control.view(trust=trust, gate=getattr(spark, "gate", None),
+                                  controls=trust_controls(), tools=tools,
+                                  descriptions=desc, tiers=TIERS,
+                                  events_path=str(trust.events_path))
+
     def _answer_braked(self, model: str, stream=None, user_msg: str = "",
                        partial: str = "", lesson=None, speaker: str = ""):
         """The brake is on (build log 72): the turn is refused, or the answer
@@ -1554,8 +1594,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # The refusal is already in the audit log (aetherspark); it is
             # not stored as an episode and not scored.
             if result and result.startswith("[DENIED]"):
-                text = refusal_text(intent["intent"], intent["tier"],
-                                    gate.trust_level, TRUST_PERMISSIONS)
+                if "blocked by the steward" in result:
+                    text = blocked_text(intent["intent"])        # build log 72
+                else:
+                    text = refusal_text(intent["intent"], intent["tier"],
+                                        gate.trust_level, TRUST_PERMISSIONS)
                 print(f"[gate] {intent['intent']} refused, told as refused "
                       f"(model not called)", flush=True)
                 self._serve_plain(model, text, source="gate", mode="gate",
@@ -2038,6 +2081,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/aetherseed/brake":
             self._send_json({"brake": brake_state()})
             return
+        if self.path == "/aetherseed/trust":
+            self._send_json(self._trust_view())
+            return
         if self.path == "/aetherseed/status":
             try:
                 rs = root.get_status()
@@ -2251,6 +2297,29 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"companion": companion.public(saved)})
             return
 
+        if self.path == "/aetherseed/trust":
+            # Trust management (build log 72): grant, lower, freeze, unfreeze,
+            # allow, block, clear - each with a reason.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            if not isinstance(req, dict):
+                req = {}
+            tools, _ = _tools()
+            from trust_evolution import TIERS
+            result, err = trust_control.apply(
+                req.get("action"), req, trust=trust, gate=getattr(spark, "gate", None),
+                controls=trust_controls(), tools=tools, tiers=TIERS, by="the steward")
+            out = self._trust_view()
+            if err:
+                out["error"] = err
+                self._send_json(out, status=400)
+                return
+            out["done"] = result
+            self._send_json(out)
+            return
+
         if self.path == "/aetherseed/brake":
             # The steward's brake (build log 72): {"action": "on"|"off", "reason"}.
             try:
@@ -2412,6 +2481,7 @@ def main():
         "trust_level": trust_level,
         "audit_log": os.path.expanduser("~/.aetherseed/spark_audit.log")
     })
+    spark.gate.overrides = lambda: _tool_rules()
 
     print("=" * 50)
     print("  AETHERSEED PROXY v3 — THE LIVING AGENT")
