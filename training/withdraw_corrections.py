@@ -123,12 +123,12 @@ def main(argv=None):
         log = os.path.join(a.home, "corrections.log")
         for n in asked:
             steward.undo(store, None, n, log_path=log)
-            with open(log, "a", encoding="utf-8") as f:
-                f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                    "action": "withdrawn", "note": n, "turn": listed[n]["turn"],
-                                    "why": "the training key was wrong: this build's key passes "
-                                           "the answer it corrected",
-                                    "by": "the steward's word"}) + "\n")
+            from logic import chain     # chained, as every writer of this log (72)
+            chain.append(log, {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                               "action": "withdrawn", "note": n, "turn": listed[n]["turn"],
+                               "why": "the training key was wrong: this build's key passes "
+                                      "the answer it corrected",
+                               "by": "the steward's word"}, announce=os.path.basename(log))
             print("withdrawn: note %d (turn %d)" % (n, listed[n]["turn"]))
         return 0
     finally:

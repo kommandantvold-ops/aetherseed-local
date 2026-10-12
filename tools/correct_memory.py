@@ -118,8 +118,8 @@ def log_line(path, entry):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     entry = dict(entry)
     entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    from logic import chain         # chained, as every writer of this log (72)
+    chain.append(path, entry, announce=os.path.basename(path))
 
 
 def previous_modes(path, ids, action="set_mode", field="mode_before"):

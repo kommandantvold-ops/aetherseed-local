@@ -45,6 +45,7 @@ import os
 import re
 from datetime import datetime, timezone
 
+from logic import chain
 from logic.facts import validate_fact
 from logic.provenance import memory_tag
 
@@ -93,9 +94,8 @@ def _log(path, entry):
     entry = dict(entry, at=_now().isoformat(timespec="seconds"))
     entry.setdefault("by", "steward (console)")
     try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        # chained (build log 72): a correction changed afterwards shows
+        chain.append(path, entry, announce=os.path.basename(path))
     except OSError as e:
         print(f"[steward] could not write the corrections log: {e!r}", flush=True)
 

@@ -178,6 +178,20 @@ class TrustEvolution:
         self.state = self._load_state()
 
     @property
+    def events_path(self) -> Path:
+        """Every event that moved her standing, and every grant, chained
+        (build log 72). The state keeps the last 100; this keeps them all."""
+        return self.state_path.with_name("trust_events.log")
+
+    def _chain_event(self, event: dict):
+        try:
+            from logic import chain
+            chain.append(self.events_path, event, announce="trust_events.log")
+        except Exception as e:           # the record of an event, not the event
+            print("[trust] could not write the event to trust_events.log: %r" % (e,),
+                  flush=True)
+
+    @property
     def _last_good_path(self) -> Path:
         return self.state_path.with_name(self.state_path.name + ".last-read")
 
@@ -260,13 +274,15 @@ class TrustEvolution:
             self.state["sessions"] += 1
 
         # Log event
-        self.state["events"].append({
+        event = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": event_type,
             "score": score,
             "details": details,
             "resonance_after": self.state["resonance"]
-        })
+        }
+        self.state["events"].append(event)
+        self._chain_event(event)
 
         # Keep only last 100 events
         if len(self.state["events"]) > 100:
@@ -291,12 +307,14 @@ class TrustEvolution:
         before = float(self.state["resonance"])
         if before < need:
             self.state["resonance"] = need
-        self.state["events"].append({
+        event = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": "steward_grant",
             "score": max(0.0, need - before),
             "details": details or "granted %s by the steward" % TIERS[idx]["role"].lower(),
-            "resonance_after": self.state["resonance"]})
+            "resonance_after": self.state["resonance"]}
+        self.state["events"].append(event)
+        self._chain_event(event)
         self.state["events"] = self.state["events"][-100:]
         self._update_tier()
         self._save_state()
@@ -453,7 +471,11 @@ class TrustEvolution:
         return True, ""
 
     def reset(self):
-        """Reset trust to seed state."""
+        """Reset trust to seed state. The reset itself is recorded (72)."""
+        self._chain_event({"timestamp": datetime.now(timezone.utc).isoformat(),
+                           "type": "reset", "score": 0,
+                           "details": "trust reset to a new unit's",
+                           "resonance_before": self.state.get("resonance")})
         self.state = {
             "resonance": 0.0,
             "tier_index": 0,

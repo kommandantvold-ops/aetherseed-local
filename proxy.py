@@ -65,6 +65,7 @@ from logic import library as lib
 from logic import own_shelf
 from logic.facts import FACT_TAG, FACT_NOTE, FACT_TAG_UNCHECKED, FACT_NOTE_UNCHECKED
 from logic import shown as sent_block
+from logic import chain
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
@@ -389,8 +390,10 @@ def record(entry: dict):
         os.makedirs(os.path.dirname(PROVENANCE_LOG), exist_ok=True)
         entry = dict(entry)
         entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        with open(PROVENANCE_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        # One chained line (build log 72): changed, removed or put in
+        # afterwards, it shows - tools/verify_chain.py. Its hash goes to the
+        # journal, which the node's own files cannot rewrite.
+        chain.append(PROVENANCE_LOG, entry, announce="provenance.log")
     except Exception as e:
         print(f"[provenance] could not write the record: {e!r}", flush=True)
 
@@ -2165,6 +2168,28 @@ class ThreadedHTTPServer(http.server.HTTPServer):
             self.shutdown_request(request)
 
 
+CHAINED_RECORDS = ("provenance.log", "corrections.log", "trust_events.log",
+                   os.path.join("aetherroot", "growth.log"))
+
+
+def _check_records(state_dir):
+    """One journal line per chained record: whether it holds, and its head."""
+    for rel in CHAINED_RECORDS:
+        path = os.path.join(state_dir, rel)
+        if not os.path.exists(path):
+            continue
+        r = chain.verify(path)
+        if r["started"] is None:
+            print(f"[chain] {rel}: {r['lines']} lines, none chained yet "
+                  f"(the first line written fixes them)", flush=True)
+        elif r["ok"]:
+            print(f"[chain] {rel}: holds - {r['chained']} chained from line "
+                  f"{r['started']}, head {r['head'][:16]}", flush=True)
+        else:
+            print(f"[chain] {rel}: DOES NOT HOLD at line {r['first_bad']} - "
+                  f"{r['why']}", flush=True)
+
+
 def main():
     # Reload trust level on startup
     global spark
@@ -2198,6 +2223,13 @@ def main():
     print(f"  {trust.get_status_line()}")
     print("=" * 50)
     print()
+
+    # Her own account, checked at every start (build log 72): each chained
+    # record is walked, and a line changed, removed or put in is named here.
+    try:
+        _check_records(os.path.dirname(PROVENANCE_LOG))
+    except Exception as e:
+        print(f"[chain] the records could not be checked: {e!r}", flush=True)
 
     # A start in the middle of reading a document: read it again.
     try:

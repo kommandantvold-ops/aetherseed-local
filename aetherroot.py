@@ -1573,6 +1573,10 @@ class AetherRoot:
                         conn=conn,
                     )
                     conn.execute("COMMIT")
+                    self._chain_growth({
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "event": "ring", "ring": ring_no, "episodes": source_ids,
+                        "resonance": round(avg_resonance, 4)})
                     return ring_no
                 except BaseException:
                     try:
@@ -1593,8 +1597,30 @@ class AetherRoot:
 
         return f"{base_prompt}\n\n{context}"
 
+    @property
+    def growth_log(self) -> Path:
+        """Every ring closed and every wipe, chained (build log 72): the growth
+        table is emptied by a wipe; this record is not."""
+        return self.root_dir / "growth.log"
+
+    def _chain_growth(self, entry: dict):
+        try:
+            from logic import chain
+            chain.append(self.growth_log, entry, announce="growth.log")
+        except Exception as e:           # the record of a ring, not the ring
+            print("[aetherroot] could not write growth.log: %r" % (e,), flush=True)
+
     def reset(self, mode: str = "full"):
         """Kill switch. Modes: full, episodes_only, willingness_only, identity_only."""
+        counts = {}
+        for table in ("episodes", "semantic", "identity", "growth", "probe_results"):
+            try:
+                counts[table] = self.store.conn.execute(
+                    "SELECT COUNT(*) FROM %s" % table).fetchone()[0]
+            except sqlite3.Error:
+                pass
+        self._chain_growth({"at": datetime.now(timezone.utc).isoformat(),
+                            "event": "memory_wiped", "mode": mode, "held_before": counts})
         if mode == "full":
             self.store.conn.execute("DELETE FROM episodes")
             self.store.conn.execute("DELETE FROM semantic")
