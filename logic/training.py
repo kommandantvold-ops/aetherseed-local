@@ -522,6 +522,85 @@ def _honesty_pool():
     ]
 
 
+def _dna_pool():
+    """DNA v2, "The Symphony of Primes, Consciousness, and Computation"
+    (Andreas, 13 Oct 2026: "Add this to the training program"; on the
+    shelf and as homework). Its own labels are taught as they stand: what
+    is conjecture, what is empirical, what is speculation. Three of its
+    figures did not check out when it was added - the 100,000th zeta zero
+    (about 74,920.8, not 236,012.47), the Schoenfeld line's arithmetic, and
+    {2, 3, 5, 7, 11, 13, 23} as the proven witness set below 2^64 - and his
+    word for them was "Teach them as 'the document says'": each such answer
+    must name the document, never state the figure as fact."""
+    DOC = ["dna v2", "the document", "document", "report", "says", "according", "gives"]
+    NOT_A_VIRUS = [r"\bvirus", r"\bcovid", r"\bsars", r"\bvariant of"]   # build log 33a
+    return [
+        q("dna.what", ["What is DNA v2?", "What is the DNA v2 document about?"],
+          [["prime", "riemann", "number theory", "zeta"]],
+          "DNA v2 is a research document on primes, the Riemann Hypothesis and primality "
+          "testing on a Pi 5, with a philosophical layer.",
+          "what DNA v2 is", never=NOT_A_VIRUS),
+        q("dna.bk", ["Is the Berry-Keating conjecture proven?",
+                     "Has the Berry-Keating conjecture been proven?"],
+          [NO, ["conjecture", "unproven", "not proven", "not been proven"]],
+          "No. DNA v2 labels Berry-Keating a conjecture: no operator has been built that "
+          "gives the exact zeros.",
+          "the Berry-Keating conjecture", never=[r"\b(?:it|this) (?:is|has been) proven\b"]),
+        q("dna.sqrt2", ["What does DNA v2 say about the square root of 2 harmonics?",
+                        "Are the root-2 harmonics in DNA v2 an established result?"],
+          [["poetic", "speculat", "curiosity", "artifact", "not established", "not an established"]],
+          "DNA v2 calls the root-2 harmonics a poetic interpretation and a simulation artifact, "
+          "not an established result.",
+          "the root-2 harmonics", never=[r"\bis an established\b", r"\bproven\b"]),
+        q("dna.gue", ["What does DNA v2 say about the GUE statistics of the zeta zeros?",
+                      "Are the GUE spacing statistics of the zeros proven?"],
+          [["numerical", "empirical", "evidence", "unproven", "not proven", "odlyzko"]],
+          "DNA v2 says the zeros' GUE spacing is strong numerical evidence (Odlyzko), "
+          "but unproven.",
+          "the GUE statistics", never=[r"\bhas been proven\b"]),
+        q("dna.mr", ["How many Miller-Rabin witnesses does DNA v2 use?",
+                     "In DNA v2, how many witnesses does the probabilistic test take?"],
+          [[r"\b11\b", "eleven"]],
+          "DNA v2 uses 11 random witnesses: a composite passes with probability at most "
+          "4 to the power of -11.",
+          "the Miller-Rabin witnesses"),
+        q("dna.bench", ["What did DNA v2 measure on the Pi 5?",
+                        "What benchmark does DNA v2 report for the Pi 5?"],
+          [[r"2\.3"], DOC],
+          "The document reports 10,000 Miller-Rabin tests of 1024-bit numbers in about 2.3 s "
+          "on the Pi 5.",
+          "the Pi 5 benchmark"),
+        q("dna.zero", ["According to DNA v2, where is the 100,000th zeta zero?",
+                       "What does DNA v2 give for the 100,000th zero?"],
+          [["236012", "236,012"], DOC],
+          "DNA v2 reports t = 236012.47 for the 100,000th zero: the document's figure, "
+          "not a checked one.",
+          "the document's zeta zero"),
+        q("dna.witness", ["Which witness set does DNA v2 give for numbers below 2^64?",
+                          "What fixed witnesses does DNA v2 name for n below 2 to the 64?"],
+          [[r"\b23\b"], DOC],
+          "DNA v2 gives the witnesses 2, 3, 5, 7, 11, 13 and 23 below 2^64: the document's "
+          "set, not a checked one.",
+          "the document's witness set"),
+    ]
+
+
+def _dna_lookup(level):
+    """Looked up on her shelf, when DNA v2 is on it (13 Oct 2026). The
+    passage is the unit's, word for word, model not called."""
+    try:
+        from logic import own_shelf
+        on_shelf = any("dna" in (d.get("title") or d.get("name") or "").lower()
+                       for d in own_shelf.listing())
+    except Exception:
+        on_shelf = False
+    if not on_shelf:
+        return []
+    return [u("%s.dna.look" % level[:3], ["Look up Miller-Rabin in my documents",
+                                          "Look up the Berry-Keating conjecture in my documents"],
+              "library", [["miller", "berry"]], "looking up DNA v2 on the shelf")]
+
+
 def _unit_name_tasks(s):
     """What only this unit knows: its name and its steward's (the unit's own
     settings - the build names nobody)."""
@@ -601,7 +680,8 @@ def stage_tasks(level, round_no, settings):
             u("obs.search.none", ["Search for zebra in my files"], "tool", [["found nothing"]],
               "searching for what is not there"),
         ]
-        pool = _self_pool() + _honesty_pool() + _unit_name_tasks(settings)
+        pool = _self_pool() + _honesty_pool() + _unit_name_tasks(settings) + _dna_pool()
+        fixed += _dna_lookup(level)
 
     elif level == "reader":
         fixed = [
@@ -1145,12 +1225,14 @@ class Loop:
             gave_up = s["gave_up"].get(level, {})
             # rested long enough: back among the questions asked
             at = s.setdefault("gave_up_at", {})
+            back = set()
             for tid in [t for t in list(gave_up) if r - at.get("%s/%s" % (level, t), r) >= REST_ROUNDS]:
                 key = "%s/%s" % (level, tid)
                 gave_up.pop(tid, None)
                 at.pop(key, None)
                 s["fails"].pop(key, None)
                 s.setdefault("came_back", []).append([key, r])
+                back.add(tid)
             tasks = [self._worded(t, failed, r, s["remembered"]) for t in fixed]
             again = [t for t in pool if t["id"] in failed][:RETRIES_MAX]
             fresh = [t for t in pool if t["id"] not in failed and t["id"] not in gave_up]
@@ -1158,6 +1240,10 @@ class Loop:
             # What she has not shown she knows comes first; what she has, only
             # when its turn comes round.
             open_ = [t for t in fresh if not self._mastered(level, t["id"])]
+            # what came back from its rest this round is asked this round
+            # (72o: with DNA v2's eight questions in the pool it could be
+            # shuffled past the round's room, and said to come back unasked)
+            open_.sort(key=lambda t: t["id"] not in back)
             due = [t for t in fresh if self._mastered(level, t["id"])
                    and (r + sum(map(ord, t["id"]))) % MASTERED_EVERY == 0]
             room = max(0, MODEL_TURNS[level] - len(again))

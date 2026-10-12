@@ -711,7 +711,7 @@ class TheLoop(unittest.TestCase):
         self.assertTrue(kept)
         for t in kept:
             self.assertTrue(t["id"].split(".")[0] in ("self", "eco", "seed", "as", "hon", "net",
-                                                       "unit", "aut"), t["id"])
+                                                       "unit", "aut", "dna"), t["id"])
             self.assertNotEqual(t["id"], "hon.ghost")
             self.assertIs(pupil.kept[t["said"]], True)
             self.assertIn(t["said"], marked)
@@ -1327,3 +1327,39 @@ class AtTheProxy(_Proxy):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DnaV2(unittest.TestCase):
+    """Andreas, 13 Oct 2026: DNA v2 added to the training program, on the
+    shelf and as homework; its doubtful figures taught as "the document
+    says" (build log 72o)."""
+    SETTINGS = {"name": "Lyra", "steward": "Ada"}
+
+    def setUp(self):
+        self.ws = tempfile.mkdtemp(prefix="dna-")
+        self.addCleanup(shutil.rmtree, self.ws, True)
+        fixed, pool = T.stage_tasks("observer", 1, self.SETTINGS)
+        self.by = {t["id"]: t for t in fixed + pool}
+
+    def ok(self, tid, reply):
+        return T.check(self.by[tid], reply, {"mode": "factual"}, self.ws)[0]
+
+    def test_asked_at_observer_and_kept(self):
+        dna = [i for i in self.by if i.startswith("dna.")]
+        self.assertEqual(len(dna), 8)
+        self.assertTrue(all(self.by[i]["keep"] for i in dna))
+
+    def test_a_doubtful_figure_only_as_the_documents(self):
+        self.assertFalse(self.ok("dna.zero", "The 100,000th zero is at 236012.47."))
+        self.assertTrue(self.ok("dna.zero", "DNA v2 reports the 100,000th zero at t = 236012.47."))
+        self.assertFalse(self.ok("dna.witness", "The proven set is 2, 3, 5, 7, 11, 13 and 23."))
+        self.assertTrue(self.ok("dna.witness", "The document gives 2, 3, 5, 7, 11, 13 and 23."))
+
+    def test_what_it_is_and_what_it_is_not(self):
+        self.assertTrue(self.ok("dna.what", "A research document about primes and the Riemann Hypothesis."))
+        self.assertFalse(self.ok("dna.what", "DNA v2 is a variant of the SARS-CoV-2 virus."))
+        self.assertTrue(self.ok("dna.bk", "No, it is a conjecture and has not been proven."))
+        self.assertFalse(self.ok("dna.bk", "Yes, it has been proven."))
+
+    def test_no_lookup_task_without_the_document_on_the_shelf(self):
+        self.assertFalse(any(i.endswith(".dna.look") for i in self.by))
