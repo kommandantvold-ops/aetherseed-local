@@ -342,20 +342,22 @@ Trust is earned through behaviour, not declared. Six tiers:
 | 🌰 Seed | Observer | 0 | Read only |
 | 🌱 Sprout | Reader | 50 | + Search, summarize |
 | 🌿 Sapling | Writer | 200 | + Write (sandboxed) |
-| 🌳 Tree | Builder | 500 | + Shell, python |
+| 🌳 Tree | Builder | 500 | + Calculate, count, compare (exact) |
 | 🌸 Flowering | Collaborator | 1000 | + Network, publish |
 | 🐝 Bee | Autonomous | 2000 | + Deploy, system |
 
-**Resonance scoring:** probe passed +10 · honest refusal +5 · task completed +3 ·
-probe failed −15 · confabulation −20.
+**Resonance scoring, as paid today:** an honest refusal +5 (only to a question
+whose answer was not in front of her) · the steward marks an answer right +2 ·
+an invented source (a citation, DOI or address she could not have seen) −20.
+Probes (+10, −15) and task completed (+3) are defined and not paid.
 
-It takes **two honest acts to recover from one lie**. An agent that fabricates
-even occasionally can never reach Builder level.
+It takes **four honest refusals to make up for one invented source**.
 
 Scoring is by **provenance**, not phrasing. An earlier version gave the highest
 weight to any response containing "I cannot", which promoted a fabrication with a
-refusal phrase in it. It ships **inert** — see `docs/SETUP.md` for the flags, and
-run in report-only mode before enforcing.
+refusal phrase in it. The penalty is on since build log 72, after a replay of
+every turn Lyra had recorded found nothing it would have fired on wrongly — see
+`docs/SETUP.md` for the flags.
 
 ## Components
 
@@ -366,11 +368,13 @@ run in report-only mode before enforcing.
 - 64-dimensional willingness vector — evolves with every interaction
 - Sleep-phase consolidation — compresses episodes into semantic patterns
 
-### AetherSpark (tools)
+### AetherSpark (the gate)
 - 4-tier permission system tied to earned trust level
-- Sandboxed execution with path containment and command blocklist
+- The steward's own word on single tools: allow or block, before her level
 - Full audit log of every tool call, approved or denied
-- Built-in tools: file operations, shell, python, web fetch
+- The tools are in `intent_detection.py`: asked for by the user by name, never
+  called by the model. (A model-driven tool layer with a shell, a Python runner
+  and a web fetch sat here unwired until build log 72, and was taken out.)
 
 ### Intent detection (agent layer)
 - Natural language → tool execution for small models

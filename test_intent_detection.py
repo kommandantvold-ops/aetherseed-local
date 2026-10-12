@@ -105,6 +105,18 @@ class OrdinaryLanguageRunsNothing(unittest.TestCase):
             "My progress on the project is slow.",
         ])
 
+    def test_a_temperature_or_a_log_that_is_not_hers(self):
+        # the review of 10 Oct: each of these reached a tool (build log 72)
+        self.assertNothing([
+            "Check the temperature in the living room",
+            "Can you check the temperature of the oven?",
+            "I want to keep a growth log for my plants",
+            "Can you show me the log of my workouts?",
+            "Show me the event log for the party planning",
+            "The activity log of the club says we met twice",
+            "What is the file structure of a novel?",
+        ])
+
 
 class ExplicitRequestsStillWork(unittest.TestCase):
 
@@ -140,6 +152,11 @@ class ExplicitRequestsStillWork(unittest.TestCase):
             "look for plan.md": ("file_search", ("plan.md",)),
             "Show the growth log": ("log_read", ()),
             "check the log": ("log_read", ()),
+            "what is in your growth log?": ("log_read", ()),
+            "Show me the activity log": ("log_read", ()),
+            "check temperature": ("system_health", ()),
+            "Check your temperature": ("system_health", ()),
+            "check the hardware": ("system_health", ()),
             "Summarize the file notes.md": ("summarize", ("notes.md",)),
             "please summarise todo.txt": ("summarize", ("todo.txt",)),
             "sum up the file report": ("summarize", ("report",)),

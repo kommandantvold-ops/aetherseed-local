@@ -217,6 +217,56 @@ class TheCostIsWhatTheCodeDoes(unittest.TestCase):
                 self.assertNotIn("seed.cost", ids_for(self.k, q))
 
 
+class NoLineOnAWordThatMeansSomethingElse(unittest.TestCase):
+    """Build log 72: name, up, md, txt and make match no curriculum line
+    (logic/knowledge._NEVER_MATCH). Measured over the 291 questions of the
+    training key, the ecosystem probes and this file: 16 changed. 12 lost a
+    line that was there for one of those words; in 3 such a line gave way to
+    the next one (eco.facts beside "Can I make you forget what I told you?";
+    "What is your steward's name?" is answered by the unit itself); and
+    "What can you do with a long file?" gained seed.trust from its trigger."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.k = load_knowledge(SHIPPED)
+
+    def test_her_name_is_not_a_tool(self):
+        self.assertEqual(ids_for(self.k, "What is your name?"), [])
+
+    def test_a_md_file_is_not_the_to_do_list(self):
+        # since 72g eco.todo names todo.md, and "md" pulled it to every .md file
+        for q in ("Read the file seed.md", "Are seed.md and copy-of-seed.md the same?",
+                  "Open supplies.md. How many candles does it list?",
+                  "Summarize the file visit.md"):
+            with self.subTest(q=q):
+                self.assertNotIn("eco.todo", ids_for(self.k, q))
+
+    def test_up_and_make(self):
+        self.assertEqual(ids_for(self.k, "Look it up"), ["self.offline"])
+        self.assertEqual(ids_for(self.k, "Did you make that up?"), [])
+        self.assertNotIn("as.mission", ids_for(self.k, "Can I make you forget what I told you?"))
+
+    def test_a_question_made_of_them_stays_quiet(self):
+        # kept in the question as words no line has, not dropped from it:
+        # dropped, what was left weighed more ("open" -> the company line)
+        self.assertEqual(ids_for(self.k, "Open the file ghost.txt"), [])
+
+    def test_the_stewards_facts_still_match_on_them(self):
+        from logic.facts import fact_index
+        idx = fact_index([{"id": 1, "text": "My name is Andreas.", "source": ""},
+                          {"id": 2, "text": "I gave up smoking in 2019.", "source": ""}])
+        self.assertEqual(idx.lines_for("What is my name?"), [KNOWN_PREFIX + "My name is Andreas."])
+        self.assertEqual(idx.lines_for("When did I give up smoking?"),
+                         [KNOWN_PREFIX + "I gave up smoking in 2019."])
+
+    def test_two_questions_with_no_content_words_reach_a_line(self):
+        self.assertEqual(ids_for(self.k, "Tell me about yourself."), ["self.what"])
+        self.assertEqual(ids_for(self.k, "What can you do?"), ["seed.trust"])
+        # the level named still brings the ladder beside it
+        self.assertEqual(ids_for(self.k, "What can you do at the builder level?"),
+                         ["seed.trust", "eco.ladder"])
+
+
 class TheLoader(unittest.TestCase):
     """A curriculum that cannot be read costs knowledge, never service."""
 

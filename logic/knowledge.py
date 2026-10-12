@@ -124,6 +124,26 @@ go going one two
 """.split())
 
 
+# Words no curriculum line is matched on (build log 72). Each matched a line
+# for a reason that has nothing to do with what was asked:
+# - "md" and "txt": eco.todo names todo.md, so every question naming a .md
+#   file ("Read the file seed.md") was shown the to-do line beside the file;
+# - "name": three tool lines say "asked by name", so "What is your name?"
+#   was shown them;
+# - "up": eco.todo ends "from the reader trust level up" (and eco.summarize
+#   matches "sum up"), so "Did you make that up?" and "Look it up" were shown
+#   the to-do line;
+# - "make": as.mission says "to make AI available", so "Did you make that
+#   up?" and "Can I make you forget what I told you?" were shown the mission.
+# They stay in the question, as words no line has: that keeps a question
+# made mostly of them quiet, as before (a stopword would be dropped from it,
+# and what is left would weigh more - measured: "Open the file ghost.txt"
+# was then shown the company line, on "open"). The steward's facts
+# (logic/facts.py) match on all four: "What is my name?" must still find
+# "My name is ...".
+_NEVER_MATCH = frozenset("name up md txt make".split())
+
+
 def _tokens(text: str) -> List[str]:
     return _TOK.findall((text or "").lower())
 
@@ -138,6 +158,9 @@ def _content_words(text: str) -> List[str]:
 class Knowledge:
     """The loaded curriculum. Immutable after construction."""
 
+    # words no line is matched on (see _NEVER_MATCH; the facts' index has none)
+    NEVER_MATCH = _NEVER_MATCH
+
     def __init__(self, entries: List[Dict], source: Optional[Path] = None,
                  errors: Optional[List[str]] = None):
         self.entries = entries
@@ -149,7 +172,7 @@ class Knowledge:
         self._entry_words: List[frozenset] = []
         self._triggers: List[List[str]] = []
         for e in entries:
-            words = frozenset(_tokens(e["text"] + " " + e.get("match", "")))
+            words = frozenset(_tokens(e["text"] + " " + e.get("match", ""))) - self.NEVER_MATCH
             self._entry_words.append(words)
             self._triggers.append(
                 [" " + " ".join(_tokens(t)) + " " for t in e.get("trigger", [])])

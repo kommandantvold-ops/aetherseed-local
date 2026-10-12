@@ -22,7 +22,17 @@ sys.path.insert(0, ROOT)
 
 from core.node import Node
 from core.scheduler import Scheduler, AgentMode, Event
-from models.wrappers import LLM, TTS, STT
+try:
+    from models.wrappers import LLM, TTS, STT
+except ModuleNotFoundError as _e:
+    # The voice loop's model wrappers are not in this repository (.gitignore;
+    # docs/SETUP.md, Phase 11). Said plainly, not as a traceback (build log 72;
+    # the review of 10 Oct: "main.py imports a missing models/").
+    if (_e.name or "").split(".")[0] == "models":
+        sys.exit("main.py is the voice loop, and needs models/wrappers.py, which is not "
+                 "in this repository (docs/SETUP.md, Phase 11). The companion itself "
+                 "runs from proxy.py.")
+    raise
 from logic.prompt_builder import build_system_prompt, build_messages
 from logic.token_budget import sanitize_model_output, cut_at_scaffold_marker
 from hardware.metrics import compute_decay, get_full_report, get_cpu_temp, get_memory_usage

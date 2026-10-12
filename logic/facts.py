@@ -143,6 +143,10 @@ def fact_index(facts):
     from logic.knowledge import Knowledge
 
     class FactIndex(Knowledge):
+        # a steward fact is matched on every word ("What is my name?" finds
+        # "My name is ..."): the curriculum's exceptions are not hers (72)
+        NEVER_MATCH = frozenset()
+
         def _idf(self, word):            # log(1 + n/d): see above
             d = self._df.get(word, 0)
             return math.log(1 + self._n / (d if d else 0.5))

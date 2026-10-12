@@ -291,16 +291,18 @@ python3 -c "import main"
 percentage or measurement is trusted only if it appears in what the node read
 that turn. It replaces the keyword matching in `auto_score_response()`.
 
-It ships **inert**. The flags at the top of `trust_evolution.py`:
+The flags at the top of `trust_evolution.py`:
 
 | Flag | Default | Effect |
 |------|---------|--------|
 | `AUTO_TASK_CREDIT` | `False` | was `True` in effect — credited +3 for any reply over ten characters |
-| `PROVENANCE_REPORT_ONLY` | `True` | log would-be penalties without moving standing |
+| `PROVENANCE_REPORT_ONLY` | `False` since build log 72 | `True`: log would-be penalties without moving standing. Off, an invented citation, DOI or address on a real turn costs 20 (homework never moves her standing) |
 | `PROVENANCE_STRICT` | `False` | `True` also flags unsourced figures, not just citations |
 | `ENFORCE_MODULE_GATING` | `False` | require curriculum modules before a tier promotion |
 
-Run in report-only mode first and read the observations before enforcing:
+The penalty went on after a replay of everything Lyra had recorded, model not
+called: 0 HIGH findings in 6,050 real turns (build log 72). To look first on a
+unit of your own, set `PROVENANCE_REPORT_ONLY = True` and read the observations:
 
 ```bash
 python3 test_trust_scoring.py          # 14 unit tests

@@ -171,6 +171,47 @@ class NoNoteIsWrittenOverAnother(_Workspace):
         self.assertEqual(texts, {"note number %d" % n for n in range(8)})
 
 
+class NoToolLayerForTheModel(unittest.TestCase):
+    """Build log 72: aetherspark.py carried a second tool layer, driven by
+    <tool_call> tags in the model's own output - a shell, a Python runner, a
+    web fetch - imported by nothing. It was taken out; the gate stays."""
+
+    def test_nothing_in_it_runs_a_command(self):
+        import aetherspark
+        with open(aetherspark.__file__, encoding="utf-8") as f:
+            src = f.read()
+        self.assertNotIn("import subprocess", src)
+        for gone in ("ToolRegistry", "parse_tool_calls", "BLOCKED_COMMANDS"):
+            self.assertFalse(hasattr(aetherspark, gone), gone)
+        self.assertFalse(hasattr(aetherspark.AetherSpark, "process_response"))
+
+    def test_the_gate_and_the_workspace_are_still_there(self):
+        import aetherspark
+        tmp = tempfile.mkdtemp(prefix="spark72-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        ws = os.path.join(tmp, "ws")
+        spark = aetherspark.AetherSpark({"sandbox_root": ws, "trust_level": "reader",
+                                         "audit_log": os.path.join(tmp, "audit.log")})
+        self.assertTrue(os.path.isdir(ws), "made before any tool looks for it")
+        self.assertEqual(spark.gate.check("todo_add", 2, {})[0], True)
+        self.assertEqual(spark.gate.check("calculate", 3, {})[0], False)
+        self.assertEqual(spark.get_status()["allowed_tiers"], [1, 2])
+
+    def test_the_voice_loop_says_what_it_lacks(self):
+        import subprocess
+        import sys
+        here = os.path.dirname(os.path.abspath(__file__))
+        if os.path.isdir(os.path.join(here, "models")):
+            self.skipTest("this checkout has the voice loop's models/")
+        home = tempfile.mkdtemp(prefix="home72-")
+        self.addCleanup(shutil.rmtree, home, True)
+        r = subprocess.run([sys.executable, "-c", "import main"], cwd=here, capture_output=True,
+                           text=True, timeout=60, env=dict(os.environ, HOME=home))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("needs models/wrappers.py", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+
 class TextOnly(unittest.TestCase):
     def test_what_is_not_text_asks_for_no_tool(self):
         for not_text in (None, ["Read the file README.md"], {"a": 1}, 7):

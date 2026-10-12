@@ -161,7 +161,10 @@ INTENT_PATTERNS = [
             r"\b(?:cpu|ram|disk)\s+(?:usage|status|temperature|temp|load)\b",
             r"\b(?:cpu|pi|system|board)\s+(?:temperature|temp)\b",
             r"\bhow(?:" + _APOS + r"s|\s+is)\s+(?:the\s+)?(?:pi|system|hardware)\s+(?:doing|running|performing)\b",
-            r"\bcheck\s+(?:the\s+)?(?:system|hardware|temperature)\b",
+            # "check the temperature of the oven" is not hers (build log 72):
+            # "temperature" alone only as the whole request, or as hers
+            r"\bcheck\s+(?:the\s+)?(?:system|hardware)\b",
+            r"\bcheck\s+(?:your\s+)?temp(?:erature)?\s*[?.!]*\s*$",
         ],
         "description": "System health check",
         "tier": 1,
@@ -235,8 +238,12 @@ INTENT_PATTERNS = [
     {
         "intent": "log_read",
         "patterns": [
-            r"\b(?:show|read|view|check)\s+(?:me\s+)?the\s+log\b",
-            r"\b(?:growth|activity|event)\s+log\b",
+            # her own log, not one of the user's (build log 72): "I want to
+            # keep a growth log for my plants", "show me the log of my
+            # workouts" and "the activity log of the club" went to the tool
+            r"\b(?:show|read|view|check)\s+(?:me\s+)?(?:the|your)\s+(?:(?:growth|activity|event)\s+)?log\b"
+            r"(?!\s+(?:of|for|from|about|on)\b)",
+            r"\b(?:your|the)\s+growth\s+log\b(?!\s+(?:of|for|from|about|on)\b)",
         ],
         "description": "Read growth log",
         "tier": 1,

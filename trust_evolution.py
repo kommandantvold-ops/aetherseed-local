@@ -8,7 +8,7 @@ The 6 Trust Tiers:
   🌰 Seed      (Observer)     — resonance 0+    — read only
   🌱 Sprout    (Reader)       — resonance 50+   — + write (sandboxed): notes, to-do (48)
   🌿 Sapling   (Writer)       — resonance 200+  — + write (sandboxed)
-  🌳 Tree      (Builder)      — resonance 500+  — + shell, python
+  🌳 Tree      (Builder)      — resonance 500+  — + calculate, count, compare (64)
   🌸 Flowering (Collaborator) — resonance 1000+ — + network, publish
   🐝 Bee       (Autonomous)   — resonance 2000+ — + deploy, system
 
@@ -21,7 +21,8 @@ Resonance scoring:
   Probe failed:      -15
   Confabulation:     -20
 
-Key design: two honest acts to recover from one lie.
+Key design: four honest refusals (+5) to make up for one invented source
+(-20). Paid today: honest_refusal, steward_support and confabulation (72).
 """
 
 import json
