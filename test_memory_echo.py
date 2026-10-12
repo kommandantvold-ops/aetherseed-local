@@ -77,7 +77,9 @@ class TheEchoChamber(unittest.TestCase):
         self.root.store_interaction("What is the capital of Norway?", "Oslo.", 0.5)
         self.root.store_interaction("What does CPU stand for?", "Central Processing Unit.", 0.5)
         self.root.store_interaction(TELL, "Noted.", 0.5)
-        ctx = self.root.retrieve_context("Tell me what you remember about Norway and my dog")
+        # (build log 72: turns come back by the words of their question, each
+        # sharing at least 0.3 of its weight - two topics, half each)
+        ctx = self.root.retrieve_context("What about Norway and my dog?")
         body = [l for l in ctx.split("\n") if l.startswith("- ")]
         self.assertGreaterEqual(len(body), 2, "unrelated episodes were deduplicated together")
 

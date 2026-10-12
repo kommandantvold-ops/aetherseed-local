@@ -546,6 +546,7 @@ class TheTokenBudgetStillUnderstandsTheBlock(unittest.TestCase):
     def test_the_trimmer_drops_episodes_before_it_drops_knowledge(self):
         from logic.token_budget import _split_block, _MEM_OPEN, _MEM_CLOSE
         self.root.store_interaction("my cat is called Tussi", "Noted.", 0.9)
+        self.root.config["episode_ranking"] = "embedding"    # the order, not the ranking (72)
         ctx = self.root.retrieve_context("can you go online and look it up")
         parts = _split_block(ctx, _MEM_OPEN, _MEM_CLOSE)
         lines = [l for l in parts[1].split("\n") if l.strip()]

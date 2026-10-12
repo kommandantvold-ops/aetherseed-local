@@ -80,9 +80,11 @@ FICTION_NOTE = (
     "It will be recorded as fiction, not as fact."
 )
 
+# Build log 72 (Andreas, 12 Oct 2026: "fix as you suggested"): it said "Data
+# below is real" above memory lines tagged fiction or unverified.
 DATA_NOTE = (
-    "Data below is real, not fabricated. If it is marked truncated, "
-    "say your answer may be incomplete."
+    "Lines below without a tag were really said or read here, not made up. "
+    "If data is marked truncated, say your answer may be incomplete."
 )
 
 

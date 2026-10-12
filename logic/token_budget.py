@@ -779,7 +779,9 @@ _BARE_TAGS = ("[Known]", "[Corrected]", "[Correction]", "[Unverified]", "[Fictio
               "[A right assumption]", "[Right assumption]")
 _BARE_TAG = re.compile(
     r"\[(?:known|corrected|correction|unverified|fiction|passed|pattern|steward told me|assumption|"
-    r"a right assumption|right assumption)\][ \t]?",
+    r"a right assumption|right assumption)\][ \t]?"
+    # the shortened forms TAG_NOTE names (build log 72): "[Fiction, ...]"
+    r"|\[(?:fiction|unverified|corrected|a right assumption)[^\]\n]{0,40}(?:\.\.\.|…)\][ \t]?",
     re.I)
 
 

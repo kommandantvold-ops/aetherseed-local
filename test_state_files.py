@@ -286,7 +286,7 @@ class NoLineClosesTheBlock(_Dir):
             root.store_interaction("zebra " * 30, "quokka " * 30, 1.0)
             for i in range(3):
                 root.store_interaction("zebra %d?" % i, "quokka.", 0.0)
-            ctx = root.retrieve_context("zebra quokka")
+            ctx = root.retrieve_context("zebra?")     # by its question's words (72)
             lines = [l for l in ctx.splitlines() if l.startswith("- ")]
             self.assertTrue(lines, "before 71 the long turn ended the block with nothing in it")
             self.assertTrue(all(len(l) < 150 for l in lines))

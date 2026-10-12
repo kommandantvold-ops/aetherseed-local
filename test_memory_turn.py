@@ -349,7 +349,9 @@ class TestWhatItSaysTheStewardToldIt(_Proxy):
                                   "the mountains of Ararat.")
         self.assertEqual((meta["steward_backed"], ep["mode"]), (False, "unverified"))
         report = {}
-        ctx = proxy.root.retrieve_context("What did the dove bring from Ararat?", report=report)
+        # asked again in its own words: since build log 72 a turn comes back
+        # by the words of its question
+        ctx = proxy.root.retrieve_context("What did the dove have in her mouth?", report=report)
         line = next(l for l in ctx.split("\n") if "golden ring" in l)
         self.assertTrue(line.startswith("- " + UNVERIFIED_LABEL), line)
         self.assertNotIn("golden ring", report["trusted_context"])

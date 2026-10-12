@@ -298,6 +298,9 @@ class TestAskingTheRings(_Root):
 
     def test_a_ring_too_long_for_the_block_leaves_room_for_the_rest(self):
         self.two_rings()
+        # the block's room, not the ranking: the turns by the rule before
+        # (build log 72 ranks them by their words, and none shares these)
+        self.root.config["episode_ranking"] = "embedding"
         ring = self.root.retrieve_context("What have you been reading lately?").splitlines()[1]
         self.assertTrue(ring.startswith("- [Ring] 2"), ring)
         self.root.config["max_context_chars"] = len(ring) - 1   # one character short

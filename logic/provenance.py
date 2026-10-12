@@ -97,7 +97,17 @@ _FICTION_PATTERNS = [
      r"(?:[\w-]+\s+){0,2}"
      r"(?:story|stories|poem|poems|song|songs|tale|tales|fable|joke|jokes|rhyme|"
      r"limerick|verse|haiku|script|screenplay|sonnet|riddle|fairy ?tale)\b", "asks for a made-up form"),
-    (r"\b(?:make|makes|made)\s+(?:something|it|one|this|that)?\s*up\b", "asks to make something up"),
+    # A request, not a question ABOUT making something up (build log 72;
+    # Andreas, 12 Oct 2026: "make the fix"). "Did you make that up?", "What
+    # happens if you make something up?", "Do you ever make something up?"
+    # were fiction turns: the story note told her "Write it" and the answer
+    # was kept as fiction. Not counted after did/does/do you/ever/if/not/
+    # never/don't - but "why don't you make something up" and "why not make
+    # one up" still ask. And "made ... up" is not a request: "you made that
+    # up", "that sounds made up" (a "made-up story" is still caught as a label).
+    (r"\b(?:make|makes)\s+(?:something|it|one|this|that)?\s*up\b", "asks to make something up",
+     r"\b(?:did|didn'?t|didn’t|does|doesn'?t|doesn’t|ever|if|never|nor|without|stop|won'?t|won’t)\b"
+     r"|\bdo\s+(?:you|i|we|they|she|he)\b|(?<!why )\bnot\b|(?<!why )\b(?:don'?t|don’t)\b"),
     (r"\b(?:pretend|imagine|suppose)\s+(?:that\s+|you\s+|we\s+|i\s+|a\s+|an\s+|the\s+)", "asks to pretend or imagine"),
     (r"\brole[- ]?play\b", "asks to role-play"),
     (r"\bin the (?:voice|style|persona|character) of\b", "asks for another voice"),
@@ -233,10 +243,14 @@ CORRECTION_REASONS = {
 TRUE_MAX = 140           # characters of "what is true" carried on the line
 
 # One line of the system prompt, only on a turn where a tagged line is shown.
-TAG_NOTE = ("Some memory lines carry a tag. [Unverified] and [Corrected] lines are earlier "
-            "answers of yours that were unchecked or wrong: do not repeat them as fact. "
-            "Where a correction says what is true, answer with that. A [A right assumption] "
-            "line is an assumption of yours that your steward checked: it held.")
+# Reworded in build log 72 (Andreas, 12 Oct 2026: "fix as you suggested"): it
+# named "[Unverified]", "[Corrected]" and "[A right assumption]", not the tags
+# as they stand, and Fiction not at all.
+TAG_NOTE = ("Tags say what a memory line is. A [Fiction, ...] line is a story written on "
+            "request, not fact. An [Unverified - ...] or [Corrected ...] line is an earlier "
+            "answer of yours, unchecked or wrong: do not repeat it as fact; where a correction "
+            "says what is true, say that. A [A right assumption of yours - ...] line is one "
+            "your steward checked, and it held.")
 
 
 def memory_tag(mode: str, correction=None, supported=False) -> str:

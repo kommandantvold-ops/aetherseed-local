@@ -110,7 +110,15 @@ DEFAULT_CONFIG = {
     "willingness_dim": 64,
     "willingness_drift": 0.02,      # slow drift per interaction
     "db_path": "memory.db",
-    "embedding_method": "tfidf"     # the only method implemented
+    "embedding_method": "tfidf",    # the only method implemented
+    # How her TURNS are ranked (build log 72; Andreas, 12 Oct 2026: "agreed").
+    # "words": by the words of the question they share, weighted by how rare
+    # each is in her memory, shown only at or above word_threshold of the
+    # question's weight. Measured on a copy of Lyra (training/retrieval_replay
+    # --words): turns of the same question 127 -> 148 of 192, other training
+    # turns 259 -> 143. "embedding": the rule before it. Rings keep it.
+    "episode_ranking": "words",
+    "word_threshold": 0.3,
 }
 
 # Provenance modes by what memory does with them (logic/provenance.py).
@@ -843,6 +851,38 @@ def recency_score(timestamp_str: str) -> float:
         return 0.5
 
 
+def _word_set(text):
+    """The words of a turn's question that can tell one topic from another -
+    the curriculum's tokens and stopwords (logic/knowledge.py)."""
+    try:
+        from logic.knowledge import _content_words
+    except ImportError:                     # aetherroot loads without logic/
+        import re
+        return frozenset(w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2)
+    return frozenset(_content_words(text or ""))
+
+
+def rank_by_words(user_msg, memories, threshold, df, n):
+    """Episodes (each with "words") scored by the words of the question they
+    share: the share of the question's weight they carry, idf log(1 + n/d) as
+    the steward's facts (build log 72). Below `threshold`, not shown.
+    Returns [(score, memory)], best first."""
+    import math
+    qw = list(_word_set(user_msg))
+    if not qw:
+        return []
+    idf = {w: math.log(1 + n / df.get(w, 0.5)) for w in qw}
+    denom = sum(idf.values())
+    out = []
+    for m in memories:
+        got = sum(idf[w] for w in qw if w in m["words"])
+        if got and got / denom >= threshold:
+            out.append((got / denom, m))
+    out.sort(key=lambda x: (x[0], x[1].get("resonance", 0.5), x[1].get("id") or 0),
+             reverse=True)
+    return out
+
+
 def retrieve_memories(query_embedding: np.ndarray,
                       memories: List[Dict],
                       weights: Dict[str, float],
@@ -1140,6 +1180,7 @@ class AetherRoot:
                 # episode per key, so one question asked twenty times cannot
                 # fill the window with its own echoes. See _dedupe_by_question.
                 "key": _question_key(ep.get("user_msg")),
+                "words": _word_set(ep.get("user_msg")),
             })
         for sem in semantics:
             note = ring_notes.get(sem["id"]) or {}
@@ -1190,11 +1231,37 @@ class AetherRoot:
         top = []
         if all_memories:
             want = self.config["max_retrieved"]
-            ranked = retrieve_memories(
-                query_emb, all_memories,
-                self.config["retrieval_weights"],
-                top_k=max(want * 8, 40)
-            )
+            if self.config.get("episode_ranking", "words") == "words":
+                # Turns by their words first, as measured; rings after them,
+                # by the rule before (build log 72). Merged on one score, the
+                # rings' resonance and recency alone (some 0.4 for a ring of
+                # nothing asked) would have put Lyra's 295 rings ahead of a
+                # turn sharing a third of the question. A question about what
+                # she read still asks the rings first (rings_for_question).
+                eps = [m for m in all_memories if m.get("type") == "episode"]
+                df = {}
+                for m in eps:
+                    for w in m["words"]:
+                        df[w] = df.get(w, 0) + 1
+                by_words = rank_by_words(user_msg, eps, self.config.get("word_threshold", 0.3),
+                                         df, len(eps) or 1)
+                w = self.config["retrieval_weights"]
+                rings = []
+                for m in all_memories:
+                    if m.get("type") == "episode":
+                        continue
+                    rings.append((w.get("similarity", 0.5) * cosine_similarity(query_emb, m["embedding"])
+                                  + w.get("resonance", 0.35) * m.get("resonance", 0.5)
+                                  + w.get("recency", 0.15) * recency_score(m.get("timestamp", "")),
+                                  m))
+                rings.sort(key=lambda x: x[0], reverse=True)
+                ranked = [m for _, m in by_words + rings][:max(want * 8, 40)]
+            else:
+                ranked = retrieve_memories(
+                    query_emb, all_memories,
+                    self.config["retrieval_weights"],
+                    top_k=max(want * 8, 40)
+                )
             top = _dedupe_by_question(ranked, want)
             # A CORRECTION OF THIS VERY QUESTION COMES BACK FIRST (build log
             # 64d). Read on a copy of Lyra, 6 Oct 2026: "What is AetherSpark?"
@@ -1624,8 +1691,20 @@ class AetherRoot:
                     "SELECT COUNT(*) FROM %s" % table).fetchone()[0]
             except sqlite3.Error:
                 pass
+        # The prompts she was sent hold her memories as they were shown to her
+        # (logic/prompts.py): a wipe of her turns takes them too (build log
+        # 72; Andreas, 12 Oct 2026: "yes"). Named and counted in the record.
+        prompt_files = []
+        if mode in ("full", "episodes_only"):
+            prompt_files = sorted(self.root_dir.parent.glob("prompts-*.log"))
+            counts["prompt_files"] = [p.name for p in prompt_files]
         self._chain_growth({"at": datetime.now(timezone.utc).isoformat(),
                             "event": "memory_wiped", "mode": mode, "held_before": counts})
+        for p in prompt_files:
+            try:
+                p.unlink()
+            except OSError as e:
+                print("[aetherroot] %s could not be removed: %r" % (p.name, e), flush=True)
         if mode == "full":
             self.store.conn.execute("DELETE FROM episodes")
             self.store.conn.execute("DELETE FROM semantic")
