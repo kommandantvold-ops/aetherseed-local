@@ -44,10 +44,98 @@ def rules():
     }
 
 
+def words_report(wording, mems, eps, top, now_rule):
+    """Word-based retrieval (build log 72; the review of 10 Oct, Root #2/#3):
+    a turn is scored by the words of the question it shares, weighted by how
+    rare each is in her memory - the steward's facts are found this way
+    already (logic/facts.py: log(1 + n/d)). Swept over a threshold T: a turn
+    is shown only if the words it shares carry at least T of the question's
+    weight. Two orders among those: by the word score, and by the rule the
+    unit uses now (similarity, resonance, recency) with the word score in
+    place of similarity."""
+    import math
+    import time
+    from logic.knowledge import _STOP, _tokens
+
+    def content(text):
+        return [t for t in dict.fromkeys(_tokens(text)) if t not in _STOP and len(t) > 1]
+
+    for field, label in (("user_msg", "her questions"), ("both", "questions and answers")):
+        sets = []
+        for ep in eps:
+            text = ep.get("user_msg") or ""
+            if field == "both":
+                text += " " + (ep.get("ai_msg") or "")
+            sets.append(frozenset(content(text)))
+        n = len(sets) or 1
+        df, inv = {}, {}
+        for i, ws in enumerate(sets):
+            for w in ws:
+                df[w] = df.get(w, 0) + 1
+                inv.setdefault(w, []).append(i)
+
+        def idf(w):
+            return math.log(1 + n / df.get(w, 0.5))
+        thresholds = (0.2, 0.3, 0.4, 0.5, 0.6, 0.7)
+        orders = ("words", "now")
+        out = {(t, o): {"same": 0, "other_training": 0, "other": 0, "shown": 0, "q": 0, "none": 0}
+               for t in thresholds for o in orders}
+        spent = 0.0
+        for key, tid in wording.items():
+            t0 = time.perf_counter()
+            qw = content(key)
+            denom = sum(idf(w) for w in qw) or 1.0
+            score = {}
+            for w in qw:
+                for i in inv.get(w, ()):
+                    score[i] = score.get(i, 0.0) + idf(w)
+            spent += time.perf_counter() - t0
+            for t in thresholds:
+                passing = [(sc / denom, i) for i, sc in score.items() if sc / denom >= t]
+                for o in orders:
+                    if o == "words":
+                        ranked = sorted(passing, reverse=True)
+                    else:
+                        ranked = sorted(((now_rule(w, mems[i]["res"], mems[i]["rec"]), i)
+                                         for w, i in passing), reverse=True)
+                    seen, picked = set(), []
+                    for _, i in ranked:
+                        k = mems[i]["key"]
+                        if k and k in seen:
+                            continue
+                        seen.add(k)
+                        picked.append(i)
+                        if len(picked) >= top:
+                            break
+                    r = out[(t, o)]
+                    r["q"] += 1
+                    r["none"] += not picked
+                    for i in picked:
+                        m = mems[i]
+                        r["shown"] += 1
+                        if m["task"] == tid:
+                            r["same"] += 1
+                        elif m["trainer"] and m["task"]:
+                            r["other_training"] += 1
+                        else:
+                            r["other"] += 1
+        print()
+        print("words of %s: %d turns, %d words; %.1f ms a question to score them all"
+              % (label, n, len(df), 1000 * spent / max(1, len(wording))))
+        print("%-22s %8s %15s %16s %8s %10s" % ("T, order", "shown/q", "about it (q's)",
+                                              "other training", "other", "none shown"))
+        for (t, o), r in out.items():
+            print("%-22s %8.2f %9d (%3.0f%%) %10d %8d %10d" % (
+                "T %.1f, by %s" % (t, o), r["shown"] / r["q"], r["same"], 100 * r["same"] / r["q"],
+                r["other_training"], r["other"], r["none"]))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--copy-from", default="/var/lib/aetherseed/.aetherseed")
     ap.add_argument("--top", type=int, default=5)
+    ap.add_argument("--words", action="store_true",
+                    help="also rank by the words of each turn (build log 72): the threshold sweep")
     a = ap.parse_args(argv)
     tmp = tempfile.mkdtemp(prefix="replay-")
     try:
@@ -128,6 +216,9 @@ def main(argv=None):
         for name, o in out.items():
             print("%-20s %8.2f %9d (%3.0f%%) %10d %8d" % (name, o["shown"] / o["q"], o["same"],
                   100 * o["same"] / o["q"], o["other_training"], o["other"]))
+        if a.words:
+            words_report(wording, mems, [e for e in episodes if e.get("embedding") is not None],
+                         a.top, rules()["now"])
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
