@@ -101,6 +101,32 @@ class AFileKeepsItsCapitals(_Workspace):
         self.assertEqual(got["captures"][0], "Call Martin")
 
 
+class TheListIsMarkdown(_Workspace):
+    """Build log 72 (Andreas, 11 Oct 2026: .md, not .txt): the to-do list is
+    todo.md. An old todo.txt is carried over once and kept."""
+
+    def test_an_addition_goes_to_todo_md_after_carrying_the_old_list_over(self):
+        self.assertEqual(I._append_todo("buy wicks"), "Added to todo: buy wicks")
+        with open(os.path.join(self.ws, "todo.md")) as f:
+            self.assertEqual(f.read(), "- dry the matches\n- buy wicks\n")
+        with open(os.path.join(self.ws, "todo.txt")) as f:
+            self.assertEqual(f.read(), "- dry the matches\n", "the old list is kept as it was")
+
+    def test_with_both_todo_md_is_the_list(self):
+        with open(os.path.join(self.ws, "todo.md"), "w") as f:
+            f.write("- the new list\n")
+        self.assertEqual(I._todo_path().name, "todo.md")
+        self.assertIn("- the new list", I._read_file(I._todo_path().name))
+
+    def test_with_neither_nothing_is_made_until_something_is_added(self):
+        os.remove(os.path.join(self.ws, "todo.txt"))
+        self.assertEqual(I._todo_path().name, "todo.md")
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "todo.md")))
+        I._append_todo("first")
+        with open(os.path.join(self.ws, "todo.md")) as f:
+            self.assertEqual(f.read(), "- first\n")
+
+
 class NothingOutsideTheWorkspace(_Workspace):
     def test_a_sibling_folder_with_a_longer_name_is_outside(self):
         private = self.ws + "-private"

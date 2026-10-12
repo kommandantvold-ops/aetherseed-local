@@ -51,7 +51,7 @@ class TheQuestions(unittest.TestCase):
 
     def test_the_workspace_holds_what_the_requests_ask_for(self):
         ws = es.WORKSPACE_SEED
-        self.assertTrue(os.path.exists(os.path.join(ws, "todo.txt")))
+        self.assertTrue(os.path.exists(os.path.join(ws, "todo.md")))      # .md since 72
         self.assertTrue(os.path.exists(os.path.join(ws, "visit.md")))
         self.assertTrue(os.listdir(os.path.join(ws, "notes")))
 

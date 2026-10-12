@@ -127,7 +127,7 @@ def todo_text(tool_result: str) -> Optional[str]:
     so the turn falls back to the model."""
     r = tool_result or ""
     if r.startswith("[ERROR] File not found"):
-        return "Your to-do list is empty - there is no todo.txt in my workspace yet."
+        return "Your to-do list is empty - there is no todo.md in my workspace yet."
     m = _FILE_HEAD.match(r)
     if not m:
         return None
@@ -135,7 +135,7 @@ def todo_text(tool_result: str) -> Optional[str]:
     lines = [l.rstrip() for l in body.split("\n") if l.strip()]
     if not lines:
         return "Your to-do list is empty."
-    return "Your to-do list (todo.txt in my workspace):\n" + "\n".join(lines)
+    return "Your to-do list (todo.md in my workspace):\n" + "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

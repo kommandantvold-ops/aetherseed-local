@@ -17,9 +17,9 @@ class TheWords(unittest.TestCase):
 
     def test_the_to_do_list_as_it_is(self):
         from logic.gate_answers import todo_text
-        self.assertEqual(todo_text("File: todo.txt\n---\n- a\n\n- b\n"),
-                         "Your to-do list (todo.txt in my workspace):\n- a\n- b")
-        self.assertEqual(todo_text("File: todo.txt\n---\n\n"), "Your to-do list is empty.")
+        self.assertEqual(todo_text("File: todo.md\n---\n- a\n\n- b\n"),
+                         "Your to-do list (todo.md in my workspace):\n- a\n- b")
+        self.assertEqual(todo_text("File: todo.md\n---\n\n"), "Your to-do list is empty.")
         self.assertIsNone(todo_text("[ERROR] Path outside workspace."))
 
     def test_writing_opens_at_reader(self):
@@ -67,7 +67,7 @@ class AtTheProxy(_Proxy):
     def setUp(self):
         super().setUp()
         self.ws = tempfile.mkdtemp(prefix="ws-")
-        with open(os.path.join(self.ws, "todo.txt"), "w") as f:
+        with open(os.path.join(self.ws, "todo.md"), "w") as f:
             f.write("- water the plants\n")
         os.makedirs(os.path.join(self.ws, "notes"))
         self.saved_spark = proxy.spark
@@ -90,7 +90,7 @@ class AtTheProxy(_Proxy):
                                 "reader, and I am at observer. Nothing was added.")
         self.assertEqual(meta["mode"], "gate")
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
-        with open(os.path.join(self.ws, "todo.txt")) as f:
+        with open(os.path.join(self.ws, "todo.md")) as f:
             self.assertNotIn("milk", f.read())
         with open(os.path.join(self.tmp, "audit.log")) as f:
             self.assertIn("DENIED", f.read())
@@ -141,7 +141,7 @@ class AtTheProxy(_Proxy):
         self._in_workspace()
         n = len(SCRIPT["requests"])
         status, reply, meta = self.ask("Show my to-do list")
-        self.assertEqual(reply, "Your to-do list (todo.txt in my workspace):\n"
+        self.assertEqual(reply, "Your to-do list (todo.md in my workspace):\n"
                                 "- water the plants")
         self.assertEqual((meta["mode"], meta["used_tools"]), ("tool", True))
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
@@ -149,27 +149,44 @@ class AtTheProxy(_Proxy):
 
     def test_no_to_do_list_yet(self):
         self._in_workspace()
-        os.rename(os.path.join(self.ws, "todo.txt"), os.path.join(self.ws, "old.txt"))
+        os.rename(os.path.join(self.ws, "todo.md"), os.path.join(self.ws, "old.txt"))
         _, reply, _ = self.ask("what's on my to-do list")
-        self.assertEqual(reply, "Your to-do list is empty - there is no todo.txt "
+        self.assertEqual(reply, "Your to-do list is empty - there is no todo.md "
                                 "in my workspace yet.")
+
+    def test_an_old_todo_txt_is_carried_over_once_and_kept(self):
+        # Build log 72: the list is todo.md. A unit that has only the old
+        # todo.txt has its words carried over once; todo.txt is kept.
+        self._in_workspace()
+        os.rename(os.path.join(self.ws, "todo.md"), os.path.join(self.ws, "todo.txt"))
+        _, reply, _ = self.ask("show my to-do list")
+        self.assertEqual(reply, "Your to-do list (todo.md in my workspace):\n- water the plants")
+        with open(os.path.join(self.ws, "todo.md")) as f:
+            self.assertEqual(f.read(), "- water the plants\n")
+        with open(os.path.join(self.ws, "todo.txt")) as f:
+            self.assertEqual(f.read(), "- water the plants\n", "kept as it was")
+        # once: a later change to todo.txt is not carried again
+        with open(os.path.join(self.ws, "todo.txt"), "a") as f:
+            f.write("- not carried\n")
+        _, reply, _ = self.ask("show my to-do list")
+        self.assertNotIn("not carried", reply)
 
     # ---- two more the unit says itself (build log 65) -----------------------
     # From two four-hour runs of the training loop on Lyra: a file read out
-    # came back with its words 16 times of 28 ("I'll read the file seed.txt
+    # came back with its words 16 times of 28 ("I'll read the file seed.md
     # for you." - and nothing), and the trust levels in order were wrong 27
     # times with the right list in front of her.
 
     def test_a_file_read_out_is_the_file(self):
         self._in_workspace()
-        with open(os.path.join(self.ws, "seed.txt"), "w") as f:
+        with open(os.path.join(self.ws, "seed.md"), "w") as f:
             f.write("A seed needs water, warmth and time.\nRoots first.\n")
         n = len(SCRIPT["requests"])
-        for said in ("Read the file seed.txt", "show me the file seed.txt, please",
-                     "Open seed.txt.", "What's in seed.txt?"):
+        for said in ("Read the file seed.md", "show me the file seed.md, please",
+                     "Open seed.md.", "What's in seed.md?"):
             with self.subTest(said=said):
                 status, reply, meta = self.ask(said)
-                self.assertEqual(reply, "seed.txt, as it is:\nA seed needs water, warmth and "
+                self.assertEqual(reply, "seed.md, as it is:\nA seed needs water, warmth and "
                                         "time.\nRoots first.")
                 self.assertEqual(meta["mode"], "tool")
         self.assertEqual(self.ask("Read the file ghost.txt")[1],
@@ -179,10 +196,10 @@ class AtTheProxy(_Proxy):
 
     def test_a_question_of_a_file_is_still_the_models(self):
         self._in_workspace()
-        with open(os.path.join(self.ws, "supplies.txt"), "w") as f:
+        with open(os.path.join(self.ws, "supplies.md"), "w") as f:
             f.write("candles: 12\n")
-        for said in ("Read supplies.txt. How many candles are there?",
-                     "Open todo.txt. Which item comes last?", "Summarize the file todo.txt"):
+        for said in ("Read supplies.md. How many candles are there?",
+                     "Open todo.md. Which item comes last?", "Summarize the file todo.md"):
             with self.subTest(said=said):
                 n = len(SCRIPT["requests"])
                 self.ask(said)
@@ -229,7 +246,7 @@ class AtTheProxy(_Proxy):
         n = len(SCRIPT["requests"])
         status, reply, meta = self.ask("list my files")
         self.assertEqual(reply, "The files in my workspace:\n- notes/ (a folder)\n"
-                                "- todo.txt (19 bytes)")
+                                "- todo.md (19 bytes)")
         self.assertEqual((meta["mode"], meta["used_tools"]), ("tool", True))
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
         self.assertEqual(proxy.root.store.get_all_episodes(), [], "and it is not remembered")
@@ -240,7 +257,7 @@ class AtTheProxy(_Proxy):
         status, reply, meta = self.ask("Add a to-do: Call Martin about the SD card")
         self.assertEqual(reply, "Added to your to-do list: Call Martin about the SD card")
         self.assertEqual(meta["mode"], "tool")
-        with open(os.path.join(self.ws, "todo.txt")) as f:
+        with open(os.path.join(self.ws, "todo.md")) as f:
             self.assertEqual(f.read(), "- water the plants\n- Call Martin about the SD card\n")
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
         self.assertEqual(proxy.root.store.get_all_episodes(), [])
@@ -275,11 +292,11 @@ class AtTheProxy(_Proxy):
         n = len(SCRIPT["requests"])
         self.assertEqual(self.ask("list my notes")[1], "I have no notes yet.")
         self.assertEqual(self.ask("Search for plants in my files")[1],
-                         "I found 'plants' in 1 file of my workspace:\n- todo.txt")
+                         "I found 'plants' in 1 file of my workspace:\n- todo.md")
         self.assertEqual(self.ask("Search for zebra in my files")[1],
                          "I found nothing for 'zebra' in my workspace.")
-        self.assertEqual(self.ask("find the file todo.txt")[1],
-                         "I found 1 file of that name in my workspace:\n- todo.txt")
+        self.assertEqual(self.ask("find the file todo.md")[1],
+                         "I found 1 file of that name in my workspace:\n- todo.md")
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
 
     def test_what_the_unit_does_not_recognise_goes_to_the_model_as_before(self):

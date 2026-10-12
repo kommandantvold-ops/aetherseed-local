@@ -320,7 +320,7 @@ def execute_intent(intent: Dict, spark) -> Optional[str]:
         return _summarize_request(filename)
 
     elif name == "todo_read":
-        return _read_file("todo.txt")
+        return _read_file(_todo_path().name)
 
     elif name == "todo_add":
         item = captures[0] if captures else None
@@ -436,9 +436,37 @@ def _summarize_request(filename: str) -> str:
             "is not in the file.\n" + content)
 
 
+TODO_FILE = "todo.md"          # was todo.txt until build log 72
+OLD_TODO_FILE = "todo.txt"
+
+
+def _todo_path() -> Path:
+    """The to-do list: todo.md (Andreas, 11 Oct 2026: .md, not .txt). A
+    workspace that has only the old todo.txt has it carried over ONCE - the
+    words copied into todo.md, taken by creating the file so two turns cannot
+    both do it - and the old file is kept, never deleted."""
+    ws = Path(workspace())
+    md, old = ws / TODO_FILE, ws / OLD_TODO_FILE
+    if not md.exists() and old.is_file():
+        try:
+            text = old.read_text(encoding="utf-8")
+            with open(md, "x", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            print(f"[todo] {OLD_TODO_FILE} carried over to {TODO_FILE}; "
+                  f"{OLD_TODO_FILE} is kept", flush=True)
+        except FileExistsError:
+            pass                              # the other turn carried it
+        except OSError as e:
+            print(f"[todo] could not carry {OLD_TODO_FILE} over: {e!r}", flush=True)
+            return old
+    return md
+
+
 def _append_todo(item: str) -> str:
-    """Add an item to todo.txt."""
-    path = Path(workspace()) / "todo.txt"
+    """Add an item to the to-do list (todo.md)."""
+    path = _todo_path()
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"- {item.strip()}\n")

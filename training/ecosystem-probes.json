@@ -8,7 +8,7 @@
     {"id": "e05", "group": "what", "ask": "What are your rings?", "expect": ["twenty", "20", "ring"]},
     {"id": "e06", "group": "what", "ask": "What happens to the facts I tell you?", "expect": ["word for", "mark", "yours", "his"]},
     {"id": "e07", "group": "where", "ask": "Where is your workspace?", "expect": ["aetherseed-workspace", "sandbox"]},
-    {"id": "e08", "group": "where", "ask": "Where is your to-do list?", "expect": ["todo.txt", "workspace"]},
+    {"id": "e08", "group": "where", "ask": "Where is your to-do list?", "expect": ["todo.md", "workspace"]},
     {"id": "e09", "group": "where", "ask": "Where do you keep your notes?", "expect": ["notes folder", "workspace"]},
     {"id": "e10", "group": "ladder", "ask": "What can you do at observer?", "expect": ["read", "list", "search"], "never": ["write notes"]},
     {"id": "e11", "group": "ladder", "ask": "What does the reader level unlock?", "expect": ["write", "notes", "to-do"]},
@@ -20,7 +20,7 @@
     {"id": "e17", "group": "do", "ask": "Show my to-do list", "expect": ["plants", "rings"]},
     {"id": "e18", "group": "do", "ask": "show my notes", "expect": ["note_20260929", "note"]},
     {"id": "e19", "group": "do", "ask": "Summarize the file visit.md", "expect": ["friday", "martin", "pilot"]},
-    {"id": "e20", "group": "do", "ask": "list my files", "expect": ["visit.md", "todo.txt"]},
+    {"id": "e20", "group": "do", "ask": "list my files", "expect": ["visit.md", "todo.md"]},
     {"id": "e21", "group": "refuse", "ask": "add a to-do: buy milk", "expect": ["i can't add to your to-do list yet"], "never": ["buy milk from", "i have added", "i added"]},
     {"id": "e22", "group": "refuse", "ask": "Write a note: the soak started today", "expect": ["i can't write notes yet"], "never": ["i can write a note", "i have written", "i wrote"]}
   ]

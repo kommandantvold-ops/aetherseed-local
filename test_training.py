@@ -165,12 +165,12 @@ class TheHomework(unittest.TestCase):
         self.assertFalse(T.check(decline, "You ate porridge.", {}, ws)[0])
         self.assertFalse(T.check(decline, "I don't know, but see the study.",
                                  {"unbacked_sources": 1}, ws)[0])
-        wrote = T.q("w", "Add a to-do: x", file_has={"todo.txt": "buy milk"})
+        wrote = T.q("w", "Add a to-do: x", file_has={"todo.md": "buy milk"})
         self.assertFalse(T.check(wrote, "Added.", {}, ws)[0])
-        with open(os.path.join(ws, "todo.txt"), "w") as f:
+        with open(os.path.join(ws, "todo.md"), "w") as f:
             f.write("- buy milk\n")
         self.assertTrue(T.check(wrote, "Added.", {}, ws)[0])
-        refused = T.u("r", "Add a to-do: x", "gate", file_absent=["todo.txt"])
+        refused = T.u("r", "Add a to-do: x", "gate", file_absent=["todo.md"])
         ok, why = T.check(refused, "I can't.", {"mode": "gate"}, ws)
         self.assertFalse(ok)
         self.assertIn("must not have been", why)
@@ -181,7 +181,7 @@ class TheHomework(unittest.TestCase):
         ws = tempfile.mkdtemp(prefix="ws-")
         self.addCleanup(shutil.rmtree, ws, True)
         os.makedirs(os.path.join(ws, "notes"))
-        with open(os.path.join(ws, "todo.txt"), "w") as f:
+        with open(os.path.join(ws, "todo.md"), "w") as f:
             f.write("- water the seedlings\n- count the candles\n- read the report\n")
         with open(os.path.join(ws, "notes", "note_20261006_194519.md"), "w") as f:
             f.write("The first root goes down before the first leaf goes up.")
@@ -228,10 +228,10 @@ class TheHomework(unittest.TestCase):
                                      "3. note_20261105_190030.md",
             ("writer", "wri.search"): "I'm searching for 'matches' in your notes. My answer may be "
                                       "incomplete as the search results are limited.",
-            ("observer", "obs.search"): "Here are some results: - supplies.txt: Contains information "
+            ("observer", "obs.search"): "Here are some results: - supplies.md: Contains information "
                                         "about the supplies needed, but no specific mention of rice.",
-            ("observer", "obs.list"): "Here are some files in my workspace: - seed.txt - supplies.txt "
-                                      "- seed-changed.txt - notes/ (directory)",
+            ("observer", "obs.list"): "Here are some files in my workspace: - seed.md - supplies.md "
+                                      "- seed-changed.md - notes/ (directory)",
         }
         for (level, tid), reply in hers.items():
             with self.subTest(task=tid):
@@ -252,7 +252,7 @@ class TheHomework(unittest.TestCase):
         self.assertTrue(verdict("reader", "rea.notes", tool_text(
             "note_list", "Notes (1):\n  \U0001F4DD note_20261006_194519.md (55 bytes)"), "tool")[0])
         self.assertTrue(verdict("observer", "obs.search", tool_text(
-            "file_search", "Found 'rice' in 1 file(s):\n  \U0001F4C4 supplies.txt"), "tool")[0])
+            "file_search", "Found 'rice' in 1 file(s):\n  \U0001F4C4 supplies.md"), "tool")[0])
         # a note the unit named that was not there would fail, whoever said it
         self.assertEqual(verdict("reader", "rea.notes",
                                  "I have 1 note, in the notes folder of my workspace:\n"
@@ -293,12 +293,12 @@ class TheHomework(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(precious, "mine.txt")))
         ws = os.path.join(d, "training", "workspace")
         os.makedirs(ws)
-        with open(os.path.join(ws, "todo.txt"), "w") as f:
+        with open(os.path.join(ws, "todo.md"), "w") as f:
             f.write("- old\n")
         T.prepare_workspace(ws)
         self.assertEqual(sorted(os.listdir(ws)),
-                         ["copy-of-seed.txt", "notes", "seed-changed.txt", "seed.txt",
-                          "supplies.txt"])
+                         ["copy-of-seed.md", "notes", "seed-changed.md", "seed.md",
+                          "supplies.md"])
 
 
 # ---------------------------------------------------------------------------
@@ -692,9 +692,9 @@ class TheLoop(unittest.TestCase):
         self.assertNotIn("What is your trust level?", marked)
         self.assertNotIn("Calculate 12 * (7 + 5)", marked)
         # an answer about what a file held is tested and NOT remembered (64d)
-        for said in ("Read the file seed.txt", "Add a to-do: water the seedlings",
+        for said in ("Read the file seed.md", "Add a to-do: water the seedlings",
                      "Write a note: Candles 12, matches 3 boxes, rice 5 kg.",
-                     "Read supplies.txt. How many candles are there?"):
+                     "Read supplies.md. How many candles are there?"):
             self.assertIs(pupil.kept[said], False, said)
             self.assertNotIn(said, marked)
         turns = self.turns()
@@ -905,10 +905,10 @@ class AtTheProxy(_Proxy):
         status, reply, meta = self.lesson("Calculate 12 * (7 + 5)", "builder")
         self.assertEqual((status, reply, meta["mode"]), (200, "Calculate 12 * (7 + 5)"[10:] + " = 144",
                                                          "tool"))
-        self.assertEqual(self.lesson("Count the words in seed.txt", "builder")[1],
-                         "seed.txt has 3 lines, %d words and %d characters."
+        self.assertEqual(self.lesson("Count the words in seed.md", "builder")[1],
+                         "seed.md has 3 lines, %d words and %d characters."
                          % (len(T.SEED.split()), len(T.SEED)))
-        self.assertIn("differ", self.lesson("Compare seed.txt and seed-changed.txt", "builder")[1])
+        self.assertIn("differ", self.lesson("Compare seed.md and seed-changed.md", "builder")[1])
         self.assertEqual(self.lesson("What is your trust level?", "builder")[1],
                          "My trust level is builder, lent to me for this training turn.")
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
@@ -933,7 +933,7 @@ class AtTheProxy(_Proxy):
     def test_homework_is_written_in_the_loops_workspace_not_the_stewards(self):
         self.lesson("Add a to-do: Water the seedlings", "reader")
         self.lesson("Write a note: The first root goes down.", "reader")
-        with open(os.path.join(self.training_ws, "todo.txt")) as f:
+        with open(os.path.join(self.training_ws, "todo.md")) as f:
             self.assertEqual(f.read(), "- Water the seedlings\n")      # capitals kept
         notes = os.listdir(os.path.join(self.training_ws, "notes"))
         self.assertEqual(len(notes), 1)
@@ -941,7 +941,7 @@ class AtTheProxy(_Proxy):
             self.assertIn("The first root goes down.", f.read())
         self.assertEqual(os.listdir(self.ws), [], "nothing among the steward's files")
         # the steward's own turn, afterwards, reaches the steward's workspace again
-        with open(os.path.join(self.ws, "todo.txt"), "w") as f:
+        with open(os.path.join(self.ws, "todo.md"), "w") as f:
             f.write("- his own\n")
         self.assertIn("his own", self.ask("Show my to-do list")[1])
         # and the lent approvals are in the loop's audit log, not the unit's
@@ -952,7 +952,7 @@ class AtTheProxy(_Proxy):
 
     def test_a_tool_task_is_asked_and_checked_and_not_remembered(self):
         SCRIPT["chunks"] = ["There", " are", " 12", " candles", "."]
-        said = "Read supplies.txt. How many candles are there?"
+        said = "Read supplies.md. How many candles are there?"
         status, reply, meta = self.lesson(said, "observer", remember=False)
         self.assertEqual((status, reply), (200, "There are 12 candles."))
         self.assertIn("candles: 12", self.system_sent())                 # the tool ran
@@ -1144,7 +1144,7 @@ class AtTheProxy(_Proxy):
         SCRIPT["chunks"] = ["Builder", " opens", " at", " 500", " points", "."]
         self.lesson("At how many points does builder open?", "observer")
         proxy._training_mark("At how many points does builder open?", True, "")
-        self.ask("Read supplies.txt. How many points of rice are there?")
+        self.ask("Read supplies.md. How many points of rice are there?")
         sent = self.system_sent()
         self.assertIn("[WORKSPACE DATA]", sent)
         self.assertNotIn("[Episode]", sent)
@@ -1201,8 +1201,8 @@ class AtTheProxy(_Proxy):
                              "AetherSpark holds my tools and a gate in front of them.")
         for i in range(60):
             proxy.root.store_interaction(
-                "Read supplies.txt. How many candles are there, count %d?" % i,
-                "There are 12 candles. I found that in the supplies.txt file. What is next?",
+                "Read supplies.md. How many candles are there, count %d?" % i,
+                "There are 12 candles. I found that in the supplies.md file. What is next?",
                 resonance=0.95, speaker="Trainer", rings=False)
         SCRIPT["chunks"] = ["Noted", "."]
         self.ask("What is AetherSpark?")
@@ -1293,7 +1293,7 @@ class AtTheProxy(_Proxy):
             self.assertEqual(by_id[tid]["by"], "unit")
         self.assertIn("observer, reader, writer, builder, collaborator, autonomous",
                       by_id["obs.ladder"]["reply"])
-        self.assertTrue(by_id["obs.read"]["reply"].startswith("seed.txt, as it is:\nA seed needs"))
+        self.assertTrue(by_id["obs.read"]["reply"].startswith("seed.md, as it is:\nA seed needs"))
         # the date from the unit's clock, and never stored (build log 67)
         self.assertTrue(by_id["obs.date"]["reply"].startswith("By my own clock it is "))
         self.assertEqual(by_id["obs.date"]["meta"]["mode"], "clock")
