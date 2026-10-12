@@ -302,6 +302,22 @@ class TestWebAddresses(unittest.TestCase):
         self.assertEqual(self._high("Is met.no right?", "Yes, www.met.no is it."), [])
         self.assertEqual(self._high("Open https://met.no/", "Opening www.met.no now."), [])
 
+    def test_the_end_of_her_sentence_is_not_part_of_the_address(self):
+        # Build log 72: the one false finding of the G1 replay on Lyra (run 5,
+        # 8 Oct) - she repeated the address she was given and ended her
+        # question with "?", and the "?" was taken into the address.
+        self.assertEqual(self._high(
+            "Fetch https://example.org and tell me what it says.",
+            "I don't have direct access to the internet. What would you like to "
+            "know about https://example.org?"), [])
+        self.assertEqual(self._high("Open https://met.no", "Opened https://met.no!"), [])
+
+    def test_an_invented_address_is_still_caught_and_named_without_the_stop(self):
+        self.assertEqual(self._high("q", "Did you read https://invented.example/report?"),
+                         ["https://invented.example/report"])
+        self.assertEqual(self._high("q", "See https://www.sciencedirect.com/x123."),
+                         ["https://www.sciencedirect.com/x123"])
+
     def test_bare_domains_and_ordinary_dots_are_left_alone(self):
         # Decided: a pattern cannot tell "met.no" from "e.g." or "file.txt".
         for text in ("The website is met.no.", "e.g. the file.txt holds 3.14",

@@ -220,7 +220,7 @@ def _grounded(fragment: str, haystack: str, haystack_nums: Set[float],
 
 def _url_forms(frag: str):
     """An address with and without its scheme, "www." and trailing slash."""
-    f = frag.rstrip("/.,;:")
+    f = frag.rstrip("/.,;:!?")
     bare = re.sub(r"^https?://", "", f, flags=re.I)
     forms = [f, bare]
     if bare.lower().startswith("www."):
@@ -254,6 +254,14 @@ def check_response(user_msg: str,
                 continue
             frag = m.group(0).strip()
             if kind == "url":
+                # The end of her sentence is not part of the address (build
+                # log 72): "What would you like to know about
+                # https://example.org?" took the question mark into the
+                # address, which then matched nothing the user typed, and an
+                # honest answer was flagged as an invented link - the one
+                # false finding of three in 11,109 training replies replayed
+                # on Lyra, 12 Oct 2026.
+                frag = frag.rstrip(".,;:!?")
                 # The same address, however it is written: a user who typed
                 # "www.met.no" and got back "https://www.met.no" supplied it.
                 forms = _url_forms(frag)
