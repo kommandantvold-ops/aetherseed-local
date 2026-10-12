@@ -16,8 +16,24 @@ FAKE_CITE = ("The study by Henriksen & Vold (2024) in J. Edge Cognition 12(3):21
              "found a 47% improvement, DOI 10.1041/jec.2024.0217.")
 
 
+# The module's own settings, as imported: every test that changes one puts it
+# back (build log 72). They were set in setUp and never restored, so whichever
+# class ran last decided the scoring for every module after it - harmless while
+# the shipped value and the tests' value were the same, wrong once they differ.
+_SHIPPED = {k: getattr(te, k) for k in ("AUTO_TASK_CREDIT", "PROVENANCE_STRICT",
+                                        "PROVENANCE_REPORT_ONLY", "ENFORCE_MODULE_GATING",
+                                        "MODULE_RESULTS_PATH")}
+
+
+def _restore():
+    for k, v in _SHIPPED.items():
+        setattr(te, k, v)
+
+
 def _node(**cfg):
-    fd, path = tempfile.mkstemp(suffix=".json"); os.close(fd); os.unlink(path)
+    # A folder of its own: since build log 72 the node keeps trust_events.log
+    # beside its state, and every node in /tmp wrote to one shared log.
+    path = os.path.join(tempfile.mkdtemp(prefix="trust-"), "trust_state.json")
     for k, v in cfg.items():
         setattr(te, k, v)
     return TrustEvolution(state_path=path)
@@ -29,6 +45,9 @@ class TestProvenance(unittest.TestCase):
         te.PROVENANCE_STRICT = False
         te.PROVENANCE_REPORT_ONLY = True
         te.ENFORCE_MODULE_GATING = False
+
+    def tearDown(self):
+        _restore()
 
     # ---- the inversions that motivated the change ----------------------
     def test_unprompted_fabrication_is_not_rewarded(self):
@@ -147,6 +166,66 @@ class TestProvenance(unittest.TestCase):
         self.assertFalse(results.startswith(sandbox + os.sep))
 
 
+class TestThePenaltyIsOn(unittest.TestCase):
+    """Build log 72 (Andreas, 11 Oct 2026: "Measure, then penalty on"). The
+    G1 replay first: 0 HIGH findings in Lyra's 6,050 real turns."""
+
+    def tearDown(self):
+        _restore()
+
+    def test_the_shipped_settings(self):
+        # read from the file, so no test that changed them can hide it
+        import ast
+        with open(te.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        names = ("PROVENANCE_REPORT_ONLY", "PROVENANCE_STRICT", "AUTO_TASK_CREDIT")
+        got = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body
+               if isinstance(n, ast.Assign) and len(n.targets) == 1
+               and isinstance(n.targets[0], ast.Name) and n.targets[0].id in names}
+        self.assertEqual(got, {"PROVENANCE_REPORT_ONLY": False, "PROVENANCE_STRICT": False,
+                               "AUTO_TASK_CREDIT": False})
+
+    def _at_thirty(self):
+        _restore()
+        n = _node()
+        for _ in range(3):
+            n.record_event("probe_passed")
+        return n
+
+    def test_an_invented_source_costs_twenty(self):
+        n = self._at_thirty()
+        self.assertEqual(n.auto_score_response("what does the research say?", FAKE_CITE),
+                         "confabulation")
+        self.assertEqual((n.state["resonance"], n.state["confabulations"]), (10, 1))
+        with open(n.events_path) as fh:
+            last = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual((last["type"], last["score"]), ("confabulation", -20))
+
+    def test_a_number_alone_costs_nothing(self):
+        # MEDIUM: an unsourced figure is not counted (PROVENANCE_STRICT False)
+        n = self._at_thirty()
+        self.assertEqual(n.auto_score_response(
+            "how many deployments?",
+            "Roughly 12,400 deployments as of March 2026, 38% in Scandinavia."), "")
+        self.assertEqual(n.state["resonance"], 30)
+
+    def test_an_honest_refusal_still_earns_five(self):
+        n = self._at_thirty()
+        ev = n.auto_score_response("how many came to the workshop?",
+                                   "I don't know. There is nothing in my memory from March.",
+                                   shown_facts=0, shown_rings=0, shown_known=0)
+        self.assertEqual((ev, n.state["resonance"]), ("honest_refusal", 35))
+
+    def test_frozen_it_is_recorded_and_does_not_move_her(self):
+        n = self._at_thirty()
+        n.freeze("the steward", "test")
+        n.auto_score_response("what does the research say?", FAKE_CITE)
+        self.assertEqual(n.state["resonance"], 30)
+        with open(n.events_path) as fh:
+            last = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual((last["type"], last["applied"]), ("confabulation", False))
+
+
 class TestWhichRefusalsEarn(unittest.TestCase):
     """Only a decline to a question whose answer was not in front of it earns
     (Andreas, 29 Sep 2026; build log step 46), decided strictly: none of his
@@ -158,6 +237,9 @@ class TestWhichRefusalsEarn(unittest.TestCase):
         te.PROVENANCE_STRICT = False
         te.PROVENANCE_REPORT_ONLY = True
         te.ENFORCE_MODULE_GATING = False
+
+    def tearDown(self):
+        _restore()
 
     def _score(self, msg, reply, **shown):
         n = _node()

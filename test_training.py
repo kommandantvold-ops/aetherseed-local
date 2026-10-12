@@ -112,6 +112,15 @@ class TheHomework(unittest.TestCase):
             ids = [t["id"] for t in fixed + pool]
             self.assertEqual(len(ids), len(set(ids)), level)
 
+    def test_seed_cost_is_the_curriculums_line_word_for_word(self):
+        # build log 72: what the correction says and what she is shown as a
+        # line she knows are one sentence, and it says what the code does
+        # (test_knowledge.TheCostIsWhatTheCodeDoes holds the numbers to it)
+        from logic.knowledge import load_knowledge
+        fixed, pool = T.stage_tasks("observer", 1, self.SETTINGS)
+        task = next(t for t in fixed + pool if t["id"] == "seed.cost")
+        self.assertEqual(task["truth"], load_knowledge().by_id("seed.cost"))
+
     def test_a_question_meant_for_her_is_not_one_the_unit_answers(self):
         # build log 65: a new question, "What can your record of mistakes not
         # show?", was the record's own question - the unit answered it, and

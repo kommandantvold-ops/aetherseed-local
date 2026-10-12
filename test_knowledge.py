@@ -177,6 +177,46 @@ class TheShippedCurriculum(unittest.TestCase):
         self.assertEqual([], self.k.lines_for("   "))
 
 
+class TheCostIsWhatTheCodeDoes(unittest.TestCase):
+    """seed.cost and eco.earn (build log 72). Until then seed.cost said
+    inventing costs far more than honesty earns, and an invention cost 0: the
+    penalty was report-only. It is on now (test_trust_scoring holds the
+    setting), and the lines name the code's own numbers."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.k = load_knowledge(SHIPPED)
+
+    def test_the_numbers_are_the_codes(self):
+        from trust_evolution import RESONANCE_EVENTS
+        cost, earn = self.k.by_id("seed.cost"), self.k.by_id("eco.earn")
+        self.assertIn("costs %d points" % -RESONANCE_EVENTS["confabulation"], cost)
+        self.assertIn("earns %d." % RESONANCE_EVENTS["honest_refusal"], cost)
+        self.assertIn("costs %d points" % -RESONANCE_EVENTS["confabulation"], earn)
+        # the steward's mark earns too (logic/steward.py), so not "only"
+        self.assertGreater(RESONANCE_EVENTS["steward_support"], 0)
+        self.assertNotIn("only", earn)
+
+    def test_it_comes_where_making_something_up_is_asked_about(self):
+        for q in ("What happens if you make something up?", "Do you ever make something up?",
+                  "Never make something up.", "What costs you the most trust?",
+                  "What is the most expensive thing you can do?"):
+            with self.subTest(q=q):
+                self.assertIn("seed.cost", ids_for(self.k, q))
+
+    def test_not_beside_a_story_someone_asked_for(self):
+        # "Make something up about a dragon" is a story: the story note says
+        # "Write it", and this line beside it said the opposite (the review of
+        # 10 Oct). On Lyra the only such request so far, 150 times in training,
+        # was the last one here.
+        for q in ("Make something up about a dragon",
+                  "Make something up about a dragon. Write it as a poem.",
+                  "Can you make something up for me?",
+                  "Make up a two-line rhyme about a root."):
+            with self.subTest(q=q):
+                self.assertNotIn("seed.cost", ids_for(self.k, q))
+
+
 class TheLoader(unittest.TestCase):
     """A curriculum that cannot be read costs knowledge, never service."""
 

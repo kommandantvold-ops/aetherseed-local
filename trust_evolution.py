@@ -88,9 +88,19 @@ AUTO_TASK_CREDIT = False
 # also flagged unsourced general knowledge ("water boils at 100 °C").
 PROVENANCE_STRICT = False
 
-# PROVENANCE_REPORT_ONLY — log the verdict without moving standing. Leave
-# True until you have tuned the thresholds against your own session logs.
-PROVENANCE_REPORT_ONLY = True
+# PROVENANCE_REPORT_ONLY — log the verdict without moving standing.
+#
+# OFF since build log 72 (Andreas, 11 Oct 2026: "Measure, then penalty on").
+# Measured first, on everything Lyra had recorded since 25 Sep, the model not
+# called (the G1 replay): in 6,050 real turns, 0 HIGH findings - with the -20
+# on she would have lost nothing; in 11,109 training replies, 2 findings, both
+# real inventions (made-up ncbi and sciencedirect links), after one false
+# firing was fixed (72b: a question mark taken into an address). With
+# PROVENANCE_STRICT False only HIGH findings count: an invented citation, DOI
+# or address costs 20 (RESONANCE_EVENTS). Homework never moves her standing
+# (proxy.py), so this reaches real turns only. True puts back the old way:
+# noted in the state's observations, standing unmoved.
+PROVENANCE_REPORT_ONLY = False
 
 # Tier promotion may additionally require named curriculum modules. The file
 # is written by the test harness and must sit outside the node's tool sandbox.

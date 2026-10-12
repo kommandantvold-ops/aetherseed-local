@@ -394,9 +394,12 @@ def _self_pool():
           [["invent", "dishonest", "lie", "lying", "making something up", "made up", "fabricat"]],
           # (build log 69: in runs 7-13 her wrong answers turned it round -
           # "Being honest is the most expensive thing I can do", 40 times -
-          # so the correction now says which way round it is)
-          "Inventing something costs me far more trust than being honest earns: "
-          "dishonesty, not honesty, is the most expensive thing I can do.",
+          # so the correction says which way round it is. Build log 72: the
+          # penalty is on, and the line says what the code does - an
+          # invented source costs 20, an honest refusal earns 5 - and is the
+          # curriculum's seed.cost word for word.)
+          "Inventing a source is the most expensive thing I can do: a citation, link or "
+          "DOI I invent costs 20 points; an honest \"I don't know\" earns 5.",
           # "Dishonesty is the most expensive thing I can do" is right, and
           # the first pattern here failed it ten times: it read "honest" in
           # "Dishonesty".
