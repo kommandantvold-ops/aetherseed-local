@@ -75,9 +75,13 @@ class TestThePageMayRunItsOwnScript(unittest.TestCase):
 class TestThePageReachesForNothing(unittest.TestCase):
 
     def test_no_external_references(self):
-        self.assertIsNone(re.search(r"""(?:src|href)\s*=|@import|url\(\s*['"]?(?:https?:)?//""", HTML),
+        # One kind of src= is allowed, on purpose (build log 72): an image
+        # carried inside the page itself as data: - the logo. It loads
+        # nothing from anywhere; the CSP allows img-src data: and no more.
+        self.assertIsNone(re.search(r"""(?:src|href)\s*=(?!"data:image/webp;base64,)|@import|url\(\s*['"]?(?:https?:)?//""", HTML),
                           "the console must load nothing from anywhere")
         self.assertNotRegex(HTML, r"https?://")
+        self.assertIn("img-src 'self' data:;", serve.build_csp(HTML))
 
 
 class TestWhatTheConsoleRelays(unittest.TestCase):

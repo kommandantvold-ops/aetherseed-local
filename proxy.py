@@ -260,6 +260,56 @@ def _tool_rules():
     return trust_controls().overrides()
 
 
+def _sandbox_root():
+    try:
+        return spark.config["sandbox_root"]
+    except Exception:
+        return os.path.expanduser("~/aetherseed-workspace")
+
+
+def workspace_view(root_dir, todo_max=4000):
+    """Her workspace as it is, read-only (build log 72): the files at its top,
+    her notes, the to-do list. Names and text are hers or the steward's: the
+    console sets them as text, never markup."""
+    out = {"files": [], "notes": [], "todo": None, "todo_name": None}
+    try:
+        names = sorted(os.listdir(root_dir))
+    except OSError:
+        return out
+    for n in names:
+        if n.startswith("."):
+            continue
+        p = os.path.join(root_dir, n)
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        out["files"].append({"name": n, "folder": os.path.isdir(p),
+                             "size": None if os.path.isdir(p) else st.st_size,
+                             "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc)
+                             .isoformat(timespec="seconds")})
+    notes = os.path.join(root_dir, "notes")
+    try:
+        for n in sorted(os.listdir(notes), reverse=True)[:50]:
+            p = os.path.join(notes, n)
+            if n.startswith(".") or not os.path.isfile(p):
+                continue
+            with open(p, encoding="utf-8", errors="replace") as f:
+                body = [l.strip() for l in f.read(2000).splitlines() if l.strip()]
+            text = next((l for l in body if not l.startswith("#")), "")
+            out["notes"].append({"name": n, "first": text[:200]})
+    except OSError:
+        pass
+    for n in ("todo.md", "todo.txt"):
+        p = os.path.join(root_dir, n)
+        if os.path.isfile(p):
+            with open(p, encoding="utf-8", errors="replace") as f:
+                out["todo"] = f.read(todo_max)
+            out["todo_name"] = n
+            break
+    return out
+
+
 def _tools():
     """{intent: tier}, {intent: description} - what the gate can be asked."""
     import intent_detection as _I
@@ -2083,6 +2133,23 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/aetherseed/trust":
             self._send_json(self._trust_view())
+            return
+        if self.path == "/aetherseed/records":
+            # Her own account, checked now (build log 72): each chained record.
+            out = []
+            state_dir = os.path.dirname(PROVENANCE_LOG)
+            for rel in CHAINED_RECORDS:
+                path = os.path.join(state_dir, rel)
+                r = chain.verify(path)
+                out.append({"record": rel, "exists": os.path.exists(path),
+                            "lines": r["lines"], "chained": r["chained"],
+                            "started": r["started"], "ok": r["ok"],
+                            "first_bad": r["first_bad"], "why": r["why"],
+                            "outside": len(r["outside"]), "head": (r["head"] or "")[:16]})
+            self._send_json({"records": out})
+            return
+        if self.path == "/aetherseed/workspace":
+            self._send_json(workspace_view(_sandbox_root()))
             return
         if self.path == "/aetherseed/status":
             try:

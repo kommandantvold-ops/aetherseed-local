@@ -149,7 +149,9 @@ def _console_seen():
 # /aetherseed/shelf: the steward's own documents and how far each is read (62).
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", "/api/tags",
                "/aetherseed/shelf", "/aetherseed/training", "/aetherseed/trust-record",
-               "/aetherseed/brake", "/aetherseed/trust")
+               "/aetherseed/brake", "/aetherseed/trust",
+               # build log 72: her records checked; her workspace, read-only
+               "/aetherseed/records", "/aetherseed/workspace")
 PROXIED_GET_QUERY = ("/aetherseed/memories",)
 
 # The page's own script is pinned by the hash of its bytes.
