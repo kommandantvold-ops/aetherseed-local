@@ -141,6 +141,7 @@ go going one two
 # was then shown the company line, on "open"). The steward's facts
 # (logic/facts.py) match on all four: "What is my name?" must still find
 # "My name is ...".
+_FILE_IN = re.compile(r"\b[\w-]+\.(?:md|txt)\b", re.I)
 _NEVER_MATCH = frozenset("name up md txt make".split())
 
 
@@ -200,9 +201,16 @@ class Knowledge:
         denom = sum(self._idf(w) for w in words)
         norm_q = " " + " ".join(_tokens(query)) + " "
 
+        # A line that names the very file asked about comes with it (build log
+        # 72n). Measured on Lyra, 13 Oct, the prompt run 18 sent for "Read
+        # todo.md. What is the last item?" sent straight to the model: without
+        # eco.todo (which "md" no longer pulled since 72k) 30 of 56 right;
+        # with it, 30 of 30. Not for the steward's facts: they name no files.
+        files = [f.lower() for f in _FILE_IN.findall(query or "")] if self.NEVER_MATCH else []
         out = []
         for i, e in enumerate(self.entries):
-            triggered = any(t in norm_q for t in self._triggers[i] if t.strip())
+            triggered = any(t in norm_q for t in self._triggers[i] if t.strip()) or \
+                any(f in e["text"].lower() for f in files)
             matched = [w for w in words if w in self._entry_words[i]]
             weight = sum(self._idf(w) for w in matched)
             score = weight / denom if denom else 0.0

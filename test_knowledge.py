@@ -267,6 +267,31 @@ class NoLineOnAWordThatMeansSomethingElse(unittest.TestCase):
                          ["seed.trust", "eco.ladder"])
 
 
+class ALineNamingTheFileComesWithIt(unittest.TestCase):
+    """Build log 72n: "Read todo.md. What is the last item?" brings eco.todo,
+    which names todo.md (since 72k "md" pulled nothing). On Lyra the same
+    prompt was right 30 of 30 with the line, 30 of 56 without it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.k = load_knowledge(SHIPPED)
+
+    def test_the_to_do_file(self):
+        for q in ("Read todo.md. What is the last item?", "Open todo.md. Which item comes last?",
+                  "What is in TODO.md?"):
+            with self.subTest(q=q):
+                self.assertIn("eco.todo", ids_for(self.k, q))
+
+    def test_another_file_brings_nothing_for_its_name(self):
+        self.assertNotIn("eco.todo", ids_for(self.k, "Read the file seed.md"))
+        self.assertEqual(ids_for(self.k, "Open the file ghost.txt"), [])
+
+    def test_the_stewards_facts_do_not(self):
+        from logic.facts import fact_index
+        idx = fact_index([{"id": 1, "text": "The plan is in todo.md somewhere.", "source": ""}])
+        self.assertTrue(idx.rank("Read seed.md")[0]["triggered"] is False)
+
+
 class TheLoader(unittest.TestCase):
     """A curriculum that cannot be read costs knowledge, never service."""
 
