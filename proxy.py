@@ -34,7 +34,7 @@ from aetherspark import AetherSpark, SafetyGate, TRUST_PERMISSIONS
 from trust_evolution import TrustEvolution
 from intent_detection import detect_intent, execute_intent, in_workspace
 from logic.gate_answers import (is_level_question, level_text, refusal_text, todo_text,
-                                blocked_text,
+                                blocked_text, request_text, lowest_role_for,
                                 tool_text, TOLD_BY_THE_UNIT, is_ladder_question,
                                 ladder_text, only_asks_for_the_file, file_text)
 from logic.clock import is_date_question, date_text
@@ -69,6 +69,7 @@ from logic.facts import FACT_TAG, FACT_NOTE, FACT_TAG_UNCHECKED, FACT_NOTE_UNCHE
 from logic import shown as sent_block
 from logic import chain
 from logic import trust_control
+from logic import approvals
 from logic.attribution import check as steward_check
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
@@ -258,6 +259,44 @@ def trust_controls():
 
 def _tool_rules():
     return trust_controls().overrides()
+
+
+APPROVALS_FILE = os.path.expanduser("~/.aetherseed/approvals.json")
+_APPROVALS = {}
+
+
+def approvals_queue():
+    """The approvals queue (build log 72, T4; logic/approvals.py)."""
+    key = (APPROVALS_FILE, CONTROL_LOG)
+    if key not in _APPROVALS:
+        _APPROVALS.clear()
+        _APPROVALS[key] = approvals.Approvals(*key)
+    return _APPROVALS[key]
+
+
+def _approvals_pending():
+    try:
+        return approvals_queue().pending_count()
+    except Exception:
+        return None
+
+
+def _do_approved(request):
+    """An approved request, done by the unit: the same tool, the same words,
+    in the unit's own workspace - not by the model, and not through her level,
+    which is what the steward's OK stands in for, once."""
+    # The very functions a turn's execute_intent calls - from its own module,
+    # which under the test suite need not be the one an import returns.
+    tools = execute_intent.__globals__
+    words = (request.get("args") or [""])[0]
+    if not words.strip():
+        return "[ERROR] nothing to do"
+    with in_workspace(_sandbox_root()):
+        if request["tool"] == "todo_add":
+            return tools["_append_todo"](words)
+        if request["tool"] == "note_write":
+            return tools["_write_note"](words)
+    return "[ERROR] not a tool the queue takes"
 
 
 def _sandbox_root():
@@ -1646,6 +1685,31 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if result and result.startswith("[DENIED]"):
                 if "blocked by the steward" in result:
                     text = blocked_text(intent["intent"])        # build log 72
+                elif intent["intent"] in approvals.QUEUEABLE and not lesson \
+                        and approvals.words_of(intent):
+                    # Above her level, and it would leave something behind:
+                    # a request to her steward instead of a flat refusal
+                    # (build log 72; Andreas: "Go ahead without the friction").
+                    # Never for homework, which would fill his queue, and
+                    # never for a request with nothing in it to do.
+                    try:
+                        req, how = approvals_queue().file(
+                            intent["intent"], [approvals.words_of(intent)], speaker, user_msg,
+                            gate.trust_level, lowest_role_for(intent["tier"], TRUST_PERMISSIONS))
+                    except Exception as e:
+                        print(f"[approvals] could not file the request: {e!r}", flush=True)
+                        req, how = None, "failed"
+                    if how in ("filed", "waiting"):
+                        print(f"[approvals] request {req['id']} {how}: {intent['intent']} "
+                              f"(she is at {gate.trust_level})", flush=True)
+                        text = request_text(intent["intent"], intent["tier"], gate.trust_level,
+                                            TRUST_PERMISSIONS, req, how)
+                    elif how == "full":
+                        text = request_text(intent["intent"], intent["tier"], gate.trust_level,
+                                            TRUST_PERMISSIONS, None, how)
+                    else:
+                        text = refusal_text(intent["intent"], intent["tier"],
+                                            gate.trust_level, TRUST_PERMISSIONS)
                 else:
                     text = refusal_text(intent["intent"], intent["tier"],
                                         gate.trust_level, TRUST_PERMISSIONS)
@@ -2134,6 +2198,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/aetherseed/trust":
             self._send_json(self._trust_view())
             return
+        if self.path == "/aetherseed/approvals":
+            self._send_json(approvals_queue().view())
+            return
         if self.path == "/aetherseed/records":
             # Her own account, checked now (build log 72): each chained record.
             out = []
@@ -2169,6 +2236,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "model": MODEL,
                 # the steward's brake (build log 72): on, since when, by whom
                 "brake": brake_state(),
+                "approvals_pending": _approvals_pending(),
                 "companion": companion.public(companion.load(COMPANION_FILE)),
                 "languages": companion.language_choices(),
                 "bounds": {
@@ -2362,6 +2430,56 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                   f"language={saved['language']} "
                   f"steward={'named' if saved.get('steward') else 'not named'}", flush=True)
             self._send_json({"companion": companion.public(saved)})
+            return
+
+        if self.path == "/aetherseed/approvals":
+            # The approvals queue (build log 72): {"id", "action": "approve"|
+            # "decline", "reason"}. Approved, the unit does it now, once.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            if not isinstance(req, dict) or req.get("action") not in ("approve", "decline") \
+                    or not isinstance(req.get("id"), int) or isinstance(req.get("id"), bool):
+                self._send_json({"error": "an id and approve or decline", "code": "action"},
+                                status=400)
+                return
+            reason = trust_control.clean_reason(req.get("reason"))
+            if not reason:
+                out = approvals_queue().view()
+                out["error"] = "a reason is needed for every change to what she may do"
+                self._send_json(out, status=400)
+                return
+            q = approvals_queue()
+            if req["action"] == "approve" and BRAKE.is_set():
+                # Nothing is done while the brake is on - not even what the
+                # steward approves. Declining does nothing, so it stays open.
+                out = q.view()
+                out["error"] = "the brake is on: release it first, or decline"
+                self._send_json(out, status=409)
+                return
+            if req["action"] == "approve":
+                pending = {r["id"]: r for r in q.view()["pending"]}
+                r0 = pending.get(req["id"])
+                rule = (_tool_rules() or {}).get(r0["tool"]) if r0 else None
+                if rule and rule.get("rule") == "block":
+                    out = q.view()
+                    out["error"] = "you have blocked %s; clear the block first" % r0["tool"]
+                    self._send_json(out, status=409)
+                    return
+            r, err = q.resolve(req["id"], req["action"] == "approve", "the steward",
+                               reason, _do_approved)
+            if not err:
+                print(f"[approvals] request {r['id']} {r['status']}"
+                      + (f": {r.get('result', '')[:80]}" if "result" in r else ""),
+                      flush=True)
+            out = q.view()
+            if err:
+                out["error"] = err
+                self._send_json(out, status=409)
+                return
+            out["done"] = r
+            self._send_json(out)
             return
 
         if self.path == "/aetherseed/trust":

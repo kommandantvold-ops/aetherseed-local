@@ -108,7 +108,8 @@ class _Proxy(unittest.TestCase):
         threading.Thread(target=cls.model.serve_forever, daemon=True).start()
         cls.saved = {k: getattr(proxy, k) for k in (
             "HAILO_OLLAMA_URL", "token_counter", "enforce_budget", "root", "trust",
-            "detect_intent", "PROVENANCE_LOG", "COMPANION_FILE", "SOFT_STOP_TOKENS")}
+            "detect_intent", "PROVENANCE_LOG", "COMPANION_FILE", "SOFT_STOP_TOKENS",
+            "APPROVALS_FILE", "CONTROL_LOG")}
         proxy.HAILO_OLLAMA_URL = "http://127.0.0.1:%d" % cls.model.server_address[1]
         proxy.token_counter = lambda *a, **k: None
         proxy.enforce_budget = lambda c, m: (m, types.SimpleNamespace(trimmed=False))
@@ -140,6 +141,10 @@ class _Proxy(unittest.TestCase):
         proxy.root = aetherroot.AetherRoot(rootdir)
         proxy.PROVENANCE_LOG = os.path.join(self.tmp, "provenance.log")
         proxy.COMPANION_FILE = os.path.join(self.tmp, "companion.json")
+        # a refused write is filed as a request to the steward (build log 72):
+        # each test has its own queue and its own control log
+        proxy.APPROVALS_FILE = os.path.join(self.tmp, "approvals.json")
+        proxy.CONTROL_LOG = os.path.join(self.tmp, "control.log")
         proxy.STORE_FAILURES = 0
         SCRIPT["requests"].clear()
         SCRIPT["chunks"] = ["Noted", "."]

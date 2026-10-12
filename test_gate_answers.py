@@ -86,8 +86,10 @@ class AtTheProxy(_Proxy):
         n = len(SCRIPT["requests"])
         status, reply, meta = self.ask("add a to-do: buy milk")
         self.assertEqual(status, 200)
+        # Refused, and since build log 72 asked of her steward (test_approvals)
         self.assertEqual(reply, "I can't add to your to-do list yet. That opens at "
-                                "reader, and I am at observer. Nothing was added.")
+                                "reader, and I am at observer. I have asked my steward for "
+                                "an OK (request 1). Nothing has been added yet.")
         self.assertEqual(meta["mode"], "gate")
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
         with open(os.path.join(self.ws, "todo.md")) as f:

@@ -65,6 +65,29 @@ def blocked_text(tool: str) -> str:
     return f"I can't {what}: my steward has blocked it. {after}"
 
 
+_NOT_YET = {"todo_add": "Nothing has been added yet.", "note_write": "Nothing has been written yet."}
+
+
+def request_text(tool: str, tier: int, level: str, permissions: dict,
+                 request: Optional[dict], how: str) -> str:
+    """What the node says when an action above her level is filed as a request
+    to her steward (build log 72, the approvals queue) instead of refused. The
+    refusal's own words come first - she cannot do it - and then what happened."""
+    what, after = _WHAT.get(tool, ("do that", "Nothing was changed."))
+    opens = lowest_role_for(tier, permissions)
+    head = (f"I can't {what} yet. That opens at {opens}, and I am at {level}."
+            if opens else f"I can't {what} myself.")
+    not_yet = _NOT_YET.get(tool, "Nothing has been done yet.")
+    if how == "filed" and request:
+        return (f"{head} I have asked my steward for an OK (request {request['id']}). "
+                f"{not_yet}")
+    if how == "waiting" and request:
+        return (f"{head} That is already waiting for my steward's OK "
+                f"(request {request['id']}). {not_yet}")
+    return (f"{head} Too many requests are already waiting for my steward, so I "
+            f"have not asked. {after}")
+
+
 def refusal_text(tool: str, tier: int, level: str, permissions: dict) -> str:
     """What the node says when the gate has refused `tool` this turn."""
     what, after = _WHAT.get(tool, ("do that", "Nothing was changed."))

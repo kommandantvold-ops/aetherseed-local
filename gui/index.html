@@ -212,7 +212,7 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
 .sec h3{font-size:13px; font-weight:600; color:var(--ink-2); margin:12px 0 4px}
 .card select{font:inherit; font-size:14px; color:var(--ink); background:var(--ground);
   border:1px solid var(--line); border-radius:8px; padding:5px 8px}
-.card input#tmReason{font-size:15px}
+.card input#tmReason, .card input#apReason{font-size:15px; margin:0 0 8px}
 .tmtools{display:flex; flex-direction:column; gap:6px}
 .tmtool{display:flex; gap:8px; align-items:center; flex-wrap:wrap; border:1px solid var(--line);
   border-radius:var(--radius); padding:8px 10px; background:var(--surface-2); font-size:13px}
@@ -342,6 +342,15 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
       <button id="trainBtn"></button>
       <button id="shelfBtn"></button>
     </div>
+    <section class="sec">
+      <h2 id="apTitle"></h2>
+      <p class="help" id="apHelp"></p>
+      <input id="apReason" maxlength="200" autocomplete="off" spellcheck="false">
+      <div class="tmtools" id="apList"></div>
+      <p class="err" id="apMsg" hidden></p>
+      <h3 id="apRecentTitle"></h3>
+      <ul class="wslist" id="apRecent"></ul>
+    </section>
     <section class="sec">
       <h2 id="wsTitle"></h2>
       <h3 id="wsTodoTitle"></h3>
@@ -636,7 +645,7 @@ const T = {
     tmTitle: 'Trust management',
     tmStanding: (lvl, res, next) => `${lvl} · standing ${res}` + (next ? ` · ${next.to_go} to ${next.name}` : ' · the top level'),
     tmRuns: (lvl) => `The unit runs at ${lvl} until its next start.`,
-    tmFrozen: (f) => `Frozen since ${(f.since || '').slice(0, 16).replace('T', ' ')}: no event moves her standing. ${f.reason || ''}`,
+    tmFrozen: (f) => `Frozen since ${localWhen(f.since)}: no event moves her standing. ${f.reason || ''}`,
     tmRecordOk: (r) => `Her trust record holds: ${r.chained} lines chained.`,
     tmRecordNone: 'Her trust record has no chained lines yet.',
     tmRecordBad: (why) => `HER TRUST RECORD DOES NOT HOLD: ${why}`,
@@ -664,6 +673,22 @@ const T = {
     wsTitle: 'Her workspace', wsTodoTitle: 'To-do list', wsNotesTitle: 'Notes', wsFilesTitle: 'Files',
     wsNoTodo: 'No to-do list yet.', wsNone: 'None.', wsFailed: 'The workspace could not be read.',
     wsFolder: 'folder',
+    apTitle: 'Waiting for your OK',
+    apHelp: 'What she was asked to do above her level, and left undone. Approved, the unit does it once, as asked; declined, nothing happens. A request not answered within a day expires.',
+    apReason: 'Reason (needed to approve or decline)',
+    apNone: 'Nothing is waiting.', apRecentTitle: 'Answered lately',
+    apApprove: 'Approve', apDecline: 'Decline',
+    apTool: { todo_add: 'add to your to-do list', note_write: 'write a note' },
+    apLine: (r, tool) => `${tool}: “${(r.args || [])[0] || ''}” — asked by ${r.speaker || 'someone'} ${localWhen(r.filed_at)}`,
+    apStatus: { approved: 'approved', declined: 'declined', expired: 'expired',
+                failed: 'approved, not done' },
+    apNoReason: 'Write a reason first.', apFailed: 'The unit did not do it: ',
+    apLoadFailed: 'The queue could not be read from the unit.',
+    apNoAnswer: 'No answer from the unit. Open AetherSpark again to see what happened.',
+    apDone: (r) => r.status === 'approved' ? `Done: ${r.result || ''}`
+      : r.status === 'failed' ? `Approved, but the unit could not do it: ${r.result || ''}`
+      : 'Declined; nothing was done.',
+    apBadge: (n) => `AetherSpark · ${n}`,
     offDone: 'Going into quantum rest. Unplug the power when the screen has gone dark.',
     offFailed: 'Quantum rest is not available on this unit. Use the power button on the board.',
     noAnswer: 'The companion did not answer.', cutOff: 'The answer was cut off.',
@@ -853,7 +878,7 @@ const T = {
     tmTitle: 'Tillitsstyring',
     tmStanding: (lvl, res, next) => `${lvl} · poeng ${res}` + (next ? ` · ${next.to_go} til ${next.name}` : ' · øverste nivå'),
     tmRuns: (lvl) => `Enheten kjører som ${lvl} til neste oppstart.`,
-    tmFrozen: (f) => `Fryst siden ${(f.since || '').slice(0, 16).replace('T', ' ')}: ingen hendelse flytter poengene hennes. ${f.reason || ''}`,
+    tmFrozen: (f) => `Fryst siden ${localWhen(f.since)}: ingen hendelse flytter poengene hennes. ${f.reason || ''}`,
     tmRecordOk: (r) => `Tillitsregisteret hennes holder: ${r.chained} linjer lenket.`,
     tmRecordNone: 'Tillitsregisteret hennes har ingen lenkede linjer ennå.',
     tmRecordBad: (why) => `TILLITSREGISTERET HENNES HOLDER IKKE: ${why}`,
@@ -881,6 +906,22 @@ const T = {
     wsTitle: 'Arbeidsområdet hennes', wsTodoTitle: 'Gjøremål', wsNotesTitle: 'Notater', wsFilesTitle: 'Filer',
     wsNoTodo: 'Ingen gjøremålsliste ennå.', wsNone: 'Ingen.', wsFailed: 'Arbeidsområdet kunne ikke leses.',
     wsFolder: 'mappe',
+    apTitle: 'Venter på ditt ja',
+    apHelp: 'Det hun ble bedt om å gjøre over nivået sitt, og lot være. Godkjent gjør enheten det én gang, slik det ble bedt om; avslått skjer ingenting. En forespørsel som ikke besvares innen et døgn, utløper.',
+    apReason: 'Grunn (trengs for å godkjenne eller avslå)',
+    apNone: 'Ingenting venter.', apRecentTitle: 'Nylig besvart',
+    apApprove: 'Godkjenn', apDecline: 'Avslå',
+    apTool: { todo_add: 'legge til i gjøremålslisten', note_write: 'skrive et notat' },
+    apLine: (r, tool) => `${tool}: «${(r.args || [])[0] || ''}» — bedt om av ${r.speaker || 'noen'} ${localWhen(r.filed_at)}`,
+    apStatus: { approved: 'godkjent', declined: 'avslått', expired: 'utløpt',
+                failed: 'godkjent, ikke gjort' },
+    apNoReason: 'Skriv en grunn først.', apFailed: 'Enheten gjorde det ikke: ',
+    apLoadFailed: 'Køen kunne ikke leses fra enheten.',
+    apNoAnswer: 'Intet svar fra enheten. Åpne AetherSpark igjen for å se hva som skjedde.',
+    apDone: (r) => r.status === 'approved' ? `Gjort: ${r.result || ''}`
+      : r.status === 'failed' ? `Godkjent, men enheten fikk det ikke til: ${r.result || ''}`
+      : 'Avslått; ingenting ble gjort.',
+    apBadge: (n) => `AetherSpark · ${n}`,
     offDone: 'Går i kvantehvile. Trekk ut strømmen når skjermen er mørk.',
     offFailed: 'Kvantehvile er ikke tilgjengelig på denne enheten. Bruk strømknappen på kortet.',
     noAnswer: 'Følgesvennen svarte ikke.', cutOff: 'Svaret ble avbrutt.',
@@ -1266,7 +1307,13 @@ $('catSpark').onclick = () => {
   $('wsTodoTitle').textContent = s.wsTodoTitle;
   $('wsNotesTitle').textContent = s.wsNotesTitle;
   $('wsFilesTitle').textContent = s.wsFilesTitle;
+  $('apTitle').textContent = s.apTitle;
+  $('apHelp').textContent = s.apHelp;
+  $('apReason').placeholder = s.apReason;
+  $('apRecentTitle').textContent = s.apRecentTitle;
+  $('apMsg').hidden = true;
   openPanel('sparkPanel');
+  loadApprovals();
   loadWorkspace();
 };
 
@@ -1320,7 +1367,7 @@ function drawTrust(v) {
     const li = document.createElement('li');
     if (!e) { li.textContent = s.tmNoHistory; return li; }
     const sc = Number(e.score) || 0;
-    li.textContent = `${(e.timestamp || '').slice(0, 16).replace('T', ' ')} · ${s.tmEvent[e.type] || e.type}`
+    li.textContent = `${localWhen(e.timestamp)} · ${s.tmEvent[e.type] || e.type}`
       + (sc ? ` · ${sc > 0 ? '+' : ''}${sc}` : '') + (e.applied === false ? ` · ${s.tmNotApplied}` : '')
       + (e.details ? ` — ${e.details}` : '');
     return li;
@@ -1377,6 +1424,72 @@ $('recCheck').onclick = async () => {
     list.replaceChildren(li);
   }
 };
+
+// A time the unit wrote (UTC, with its offset), shown in this screen's own
+// time: "2026-10-12 11:14", not the UTC hour as if it were local. A time it
+// cannot read is shown as written.
+function localWhen(iso) {
+  const d = new Date(iso || '');
+  if (!iso || isNaN(d)) return String(iso || '').slice(0, 16).replace('T', ' ');
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// ---- the approvals queue (build log 72) ----------------------------------------
+function apSay(text, ok) {
+  const m = $('apMsg'); m.className = ok ? 'state ok' : 'err'; m.textContent = text; m.hidden = !text;
+}
+function drawApprovals(d) {
+  const s = t(), list = $('apList'), toolName = (x) => s.apTool[x] || x;
+  const pend = (d && d.pending) || [];
+  list.replaceChildren(...(pend.length ? pend : [null]).map((r) => {
+    const row = document.createElement('div'); row.className = 'tmtool';
+    if (!r) { row.textContent = s.apNone; return row; }
+    const nm = document.createElement('div'); nm.className = 'nm';
+    nm.textContent = s.apLine(r, toolName(r.tool));
+    row.append(nm);
+    for (const [label, action] of [[s.apApprove, 'approve'], [s.apDecline, 'decline']]) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      b.onclick = () => apAct(r.id, action); row.append(b);
+    }
+    return row;
+  }));
+  const rec = (d && d.recent) || [];
+  $('apRecent').replaceChildren(...rec.map((r) => {
+    const li = document.createElement('li');
+    li.textContent = `${s.apStatus[r.status] || r.status} · ` + s.apLine(r, toolName(r.tool))
+      + (r.result ? ` — ${r.result}` : '');
+    return li;
+  }));
+  $('apRecentTitle').hidden = !rec.length;
+  $('catSpark').textContent = pend.length ? s.apBadge(pend.length) : 'AetherSpark';
+}
+async function loadApprovals() {
+  try {
+    const r = await fetch('/aetherseed/approvals');
+    if (!r.ok) throw new Error(String(r.status));
+    drawApprovals(await r.json());
+  } catch {
+    apSay(t().apLoadFailed);
+  }
+}
+async function apAct(id, action) {
+  const s = t(), reason = $('apReason').value.trim();
+  if (!reason) { apSay(s.apNoReason); $('apReason').focus(); return; }
+  try {
+    const r = await fetch('/aetherseed/approvals', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, action, reason }),
+    });
+    const d = await r.json();
+    drawApprovals(d);
+    if (!r.ok) { apSay(s.apFailed + (d.error || r.status)); return; }
+    $('apReason').value = '';
+    apSay(s.apDone(d.done || {}), (d.done || {}).status !== 'failed');
+  } catch {
+    apSay(s.apNoAnswer);
+  }
+}
 
 // ---- her workspace, read-only (build log 72) ----------------------------------
 async function loadWorkspace() {
@@ -2283,6 +2396,8 @@ async function status() {
     $('rings').textContent = ringLine(s, d.rings);
     $('modelChip').textContent = d.model ?? '–';
     if ('brake' in d) showBrake(d.brake);
+    // what waits for the steward shows on its category (build log 72)
+    $('catSpark').textContent = d.approvals_pending ? s.apBadge(d.approvals_pending) : 'AetherSpark';
     lastBounds = d.bounds || null;
     if (lastBounds) $('bounds').textContent = s.bounds(lastBounds);
   } catch {
