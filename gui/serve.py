@@ -47,7 +47,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PROXIED_POST = ("/api/chat", "/aetherseed/setup", "/aetherseed/steward",
                 "/aetherseed/shelf/remove",
                 # build log 64: the training loop's buttons, and who her steward is
-                "/aetherseed/training", "/aetherseed/steward-name")
+                "/aetherseed/training", "/aetherseed/steward-name",
+                # build log 72: the steward's brake
+                "/aetherseed/brake")
 
 # THE STEWARD'S OWN SHELF (build log 62). Andreas, 5 Oct 2026: "a file upload
 # button in the gui, that adds documents to the library/workspace". The body
@@ -146,7 +148,8 @@ def _console_seen():
 # string (?before=&q=&limit=), so it is matched on its path alone.
 # /aetherseed/shelf: the steward's own documents and how far each is read (62).
 PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", "/api/tags",
-               "/aetherseed/shelf", "/aetherseed/training", "/aetherseed/trust-record")
+               "/aetherseed/shelf", "/aetherseed/training", "/aetherseed/trust-record",
+               "/aetherseed/brake")
 PROXIED_GET_QUERY = ("/aetherseed/memories",)
 
 # The page's own script is pinned by the hash of its bytes.

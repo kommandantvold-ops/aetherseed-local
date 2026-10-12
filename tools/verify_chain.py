@@ -22,6 +22,7 @@ The records:
 - provenance.log: every turn;
 - corrections.log: every correction and every change to the steward's facts;
 - trust_events.log: every event that moved her standing, and every grant;
+- control.log: every brake, and every release;
 - aetherroot/growth.log: every ring closed, and every wipe.
 """
 import argparse
@@ -37,7 +38,7 @@ for _p in (os.path.dirname(HERE), "/opt/aetherseed"):
         sys.path.insert(0, _p)
 from logic import chain  # noqa: E402
 
-RECORDS = ("provenance.log", "corrections.log", "trust_events.log",
+RECORDS = ("provenance.log", "corrections.log", "trust_events.log", "control.log",
            os.path.join("aetherroot", "growth.log"))
 _ANNOUNCED = re.compile(r"\[chain\] (\S+) ([0-9a-f]{16})\b")
 

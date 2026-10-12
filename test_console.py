@@ -142,7 +142,9 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
                          {"/api/chat", "/aetherseed/setup", "/aetherseed/steward",
                           "/aetherseed/shelf/remove",         # the steward's own shelf (62)
                           # the training loop's buttons; who her steward is (64)
-                          "/aetherseed/training", "/aetherseed/steward-name"},
+                          "/aetherseed/training", "/aetherseed/steward-name",
+                          # the steward's brake (72)
+                          "/aetherseed/brake"},
                          "a new POST route reaches the proxy only by being added here on purpose")
         self.assertIn("/aetherseed/shelf", serve.PROXIED_GET)
         self.assertIn("/aetherseed/training", serve.PROXIED_GET)

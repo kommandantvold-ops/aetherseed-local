@@ -1253,6 +1253,17 @@ class Loop:
             r = self.ask(task["said"], task["level"], keep)
         except Exception as e:
             r = {"reply": "", "meta": {}, "status": None, "error": repr(e)[:200]}
+        if r.get("braked") or (r.get("meta") or {}).get("braked"):
+            # Refused or cut by the steward's brake (build log 72): not her
+            # answer, so not scored, and the same task is asked again when the
+            # run goes on. The run pauses here too, so a run resumed under the
+            # brake cannot spin through refusals.
+            with self.lock:
+                if self.state.get("status") == "running":
+                    self.state["status"] = "paused"
+                    self.state["note"] = "paused by the brake"
+                    self._save()
+            return
         if r.get("error") or r.get("status") != 200:
             ok, why = False, "the turn failed (%s)" % (r.get("error") or r.get("status"))
         else:

@@ -5,6 +5,7 @@ The node keeps its own account in plain JSON lines:
 - corrections.log: every correction, every steward fact added, revoked or
   restored, every cap changed;
 - trust_events.log: every event that moved her standing, and every grant;
+- control.log: every brake and every release (G3);
 - growth.log: every ring closed, and every wipe of her memory.
 
 Until step 72 a line could be changed, removed or added afterwards and

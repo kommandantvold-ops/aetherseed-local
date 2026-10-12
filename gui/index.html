@@ -94,6 +94,13 @@ textarea:focus{outline:none; border-color:var(--accent)}
 .send{background:var(--accent); color:#06120D; border-color:transparent; font-weight:600; padding:11px 18px}
 .send:hover{color:#06120D}
 .hint{max-width:760px; margin:8px auto 0; font-size:12px; color:var(--ink-3); display:flex; gap:14px; flex-wrap:wrap}
+/* The steward's brake (build log 72): always in sight, one press to stop. */
+.brake{border-color:var(--alarm); color:var(--alarm); font-weight:600}
+.brake:hover{background:var(--alarm-soft); color:var(--alarm)}
+.brakebar{max-width:760px; margin:0 auto 10px; display:flex; gap:10px; align-items:center;
+  padding:10px 12px; border:1px solid var(--alarm); background:var(--alarm-soft);
+  border-radius:var(--radius); color:var(--ink); font-size:14px}
+.brakebar span{flex:1}
 .cursor::after{content:"▍"; color:var(--accent); animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
 @media (max-width:560px){ .chips{width:100%; margin-left:0} }
@@ -204,6 +211,7 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
     <button id="shelfBtn"></button>
     <button id="trainBtn"></button>
     <button id="recordBtn"></button>
+    <button id="brakeBtn" class="brake"></button>
     <button id="offBtn"></button>
   </div>
 </header>
@@ -215,6 +223,10 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
 </main>
 
 <footer>
+  <div class="brakebar" id="brakeBar" hidden>
+    <span id="brakeText"></span>
+    <button type="button" id="releaseBtn"></button>
+  </div>
   <div class="composer">
     <textarea id="input" rows="1" autofocus></textarea>
     <button class="send" id="send"></button>
@@ -237,6 +249,19 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
       <!-- The page's ordinary button, not the alarm colour: quantum rest is
            an orderly power-off, and a red button reads as a killswitch. -->
       <button type="button" class="send" id="offGo"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Releasing the brake asks first; putting it on never does (build log 72). -->
+<div class="setup" id="release" hidden>
+  <div class="card">
+    <h1 id="releaseTitle"></h1>
+    <p class="help" id="releaseHelp"></p>
+    <p class="err" id="releaseError" hidden></p>
+    <div class="row">
+      <button type="button" id="releaseCancel"></button>
+      <button type="button" class="send" id="releaseGo"></button>
     </div>
   </div>
 </div>
@@ -503,6 +528,12 @@ const T = {
     off: 'Quantum rest', offTitle: (n) => `Put ${n || 'the companion'} into quantum rest?`,
     offHelp: 'Everything is saved and the unit powers down, so it can be moved or unplugged safely. Nothing is erased. Wait until the screen has gone dark before you unplug the power.',
     offGo: 'Quantum rest', offCancel: 'Cancel',
+    brake: 'Brake', brakeOn: 'Stopped by the brake: nothing is answered until it is released.',
+    release: 'Release', releaseTitle: 'Release the brake?',
+    releaseHelp: 'She answers again from the next question. Nothing was erased while she was stopped; a training run stays paused until you go on with it.',
+    releaseGo: 'Release the brake', releaseFailed: 'The brake could not be released. It is still on.',
+    brakeFailed: 'The brake could not be put on. Try again, or use Quantum rest.',
+    braked: 'Stopped by the brake — not remembered',
     offDone: 'Going into quantum rest. Unplug the power when the screen has gone dark.',
     offFailed: 'Quantum rest is not available on this unit. Use the power button on the board.',
     noAnswer: 'The companion did not answer.', cutOff: 'The answer was cut off.',
@@ -680,6 +711,12 @@ const T = {
     off: 'Kvantehvile', offTitle: (n) => `Legge ${n || 'følgesvennen'} i kvantehvile?`,
     offHelp: 'Alt er lagret, og enheten slår seg av, så den trygt kan flyttes eller kobles fra. Ingenting slettes. Vent til skjermen er mørk før du trekker ut strømmen.',
     offGo: 'Kvantehvile', offCancel: 'Avbryt',
+    brake: 'Brems', brakeOn: 'Stoppet med bremsen: ingenting besvares før den slippes.',
+    release: 'Slipp', releaseTitle: 'Slippe bremsen?',
+    releaseHelp: 'Hun svarer igjen fra neste spørsmål. Ingenting ble slettet mens hun var stoppet; en treningsøkt står på pause til du fortsetter den.',
+    releaseGo: 'Slipp bremsen', releaseFailed: 'Bremsen kunne ikke slippes. Den er fortsatt på.',
+    brakeFailed: 'Bremsen kunne ikke settes på. Prøv igjen, eller bruk kvantehvile.',
+    braked: 'Stoppet med bremsen — ikke husket',
     offDone: 'Går i kvantehvile. Trekk ut strømmen når skjermen er mørk.',
     offFailed: 'Kvantehvile er ikke tilgjengelig på denne enheten. Bruk strømknappen på kortet.',
     noAnswer: 'Følgesvennen svarte ikke.', cutOff: 'Svaret ble avbrutt.',
@@ -727,6 +764,9 @@ function applyLanguage() {
   $('shelfBtn').textContent = s.shelf;
   $('trainBtn').textContent = s.train;
   $('offBtn').textContent = s.off;
+  $('brakeBtn').textContent = s.brake;
+  $('releaseBtn').textContent = s.release;
+  $('brakeText').textContent = s.brakeOn;
   $('intro1').textContent = s.intro1;
   $('intro2').textContent = s.intro2;
   send.textContent = s.send;
@@ -760,7 +800,15 @@ function provenance(turnEl, p) {
     const e = document.createElement('span'); e.className = 'tag ' + kind;
     e.textContent = text; row.append(e);
   };
-  if (p.checked === false) {
+  if (p.braked) {
+    // Refused or cut by the steward's brake (build log 72): nothing else
+    // about this turn is true - it was not checked and it is not kept.
+    turnEl.root.classList.add('flagged');
+    tag(s.braked, 'flagged');
+    turnEl.root.append(row);
+    scroll();
+    return;
+  } else if (p.checked === false) {
     turnEl.root.classList.add('flagged');
     tag(s.unchecked, 'flagged');
   } else if (p.unbacked_sources > 0) {
@@ -821,7 +869,7 @@ function provenance(turnEl, p) {
 }
 
 async function ask(text) {
-  if (busy || !name || !text.trim()) return;
+  if (busy || braked || !name || !text.trim()) return;
   busy = true; send.disabled = true; $('intro')?.remove();
   turn(t().you, 'you').body.textContent = text;
   const tn = turn(name, 'node');
@@ -864,7 +912,7 @@ async function ask(text) {
       e.textContent = t().cutOff; row.append(e); tn.root.append(row);
     }
     provenance(tn, prov);
-    busy = false; send.disabled = false; input.focus();
+    busy = false; send.disabled = braked; if (!braked) input.focus();
   }
 }
 
@@ -929,6 +977,68 @@ $('offGo').onclick = async () => {
     $('offError').textContent = s.offFailed;
     $('offError').hidden = false;
     $('offGo').disabled = false;
+  }
+};
+
+// ---- the steward's brake (build log 72) ---------------------------------------
+// Andreas, 11 Oct 2026, to "an authorized person should always be able to
+// pause or shut down a model mid-task": one press stops her - the answer in
+// progress is cut and every turn is refused until the brake is released.
+// Putting it on never asks; releasing it does. It erases nothing and is not
+// Quantum rest. Whoever can reach this screen can use it: the unit's own
+// screen, or a phone on its own Wi-Fi with the steward's passkey.
+let braked = false;
+function showBrake(b) {
+  braked = !!(b && b.on);
+  $('brakeBtn').hidden = braked;
+  $('brakeBar').hidden = !braked;
+  input.disabled = braked;
+  send.disabled = braked || busy;
+}
+$('brakeBtn').onclick = async () => {
+  showBrake({ on: true });             // shown at once; the unit confirms below
+  try {
+    const r = await fetch('/aetherseed/brake', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'on', reason: 'pressed at the console' }),
+    });
+    const d = await r.json();
+    showBrake(d.brake);
+    if (!r.ok || !d.brake || !d.brake.on) throw new Error(String(r.status));
+  } catch {
+    showBrake(null);
+    const tn = turn(t().recordWho, 'node');
+    tn.body.textContent = t().brakeFailed;
+    tn.root.classList.add('flagged');
+  }
+};
+$('releaseBtn').onclick = () => {
+  const s = t();
+  $('releaseTitle').textContent = s.releaseTitle;
+  $('releaseHelp').textContent = s.releaseHelp;
+  $('releaseGo').textContent = s.releaseGo;
+  $('releaseCancel').textContent = s.offCancel;
+  $('releaseError').hidden = true;
+  $('releaseGo').disabled = false;
+  $('release').hidden = false;
+};
+$('releaseCancel').onclick = () => { $('release').hidden = true; };
+$('releaseGo').onclick = async () => {
+  $('releaseGo').disabled = true;
+  try {
+    const r = await fetch('/aetherseed/brake', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'off' }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.brake || d.brake.on) throw new Error(String(r.status));
+    showBrake(d.brake);
+    $('release').hidden = true;
+    input.focus();
+  } catch {
+    $('releaseError').textContent = t().releaseFailed;
+    $('releaseError').hidden = false;
+    $('releaseGo').disabled = false;
   }
 };
 
@@ -1817,6 +1927,7 @@ async function status() {
     $('episodes').textContent = memoryLine(s, d);
     $('rings').textContent = ringLine(s, d.rings);
     $('modelChip').textContent = d.model ?? '–';
+    if ('brake' in d) showBrake(d.brake);
     lastBounds = d.bounds || null;
     if (lastBounds) $('bounds').textContent = s.bounds(lastBounds);
   } catch {

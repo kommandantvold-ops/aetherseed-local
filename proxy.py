@@ -26,6 +26,7 @@ import sys
 import os
 import hmac
 import secrets
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aetherroot import AetherRoot
@@ -128,6 +129,113 @@ def _settings():
     return (c["name"], c["language"]) if c else (None, companion.DEFAULT_LANGUAGE)
 
 
+# ---- THE BRAKE (build log 72, G3) -------------------------------------------
+# Andreas, 11 Oct 2026, to Satya Nadella's "an authorized person should always
+# be able to pause or shut down a model mid-task": a steward control that
+# cuts the reply in the middle and has the proxy refuse every turn until it is
+# released. It is not Quantum rest, which powers the unit off in order, and not
+# a memory wipe: nothing is erased, and released, she is as she was.
+#
+#   on        BRAKE is set at once, so a stream in progress stops at its next
+#             chunk and no model call starts; then it is written down
+#             (brake.json, atomically) and recorded in control.log (chained).
+#             A training run is paused.
+#   off       written down first, then released: a brake that could not be
+#             saved as released stays on.
+#   a start   reads brake.json: on stays on. A file that cannot be read keeps
+#             the brake ON - the safe side - and says so.
+BRAKE = threading.Event()
+BRAKE_FILE = os.path.expanduser("~/.aetherseed/brake.json")
+CONTROL_LOG = os.path.expanduser("~/.aetherseed/control.log")
+_BRAKE_LOCK = threading.Lock()
+_BRAKE_STATE = {"on": False}
+
+_BRAKED_TEXT = {
+    "en": "I am stopped by my steward's brake. Nothing is answered until it is released.",
+    "nb": "Jeg er stoppet med forvalterens brems. Ingenting besvares før den slippes.",
+}
+
+
+class Braked(RuntimeError):
+    """A model call refused or cut by the brake. partial: what had been
+    generated (and possibly shown) when it was cut."""
+    def __init__(self, partial=""):
+        super().__init__("the brake is on")
+        self.partial = partial or ""
+
+
+def brake_state():
+    return dict(_BRAKE_STATE)
+
+
+def load_brake():
+    """At a start: the brake as it was left."""
+    global _BRAKE_STATE
+    try:
+        with open(BRAKE_FILE, encoding="utf-8") as f:
+            st = json.load(f)
+        if not isinstance(st, dict):
+            raise ValueError("not a JSON object")
+    except FileNotFoundError:
+        st = {"on": False}
+    except (OSError, ValueError) as e:
+        st = {"on": True, "since": None, "by": "the unit",
+              "reason": "brake.json could not be read (%s): kept on until released" % (e,)}
+        print(f"[brake] {BRAKE_FILE} could not be read: the brake is kept ON", flush=True)
+    _BRAKE_STATE = st
+    if st.get("on"):
+        BRAKE.set()
+    else:
+        BRAKE.clear()
+    return brake_state()
+
+
+def set_brake(on, by="the console", reason=""):
+    """Put the brake on or release it. Returns (state, changed, error)."""
+    global _BRAKE_STATE
+    from aetherroot import atomic_write      # here: the tests stub aetherroot at import
+    on = bool(on)
+    reason = " ".join(str(reason or "").split())[:200]
+    with _BRAKE_LOCK:
+        if on == BRAKE.is_set():
+            return brake_state(), False, None
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        st = {"on": on, "since": now, "by": by, "reason": reason}
+        if on:
+            BRAKE.set()                       # first: whatever is running stops
+            _BRAKE_STATE = st
+            try:
+                atomic_write(BRAKE_FILE, json.dumps(st))
+            except OSError as e:
+                print(f"[brake] ON, but could not be written down: {e!r} - "
+                      f"a restart would release it", flush=True)
+        else:
+            try:
+                atomic_write(BRAKE_FILE, json.dumps(st))
+            except OSError as e:
+                print(f"[brake] could not be written down as released: {e!r} - "
+                      f"it stays on", flush=True)
+                return brake_state(), False, "it could not be written down as released"
+            _BRAKE_STATE = st
+            BRAKE.clear()
+        try:
+            chain.append(CONTROL_LOG, {"at": now, "action": "brake_on" if on else "brake_released",
+                                       "by": by, "reason": reason}, announce="control.log")
+        except OSError as e:
+            print(f"[brake] could not be recorded in control.log: {e!r}", flush=True)
+        print(f"[brake] {'ON' if on else 'released'} by {by}"
+              + (f": {reason}" if reason else ""), flush=True)
+    if on:
+        try:
+            loop = training_loop()
+            if loop.status().get("status") == "running":
+                ok, why = loop.pause()
+                print(f"[brake] training run paused: {'ok' if ok else why}", flush=True)
+        except Exception as e:
+            print(f"[brake] could not pause the training run: {e!r}", flush=True)
+    return brake_state(), True, None
+
+
 # ---- THE TRAINING LOOP (build log 64; logic/training.py) -------------------
 # A turn of the loop comes in through /api/chat like any other - the real
 # path, not a copy - carrying this header. The token is made when the proxy
@@ -183,6 +291,8 @@ def _training_ask(say, level, keep=True):
                     r["meta"] = d.get("aetherseed") or {}
                     if d.get("done_reason") == "error":
                         r["error"] = str(d.get("error") or "generation failed")[:200]
+                    if d.get("done_reason") == "brake" or r["meta"].get("braked"):
+                        r["braked"] = True           # refused or cut: not her answer (72)
     except urllib.error.HTTPError as e:
         r["status"], r["error"] = e.code, "HTTP %s" % e.code
     except Exception as e:
@@ -308,6 +418,12 @@ def _write_own_words():
             messages = own_words_messages(_settings()[0], ring["content"], others)
             try:
                 _, text = call_hailo_chat(MODEL, messages)
+            except Braked:
+                # Not a failed attempt: the ring waits, and the next ring
+                # closed after the brake is released writes it (72).
+                print(f"[rings] ring {ring['ring_no']}: own words wait - the brake is on",
+                      flush=True)
+                return
             except Exception as e:
                 store.set_own_words(ring["id"], "", f"model failed: {e!r}"[:200])
                 print(f"[rings] ring {ring['ring_no']}: own words not written ({e!r})",
@@ -507,6 +623,8 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     closing the socket after 20 chunks left the next request answering in
     2.5-4.8s with no reset and no wedge.
     """
+    if BRAKE.is_set():
+        raise Braked()                       # no model call while the brake is on
     messages, budget = enforce_budget(token_counter(model), messages)
     if budget.trimmed:
         print(f"[token-budget] {budget.summary()}", flush=True)
@@ -564,6 +682,11 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     resp = urllib.request.urlopen(req, timeout=300)
     try:
         for raw_line in resp:
+            if BRAKE.is_set():
+                # The steward's brake (72): the rest is abandoned here, at
+                # the next chunk, as every other stop abandons it.
+                stopped_because = "brake"
+                break
             line = raw_line.strip()
             if not line:
                 continue
@@ -706,6 +829,9 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
               f"artefact(s) from the front of the answer - not forwarded, "
               f"not stored", flush=True)
 
+    if stopped_because == "brake":
+        print(f"[generation] cut by the brake after {chunks} chunks", flush=True)
+        raise Braked(ai_content[:sent])
     if stopped_because:
         print(f"[generation] stopped early: {stopped_because} "
               f"after {chunks} chunks ({stripped_total} control token(s))", flush=True)
@@ -787,6 +913,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def _proxy_passthrough(self, method="GET", body=None):
+        if method == "POST" and BRAKE.is_set():
+            # Straight to the model server would go round the brake (72).
+            self._send_json({"error": "the brake is on", "code": "brake"}, status=423)
+            return
         url = f"{HAILO_OLLAMA_URL}{self.path}"
         headers = {k: v for k, v in self.headers.items()}
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
@@ -899,6 +1029,40 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # provenance record - the same treatment the record route gets. The
         # node repeating a line it shipped with is not a new fact about the
         # world, and storing it would let it re-enter later prompts as one.
+
+    def _answer_braked(self, model: str, stream=None, user_msg: str = "",
+                       partial: str = "", lesson=None, speaker: str = ""):
+        """The brake is on (build log 72): the turn is refused, or the answer
+        in progress is ended where it was cut. Never stored, never scored;
+        recorded in the provenance log as braked."""
+        meta = {"mode": "braked", "braked": True, "checked": False,
+                "unbacked_sources": 0, "unsourced_figures": 0,
+                "used_tools": False, "memory_used": False}
+        if stream is not None and stream.started:
+            try:
+                stream(json.dumps({"model": model,
+                                   "message": {"role": "assistant", "content": ""},
+                                   "done": True, "done_reason": "brake",
+                                   "aetherseed": dict(meta, cut=True)}))
+            except Exception:
+                pass
+        else:
+            text = _BRAKED_TEXT.get(_settings()[1], _BRAKED_TEXT["en"])
+            out = [json.dumps({"model": model,
+                               "message": {"role": "assistant", "content": text},
+                               "done": False}),
+                   json.dumps({"model": model,
+                               "message": {"role": "assistant", "content": ""},
+                               "done": True, "done_reason": "brake", "source": "brake",
+                               "aetherseed": meta})]
+            raw = ("\n".join(out) + "\n").encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(raw)
+        record({"braked": True, "cut": bool(stream is not None and stream.started),
+                "prompt": (user_msg or "")[:160], "answer": (partial or "")[:160],
+                "speaker": speaker, **({"training": lesson["level"]} if lesson else {})})
 
     def _serve_plain(self, model: str, text: str, source: str, mode: str,
                      used_tools: bool = False):
@@ -1072,6 +1236,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         stream = _Stream(self)
         try:
             raw_response, ai_content = call_hailo_chat(model, messages, emit=stream)
+        except Braked as e:
+            self._answer_braked(model, stream=stream, user_msg=question, partial=e.partial)
+            return
         except PromptTooLarge as e:
             print(f"[token-budget] REFUSED: {e}", flush=True)
             self._serve_plain(model, _TOO_LARGE.get(c_lang, _TOO_LARGE["en"]),
@@ -1232,6 +1399,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": "each message is an object whose content is text"},
                                 status=400)
                 return
+
+        if BRAKE.is_set():
+            # Every turn while the brake is on - homework, a question the unit
+            # would answer itself, anything - is refused, plainly (72).
+            last = next((m.get("content") for m in reversed(data.get("messages") or [])
+                         if isinstance(m, dict) and m.get("role") == "user"), "")
+            self._answer_braked(MODEL, user_msg=last or "", lesson=lesson)
+            return
 
         messages = data.get("messages", [])
         # The unit serves one model, its own (logic/served.py, build log 68),
@@ -1555,6 +1730,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                           + (f"; notes left out with them: {', '.join(gone)}" if gone else ""),
                           flush=True)
             raw_response, ai_content = call_hailo_chat(model, messages, emit=stream)
+        except Braked as e:
+            self._answer_braked(model, stream=stream, user_msg=user_msg, partial=e.partial,
+                                lesson=lesson, speaker=speaker)
+            return
         except PromptTooLarge as e:
             # Raised before anything is generated, so nothing has been sent.
             # Say so. The alternative is an empty reply the user cannot explain.
@@ -1856,6 +2035,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/aetherseed/training":
             self._send_json(training_loop().status())
             return
+        if self.path == "/aetherseed/brake":
+            self._send_json({"brake": brake_state()})
+            return
         if self.path == "/aetherseed/status":
             try:
                 rs = root.get_status()
@@ -1872,6 +2054,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "store_failures": STORE_FAILURES,
                 "willingness": rs.get("willingness_mean"),
                 "model": MODEL,
+                # the steward's brake (build log 72): on, since when, by whom
+                "brake": brake_state(),
                 "companion": companion.public(companion.load(COMPANION_FILE)),
                 "languages": companion.language_choices(),
                 "bounds": {
@@ -2067,6 +2251,25 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"companion": companion.public(saved)})
             return
 
+        if self.path == "/aetherseed/brake":
+            # The steward's brake (build log 72): {"action": "on"|"off", "reason"}.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            action = req.get("action") if isinstance(req, dict) else None
+            if action not in ("on", "off"):
+                self._send_json({"error": "the action is on or off", "code": "action"},
+                                status=400)
+                return
+            st, changed, err = set_brake(action == "on", by="the console",
+                                         reason=req.get("reason") or "")
+            if err:
+                self._send_json({"brake": st, "error": err}, status=409)
+                return
+            self._send_json({"brake": st, "changed": changed})
+            return
+
         if self.path == "/aetherseed/training":
             # Play, pause, go on, stop - from the console (build log 64).
             try:
@@ -2074,6 +2277,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 req = {}
             action = req.get("action") if isinstance(req, dict) else None
+            if action in ("start", "resume") and BRAKE.is_set():
+                # No homework while the brake is on: each turn would be
+                # refused (72). Pause and stop still work.
+                try:
+                    out = training_loop().status()
+                except Exception:
+                    out = {}
+                out["error"] = "the brake is on"
+                self._send_json(out, status=409)
+                return
             loop = training_loop()
             if action == "start":
                 minutes = req.get("minutes")
@@ -2169,7 +2382,7 @@ class ThreadedHTTPServer(http.server.HTTPServer):
 
 
 CHAINED_RECORDS = ("provenance.log", "corrections.log", "trust_events.log",
-                   os.path.join("aetherroot", "growth.log"))
+                   "control.log", os.path.join("aetherroot", "growth.log"))
 
 
 def _check_records(state_dir):
@@ -2221,6 +2434,13 @@ def main():
     print(f"  Willingness:  {rs['willingness_mean']:.3f}")
     print()
     print(f"  {trust.get_status_line()}")
+    b = load_brake()
+    if b.get("on"):
+        print(f"  Brake:        ON since {b.get('since') or '?'} by {b.get('by') or '?'}"
+              + (f" - {b['reason']}" if b.get("reason") else "")
+              + " - every turn is refused until it is released")
+    else:
+        print("  Brake:        off")
     print("=" * 50)
     print()
 

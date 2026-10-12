@@ -1611,7 +1611,12 @@ class AetherRoot:
             print("[aetherroot] could not write growth.log: %r" % (e,), flush=True)
 
     def reset(self, mode: str = "full"):
-        """Kill switch. Modes: full, episodes_only, willingness_only, identity_only."""
+        """A memory wipe. Modes: full, episodes_only, willingness_only, identity_only.
+
+        Called the kill switch until build log 72, which it is not: it stops
+        nothing that is running, and it erases. The brake is what stops her
+        (proxy.py, /aetherseed/brake), and it erases nothing. A wipe is
+        recorded in growth.log (chained) with what the store held before it."""
         counts = {}
         for table in ("episodes", "semantic", "identity", "growth", "probe_results"):
             try:
