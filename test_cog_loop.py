@@ -282,6 +282,53 @@ class Session(unittest.TestCase):
             C.run_session(m, _Mem(), 1, self.log.append, items=self.items)
 
 
+class EssayMemory(unittest.TestCase):
+    """74b: the essay prompt carries her COG lines too."""
+
+    def test_lines_reach_the_essay_prompt(self):
+        log = []
+        mem = _Mem([C.COG_LABEL + " [Episode] Trainer: Review | AI: Write about 200 words and finish."])
+        m = FakeModel(lambda msgs: "An essay.")
+        C.run_session(m, mem, 1, log.append, items=[])
+        essay = next(r for r in log if r.get("essay"))
+        self.assertIn("Write about 200 words and finish.", essay["prompt"][0]["content"])
+        self.assertEqual(essay["lines"], [1])
+
+    def test_lines_dropped_until_it_fits(self):
+        mem = _Mem(["x" * 400, "y" * 400, "z" * 400])
+        tid, source, theme, msgs, used = C.essay_prompt(
+            1, mem.lines, fits=lambda msgs: sum(len(x["content"]) for x in msgs) < 1500)
+        self.assertLess(len(used), 3)
+        self.assertTrue(sum(len(x["content"]) for x in msgs) < 1500)
+
+
+class Forget(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.d, "reviews"))
+        self.rec = os.path.join(self.d, "reviews", "008.reflection.json")
+        with open(self.rec, "w") as f:
+            json.dump({"stored": {"status": 200, "body": {"stored": 7599}}}, f)
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_removes_by_its_episode_and_keeps_the_record(self):
+        sent = []
+        ep = C.forget(self.d, 8, "echoed the essay", token="t",
+                      post=lambda p, t: (sent.append((p, t)) or (200, {"removed": 7599})))
+        self.assertEqual(ep, 7599)
+        self.assertEqual(sent[0], ({"episode": 7599, "why": "echoed the essay"}, "t"))
+        self.assertFalse(os.path.exists(self.rec))
+        with open(self.rec.replace(".reflection.json", ".reflection.removed.json")) as f:
+            self.assertEqual(json.load(f)["removed"]["why"], "echoed the essay")
+
+    def test_a_refusal_changes_nothing(self):
+        with self.assertRaises(RuntimeError):
+            C.forget(self.d, 8, "why", token="t", post=lambda p, t: (403, {}))
+        self.assertTrue(os.path.exists(self.rec))
+
+
 class Reflect(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()

@@ -56,6 +56,7 @@ What it touches, and what it does not:
 
   python3 training/cog_loop.py --dir DIR [--sessions N] [--model NAME]
   python3 training/cog_loop.py --reflect DIR NNN
+  python3 training/cog_loop.py --forget DIR NNN "why"     (at the steward's word)
   python3 training/cog_loop.py --report DIR
 """
 
@@ -100,6 +101,7 @@ NUM_PREDICT = {"reason": 70, "steps": 160, "luke": 60, "philo": 60, "reflect": 1
 MAX_SECONDS = 120              # wall-clock backstop per call
 ESSAY_SECONDS = 300            # and for an essay or a reflection
 MEMORY_SHOWN = 2               # at most this many COG lines in one prompt
+ESSAY_MEMORY_SHOWN = 3         # and in the essay's (74b)
 MEMORY_SHOWN_CHARS = 300       # as aetherroot shows a COG line (COG_SHOWN_CHARS)
 
 ANSWER_TAG = "Answer:"
@@ -494,11 +496,23 @@ def default_items(session, sizes, log):
     return items
 
 
-def essay_prompt(session):
+def essay_prompt(session, memory_lines=(), fits=lambda msgs: True):
+    """The essay's prompt, with her COG lines from memory in front of it
+    (build log 74b; Andreas, 13 Oct 2026, asked whether the essay prompt
+    should carry them too: "yes"). Lines are dropped, last first, until the
+    prompt fits. Returns (id, source, theme, messages, lines used)."""
     tid, source, passage, theme = cog_texts.essay_for(session)
-    return tid, source, theme, [
-        {"role": "system", "content": ESSAY_SYSTEM},
-        {"role": "user", "content": ESSAY_ASK.format(source=source, passage=passage, theme=theme)}]
+    lines = list(memory_lines)
+    while True:
+        system = ESSAY_SYSTEM
+        if lines:
+            system += "\n\n" + MEMORY_HEAD + "\n" + "\n".join(x["text"] for x in lines)
+        msgs = [{"role": "system", "content": system},
+                {"role": "user", "content": ESSAY_ASK.format(source=source, passage=passage,
+                                                             theme=theme)}]
+        if not lines or fits(msgs):
+            return tid, source, theme, msgs, lines
+        lines.pop()
 
 
 def run_session(model, memory, session, log, items=None, sizes=ITEMS, essay_dir=None):
@@ -551,13 +565,15 @@ def run_session(model, memory, session, log, items=None, sizes=ITEMS, essay_dir=
         results.append((it, rec))
 
     # the essay: the session's note
-    tid, source, theme, msgs_e = essay_prompt(session)
+    tid, source, theme, msgs_e, used_e = essay_prompt(
+        session, memory.pick(" ".join(cog_texts.essay_for(session)[2:]), ESSAY_MEMORY_SHOWN),
+        fits=model.fits)
     essay = None
     if model.fits(msgs_e):
         essay, end_e, sec_e = model.chat(msgs_e, NUM_PREDICT["essay"], stop_at_answer=False,
                                          max_seconds=ESSAY_SECONDS)
         log({"essay": tid, "source": source, "theme": theme, "prompt": msgs_e, "reply": essay,
-             "ended": end_e, "secs": sec_e})
+             "ended": end_e, "secs": sec_e, "lines": [x["id"] for x in used_e]})
         if essay_dir:
             write_essay(essay_dir, session, model.name, tid, source, theme, essay)
     else:
@@ -650,6 +666,45 @@ def reflect(model, d, n, token=None, post=post_reflection, again=False):
         raise RuntimeError("the proxy did not store it: %s %s" % (status, body))
     return rec
 
+
+
+def post_remove(payload, token):
+    req = urllib.request.Request(PROXY + "/aetherseed/cog/remove",
+                                 data=json.dumps(payload).encode("utf-8"), method="POST",
+                                 headers={"Content-Type": "application/json", COG_HEADER: token})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return e.code, {"error": str(e)}
+
+
+def forget(d, n, why, token=None, post=post_remove):
+    """Removes the reflection on essay NNN from her memory, at the steward's
+    word (build log 74b). The record beside the review is kept, renamed
+    NNN.reflection.removed.json, with why and when."""
+    path = os.path.join(d, "reviews", "%03d.reflection.json" % n)
+    with open(path, encoding="utf-8") as f:
+        rec = json.load(f)
+    ep = ((rec.get("stored") or {}).get("body") or {}).get("stored")
+    if not isinstance(ep, int):
+        raise ValueError("essay %03d has no stored reflection" % n)
+    if token is None:
+        with open(COG_TOKEN_FILE, encoding="utf-8") as f:
+            token = f.read().strip()
+    status, body = post({"episode": ep, "why": why}, token)
+    if status != 200:
+        raise RuntimeError("the proxy did not remove it: %s %s" % (status, body))
+    rec["removed"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                      "why": why, "episode": ep}
+    out = path.replace(".reflection.json", ".reflection.removed.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(rec, f, ensure_ascii=False, indent=1)
+    os.remove(path)
+    return ep
 
 
 # ---------------------------------------------------------------- report
@@ -770,7 +825,9 @@ def report(d):
             n = int(m.group(1))
             rv = os.path.join(d, "reviews", "%03d.txt" % n)
             rf = os.path.join(d, "reviews", "%03d.reflection.json" % n)
+            gone = os.path.join(d, "reviews", "%03d.reflection.removed.json" % n)
             state = ("reflection in memory" if os.path.exists(rf) else
+                     "reflection removed" if os.path.exists(gone) else
                      "reviewed, no reflection yet" if os.path.exists(rv) else "not reviewed")
             theme, body = read_essay(d, n)
             lines.append("  %03d  %-40s %4d words  %s" % (n, theme[:40], len(body.split()), state))
@@ -796,9 +853,20 @@ def main(argv=None):
     ap.add_argument("--reflect", nargs=2, metavar=("DIR", "NNN"),
                     help="her reflection on reviews/NNN.txt, stored in her memory")
     ap.add_argument("--again", action="store_true", help="with --reflect: a second one")
+    ap.add_argument("--forget", nargs=3, metavar=("DIR", "NNN", "WHY"),
+                    help="remove the reflection on essay NNN from her memory")
     a = ap.parse_args(argv)
     if a.report:
         sys.stdout.write(report(a.report))
+        return 0
+    if a.forget:
+        d, n, why = a.forget[0], int(a.forget[1]), a.forget[2]
+        try:
+            ep = forget(d, n, why)
+        except (ValueError, RuntimeError, OSError) as e:
+            print("essay %03d: %s" % (n, e), file=sys.stderr)
+            return 1
+        print("essay %03d: reflection %d removed from her memory" % (n, ep))
         return 0
     if a.reflect:
         d, n = a.reflect[0], int(a.reflect[1])

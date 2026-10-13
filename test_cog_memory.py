@@ -96,6 +96,36 @@ class TheEndpoint(_Proxy):
         self.assertEqual(self.post(dict(self.BODY, reflection="x" * 5000), proxy._COG_TOKEN)[0], 400)
         self.assertEqual(self.count(), 0)
 
+    def remove(self, body, token=None):
+        req = urllib.request.Request(self.url + "/aetherseed/cog/remove",
+                                     data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json"})
+        if token is not None:
+            req.add_header(proxy.COG_HEADER, token)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_removed_at_the_stewards_word_and_logged(self):
+        ep = self.post(self.BODY, proxy._COG_TOKEN)[1]["stored"]
+        self.assertEqual(self.remove({"episode": ep, "why": "x"})[0], 403)
+        self.assertEqual(self.remove({"episode": ep}, proxy._COG_TOKEN)[0], 400)
+        status, out = self.remove({"episode": ep, "why": "echoed the essay"}, proxy._COG_TOKEN)
+        self.assertEqual((status, out), (200, {"removed": ep}))
+        self.assertEqual(self.count(), 0)
+        with open(proxy.COG_LOG) as f:
+            last = json.loads(f.readlines()[-1])
+        self.assertEqual((last["removed"], last["why"]), (ep, "echoed the essay"))
+        self.assertEqual(last["reflection"], self.BODY["reflection"])
+
+    def test_only_a_cog_line_can_be_removed(self):
+        ep = proxy.root.store_interaction("What is 2+2?", "4")
+        status, _ = self.remove({"episode": ep, "why": "x"}, proxy._COG_TOKEN)
+        self.assertEqual(status, 404)
+        self.assertEqual(self.count(), 1)
+
     def test_the_token_file_is_the_service_accounts_alone(self):
         saved = proxy.COG_TOKEN_FILE
         proxy.COG_TOKEN_FILE = os.path.join(self.tmp, "cog.token")

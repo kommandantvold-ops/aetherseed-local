@@ -442,6 +442,40 @@ def store_cog_reflection(req, token):
     return 200, {"stored": ep, "mode": COG}
 
 
+def remove_cog_reflection(req, token):
+    """(status, body). Removes one COG reflection from her memory - only a line
+    of mode "cog", and only at the steward's word (build log 74b; Andreas,
+    13 Oct 2026, of a reflection that only echoed its essay: "remove"). The
+    removed line is kept word for word in cog.log, so nothing is lost
+    unrecorded."""
+    if not isinstance(token, str) or not hmac.compare_digest(token, _COG_TOKEN):
+        return 403, {"error": "not the COG-loop", "code": "token"}
+    if not isinstance(req, dict) or not isinstance(req.get("episode"), int):
+        return 400, {"error": "an episode number", "code": "body"}
+    why = " ".join(str(req.get("why") or "").split())[:300]
+    if not why:
+        return 400, {"error": "a reason, for the log", "code": "why"}
+    ep = req["episode"]
+    row = root.store.conn.execute(
+        "SELECT user_msg, ai_msg, timestamp FROM episodes WHERE id = ? AND mode = ?",
+        (ep, COG)).fetchone()
+    if row is None:
+        return 404, {"error": "no COG reflection with that number", "code": "none"}
+    try:
+        with open(COG_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                "removed": ep, "why": why, "stored_at": row[2],
+                                "review": row[0], "reflection": row[1]},
+                               ensure_ascii=False) + "\n")
+    except OSError as e:
+        return 500, {"error": "the log could not be written, so nothing was removed: %r" % (e,),
+                     "code": "log"}
+    root.store.conn.execute("DELETE FROM episodes WHERE id = ? AND mode = ?", (ep, COG))
+    root.store.conn.commit()
+    print(f"[cog] reflection {ep} removed: {why}", flush=True)
+    return 200, {"removed": ep}
+
+
 class _Gated:
     """What execute_intent() needs of AetherSpark: its gate."""
 
@@ -2631,6 +2665,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
             out["done"] = result
             self._send_json(out)
+            return
+
+        if self.path == "/aetherseed/cog/remove":
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = None
+            status, out = remove_cog_reflection(req, self.headers.get(COG_HEADER))
+            self._send_json(out, status=status)
             return
 
         if self.path == "/aetherseed/cog/reflection":
