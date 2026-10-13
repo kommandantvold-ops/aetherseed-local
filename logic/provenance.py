@@ -63,6 +63,13 @@ FICTION = "fiction"
 UNVERIFIED = "unverified"
 
 VALID_MODES = (FACTUAL, FICTION, UNVERIFIED)
+# A stored mode only, never a request's (build log 74; Andreas, 13 Oct 2026:
+# "each essay can be reviewed with trainer and that feedback reflection can go
+# into the memory, and it should have a COG-tag"). Her own reflection on her
+# trainer's review of an essay she wrote in the COG-loop: her thoughts, kept
+# as hers - not a fact anyone checked, never a ring.
+COG = "cog"
+STORED_MODES = VALID_MODES + (COG,)
 
 # Retrieved fiction is labelled in the prompt rather than silently mixed in.
 # A structural label is a fact about the prompt; an instruction is a request
@@ -218,8 +225,9 @@ def visible_modes(request_mode: str):
     Two guards stay where they were, because a tag cannot do their work: a
     tagged turn is not evidence for the honesty check (aetherroot reports the
     context without them), and only factual turns feed a ring.
+    A COG reflection (build log 74) is stored, tagged and seen the same way.
     """
-    return VALID_MODES
+    return STORED_MODES
 
 
 # What a remembered turn that is not plain fact says of itself, in front of
@@ -234,6 +242,7 @@ PASSED_LABEL = "[Passed a check in training]"
 # An answer of hers the build's own reading had kept as unverified, and her
 # steward has since marked as a right assumption (build log 67).
 ASSUMPTION_LABEL = "[A right assumption of yours - your steward checked it]"
+COG_LABEL = "[COG - your reflection on your trainer's review of an essay you wrote]"
 CORRECTION_REASONS = {
     "never": "this never happened",
     "part": "part of it is wrong",
@@ -250,7 +259,8 @@ TAG_NOTE = ("Tags say what a memory line is. A [Fiction, ...] line is a story wr
             "request, not fact. An [Unverified - ...] or [Corrected ...] line is an earlier "
             "answer of yours, unchecked or wrong: do not repeat it as fact; where a correction "
             "says what is true, say that. A [A right assumption of yours - ...] line is one "
-            "your steward checked, and it held.")
+            "your steward checked, and it held. A [COG ...] line is your own reflection after your "
+            "trainer reviewed an essay of yours: your thinking, not a checked fact.")
 
 
 def memory_tag(mode: str, correction=None, supported=False) -> str:
@@ -272,6 +282,8 @@ def memory_tag(mode: str, correction=None, supported=False) -> str:
         return f"[Corrected {who}: {CORRECTION_REASONS.get(correction.get('reason'), 'it is wrong')}]"
     if mode == FICTION:
         return FICTION_LABEL
+    if mode == COG:
+        return COG_LABEL
     if supported:
         # the note itself, or True: whose mark it is decides what it says.
         # A MARK OUTRANKS "UNVERIFIED" (build log 65). The mode is what the

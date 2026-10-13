@@ -126,8 +126,12 @@ DEFAULT_CONFIG = {
 CONSOLIDATES = ("factual",)              # may feed a ring
 # Nothing is set aside since build log 64 (Andreas, 6 Oct 2026): every turn is
 # remembered, and one that is not plain fact carries its tag (logic/provenance).
-REMEMBERED = ("factual", "fiction", "unverified")
-TAGGED = ("fiction", "unverified")       # remembered, and shown with a tag
+REMEMBERED = ("factual", "fiction", "unverified", "cog")
+TAGGED = ("fiction", "unverified", "cog")  # remembered, and shown with a tag
+# A COG reflection (build log 74) is her own, a few sentences long: shown with
+# more of itself than an answer's first 100 characters, or the tag would
+# introduce a fragment.
+COG_SHOWN_CHARS = 300
 SET_ASIDE = ()                           # kept for the callers that still ask
 
 
@@ -1169,7 +1173,8 @@ class AetherRoot:
                          # shown back to her in it (build log 65): 58 stored
                          # answers on Lyra hold one, and each one shown is one
                          # more example to copy. The store is not rewritten.
-                         f"{ep['user_msg'][:100]} | AI: {strip_bare_tags(ep['ai_msg'])[0][:100]}"),
+                         f"{ep['user_msg'][:100]} | AI: "
+                         f"{strip_bare_tags(ep['ai_msg'])[0][:COG_SHOWN_CHARS if ep_mode == 'cog' else 100]}"),
                 "type": "episode",
                 # Not plain fact: shown with its tag, and not evidence for the
                 # honesty check. A turn the steward only marked right is fact.

@@ -101,8 +101,10 @@ class TestConsolidationReadsFactualOnly(_Root):
         self.assertEqual((provenance.FACTUAL,), aetherroot.CONSOLIDATES)
         # build log 64: nothing is set aside; fiction and unverified are
         # remembered and tagged
-        self.assertEqual(set(provenance.VALID_MODES), set(aetherroot.REMEMBERED))
-        self.assertEqual((provenance.FICTION, provenance.UNVERIFIED), aetherroot.TAGGED)
+        self.assertEqual(set(provenance.STORED_MODES), set(aetherroot.REMEMBERED))
+        # build log 74: a COG reflection is remembered and tagged, never a ring
+        self.assertEqual((provenance.FICTION, provenance.UNVERIFIED, provenance.COG),
+                         aetherroot.TAGGED)
         self.assertEqual((), aetherroot.SET_ASIDE)
 
 

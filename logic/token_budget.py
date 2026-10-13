@@ -578,6 +578,7 @@ _LEADING_ARTEFACTS = (
     "[Marked right by your steward]",
     "[A right assumption of yours - your steward checked it]",
     "[Passed a check in training]",
+    "[COG - your reflection on your trainer's review of an essay you wrote]",   # 74
     "[Episode]",
     "[Pattern]",
     # A ring's line took the place of [Pattern] in step 37 (logic/rings.py).
@@ -754,6 +755,7 @@ _TAG_MARKERS = (
     "[Corrected by your steward",
     "[Corrected in training",
     "[Fiction, written at your request",
+    "[COG - your reflection",                 # build log 74
 )
 _BLOCK_MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
 
@@ -781,7 +783,9 @@ _BARE_TAG = re.compile(
     r"\[(?:known|corrected|correction|unverified|fiction|passed|pattern|steward told me|assumption|"
     r"a right assumption|right assumption)\][ \t]?"
     # the shortened forms TAG_NOTE names (build log 72): "[Fiction, ...]"
-    r"|\[(?:fiction|unverified|corrected|a right assumption)[^\]\n]{0,40}(?:\.\.\.|…)\][ \t]?",
+    r"|\[(?:fiction|unverified|corrected|a right assumption)[^\]\n]{0,40}(?:\.\.\.|…)\][ \t]?"
+    # the COG tag (build log 74), whole or shortened: hers to be shown, not to say
+    r"|\[cog\b[^\]\n]{0,80}\][ \t]?",
     re.I)
 
 

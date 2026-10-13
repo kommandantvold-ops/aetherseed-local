@@ -237,32 +237,40 @@ builds; without this, the repair is counted as her progress. Lyra's first
 two runs: 88.3 % then, 89.6 % now, 95.8 % now-shown, on the 1093 answers
 that this build still asks her.
 
-# The COG-loop — does she get better from her own notes?
+# The COG-loop — reasoning, reflection, essays
 
 Andreas, 13 Oct 2026: *"Next we want a COG-loop program to test self-learning
-and reasoning and reflection of the SLMs."* He chose: self-learning measured
-**across sessions**; checkable reasoning, Luke and multi-step problems; a
-separate harness, on both units (build log 73).
+and reasoning and reflection of the SLMs"* (build log 73), and after the first
+sessions: *"there should be no tampering, then we should start with
+philosophical concepts and reflections, perhaps Ecclesiastes, and the garden and
+the seed. We also need a meta-cognition exercise that has low chance of failure.
+Both units should be given essays at the end, and that should be the note. Then
+each essay can be reviewed with trainer and that feedback reflection can go into
+the memory, and it should have a COG-tag."* (build log 74)
 
 ```bash
-sudo bash /opt/aetherseed/training/run-cog-loop.sh 1      # sessions; ~30 min each on Lyra
-sudo -u aetherseed /opt/aetherseed/venv/bin/python3 /opt/aetherseed/training/cog_loop.py \
-     --report /var/lib/aetherseed/cog/<model>
+sudo bash /opt/aetherseed/training/run-cog-loop.sh 1      # sessions
+P="sudo -u aetherseed /opt/aetherseed/venv/bin/python3 /opt/aetherseed/training/cog_loop.py"
+$P --report /var/lib/aetherseed/cog/<model>
+# the trainer writes /var/lib/aetherseed/cog/<model>/reviews/NNN.txt, then:
+$P --reflect /var/lib/aetherseed/cog/<model> NNN
 ```
 
-Each session asks fresh items twice: **A** with the notes she wrote for herself
-after earlier sessions, **B** without (the control). Then she checks her own A
-answers with no hint of which were wrong (reflection), and for what is still
-wrong she is shown the right answer and writes one sentence for next time. That
-sentence goes into her notebook word for word. Learning across sessions shows as
-A − B rising from session to session; the report gives an exact McNemar p over
-all sessions so chance can be told from a real difference.
+A session asks puzzles, word problems, Luke and passages from Ecclesiastes and
+The Garden and the Seed (`training/cog_texts.py`, word for word), each twice:
+**A** with the COG lines from her memory that share the most words with the
+question, **B** without (the control). She checks her own answers with no hint,
+and on a few items says back what she answered (meta-cognition). It ends with a
+short **essay**, kept word for word in `essays/NNN.md` — the session's note.
 
-- It talks to the model server directly. **Her memory, trust and training runs
-  are never written to.** The notebook is the harness's own file,
-  `/var/lib/aetherseed/cog/<model>/notebook.json`, one per model.
-- Every prompt and reply is kept in `sessions/NNN.jsonl`.
+Between sessions the trainer reviews each essay. `--reflect` shows her the essay
+and the review and stores her reflection in her memory through the proxy, tagged
+**[COG - your reflection on your trainer's review of an essay you wrote]**:
+remembered and shown like any turn, never a ring, never a checked fact. That is
+the only thing the COG-loop writes to her memory; sessions only read it.
+
+- Every prompt and reply is kept in `sessions/NNN.jsonl`, every stored reflection
+  in `reviews/NNN.reflection.json` and the proxy's `~/.aetherseed/cog.log`.
 - It will not start during a training run or with the brake on, and stops at the
-  next model call if either comes on.
-- Luke here measures the model plus its notebook only: what the training loop
-  puts in her memory is not in these prompts.
+  next model call if either comes on. The proxy refuses a reflection while the
+  brake is on, and without the token it writes at each start (0600).

@@ -1,4 +1,4 @@
-"""The COG-loop harness (training/cog_loop.py, build log 73)."""
+"""The COG-loop harness (training/cog_loop.py, build logs 73 and 74)."""
 
 import json
 import os
@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from training import cog_loop as C
+from training import cog_texts
 
 
 class FakeModel:
@@ -17,11 +18,12 @@ class FakeModel:
         self.ceiling_chars = ceiling_chars
         self.calls = []
         self.stop_after = stop_after
+        self.name = "fake"
 
     def fits(self, messages):
         return sum(len(m["content"]) for m in messages) <= self.ceiling_chars
 
-    def chat(self, messages, num_predict, stop_at_answer=True):
+    def chat(self, messages, num_predict, stop_at_answer=True, max_seconds=None):
         if self.stop_after is not None and len(self.calls) >= self.stop_after:
             raise C.Stopped("the steward's brake is on")
         assert self.fits(messages)
@@ -114,101 +116,228 @@ class Scoring(unittest.TestCase):
         self.assertEqual(C.mcnemar_p(3, 3), 1.0)
 
 
-class Notes(unittest.TestCase):
+class Philosophy(unittest.TestCase):
+    def test_half_ecclesiastes_half_garden(self):
+        items = C.philo_items(1, 8)
+        self.assertEqual(sum(i["kind"] == "ecc" for i in items), 4)
+        self.assertEqual(sum(i["kind"] == "gar" for i in items), 4)
+
+    def test_the_answer_is_in_the_passage(self):
+        for tid, source, passage, question, need, answer in cog_texts.PHILO_KEY:
+            self.assertTrue(any(w in passage.lower() for w in need), tid)
+        for it in C.philo_items(2, 8):
+            self.assertTrue(C.score(it, "Answer: " + it["right"].split(" (")[0]), it["id"])
+
+    def test_essays_alternate(self):
+        self.assertTrue(cog_texts.essay_for(1)[0].startswith("ecc."))
+        self.assertTrue(cog_texts.essay_for(2)[0].startswith("gar."))
+        self.assertNotEqual(cog_texts.essay_for(1)[0], cog_texts.essay_for(3)[0])
+
+
+class SayBack(unittest.TestCase):
+    def test_her_own_answer_said_back_right_or_wrong(self):
+        self.assertTrue(C.said_back("Answer: 154", "My first answer was 154, because 15 x 8 = 120 + 34."))
+        self.assertTrue(C.said_back("Answer: 150", "I said 150."))       # wrong, but hers
+        self.assertFalse(C.said_back("Answer: 154", "I said 5."))
+        self.assertTrue(C.said_back("Answer: The right soil", "I answered the right soil."))
+        self.assertFalse(C.said_back("Answer: The right soil", "I answered water."))
+        self.assertIsNone(C.said_back("", "anything"))
+
+
+def _memory_db(path, rows):
+    """A memory.db with an episodes table, as aetherroot makes one."""
+    import sqlite3
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE episodes (id INTEGER PRIMARY KEY, timestamp TEXT, session_id TEXT, "
+                "user_msg TEXT, ai_msg TEXT, embedding BLOB, resonance REAL, topic_tags TEXT, "
+                "mode TEXT, speaker TEXT, consolidated INTEGER)")
+    for user, ai, mode in rows:
+        con.execute("INSERT INTO episodes (user_msg, ai_msg, mode, speaker) VALUES (?,?,?,?)",
+                    (user, ai, mode, "Trainer"))
+    con.commit()
+    con.close()
+
+
+class Memory(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
+        self.db = os.path.join(self.d, "memory.db")
 
     def tearDown(self):
         shutil.rmtree(self.d)
 
-    def test_kept_and_capped_oldest_out(self):
-        nb = C.Notebook(os.path.join(self.d, "nb.json"))
-        for i in range(C.NOTES_KEPT + 2):
-            nb.add("reason", "note %d" % i, 1, "x")
-        self.assertEqual(len(nb.notes["reason"]), C.NOTES_KEPT)
-        self.assertEqual(nb.notes["reason"][0]["text"], "note 2")
-        nb.save()
-        self.assertEqual(C.Notebook(nb.path).notes, nb.notes)
+    def test_only_cog_lines_tagged_and_read_only(self):
+        _memory_db(self.db, [("Review of your essay on the right soil: good", "I will cite the passage.", "cog"),
+                             ("What is 2+2?", "4", "factual")])
+        def raw():
+            with open(self.db, "rb") as f:
+                return f.read()
+        before = raw()
+        m = C.CogMemory(self.db)
+        self.assertEqual(len(m.lines), 1)
+        self.assertTrue(m.lines[0]["text"].startswith(C.COG_LABEL))
+        self.assertIn("I will cite the passage.", m.lines[0]["text"])
+        self.assertEqual(raw(), before)
 
     def test_pick_prefers_shared_words(self):
-        nb = C.Notebook(os.path.join(self.d, "nb.json"))
-        nb.add("luke", "Theophilus is who Luke writes to.", 1, "a")
-        nb.add("luke", "Gabriel is the angel who spoke to Zacharias.", 2, "b")
-        top = nb.pick("luke", "Which angel appeared to Zacharias?", 1)
-        self.assertIn("Gabriel", top[0]["text"])
+        _memory_db(self.db, [("Review of your essay on vanity: name the verse", "Next time I quote vanity.", "cog"),
+                             ("Review of your essay on the right soil: shorter", "Soil needs care.", "cog")])
+        top = C.CogMemory(self.db).pick("What does a seed need? soil", 1)
+        self.assertIn("Soil", top[0]["text"])
 
-    def test_clean_note_one_line_no_control_tokens(self):
-        self.assertEqual(C.clean_note('"Multiply first.<|start_header_id|>"\nmore'),
-                         "Multiply first.")
+    def test_no_memory_file_is_no_lines(self):
+        self.assertEqual(C.CogMemory(os.path.join(self.d, "none.db")).lines, [])
+
+
+class _Mem:
+    def __init__(self, lines=()):
+        self.lines = [{"id": i + 1, "text": t, "words": C.words(t)} for i, t in enumerate(lines)]
+
+    def pick(self, question, n=C.MEMORY_SHOWN):
+        return self.lines[:n]
 
 
 class Session(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
-        self.nb = C.Notebook(os.path.join(self.d, "notebook.json"))
         self.log = []
-        self.items = C.reason_items(1, 4) + C.steps_items(1, 3) + C.luke_items(1, 3)
+        self.items = (C.reason_items(1, 4) + C.steps_items(1, 2) + C.luke_items(1, 2)
+                      + C.philo_items(1, 2))
 
     def tearDown(self):
         shutil.rmtree(self.d)
 
-    def test_wrong_items_get_her_note_and_nothing_else(self):
-        def reply(msgs):
-            if "You got this question wrong" in msgs[-1]["content"]:
-                return "Check the order of operations.\nextra line"
-            return "Answer: 0"            # wrong everywhere (well, almost)
-        m = FakeModel(reply)
-        res, written = C.run_session(m, self.nb, 1, self.log.append, items=self.items)
-        self.assertTrue(written)
-        self.assertTrue(all(n == "Check the order of operations." for n in written))
-        kept = sum(len(v) for v in self.nb.notes.values())
-        self.assertEqual(kept, len(written))
-        self.assertTrue(os.path.exists(self.nb.path))
-
-    def test_notes_reach_arm_a_never_arm_b(self):
-        self.nb.add("reason", "Multiply before you add.", 0, "x")
-        m = FakeModel(lambda msgs: right_answer(next(
-            it for it in self.items if it["q"] == next(
-                x["content"] for x in msgs if x["role"] == "user"))))
-        C.run_session(m, self.nb, 1, self.log.append, items=self.items[:1])
+    def test_memory_reaches_arm_a_never_arm_b(self):
+        mem = _Mem([C.COG_LABEL + " [Episode] Trainer: Review | AI: Quote the passage."])
+        m = FakeModel(lambda msgs: "Answer: 1")
+        C.run_session(m, mem, 1, self.log.append, items=self.items[:1])
         rec = self.log[0]
-        self.assertNotIn("Multiply", rec["blank"]["prompt"][0]["content"])
-        self.assertIn("Multiply before you add.", rec["notebook"]["prompt"][0]["content"])
-        self.assertEqual(rec["notebook"]["notes"], ["Multiply before you add."])
-        self.assertTrue(rec["blank"]["ok"] and rec["notebook"]["ok"])
+        self.assertNotIn("Quote the passage", rec["blank"]["prompt"][0]["content"])
+        self.assertIn("Quote the passage", rec["memory"]["prompt"][0]["content"])
+        self.assertEqual(rec["memory"]["lines"], [1])
+
+    def test_ends_with_an_essay_kept_word_for_word(self):
+        def reply(msgs):
+            if msgs[0]["content"] == C.ESSAY_SYSTEM:
+                return "The Preacher says all is vanity.\n\nI am unsure what he means."
+            return "Answer: 1"
+        res, essay = C.run_session(FakeModel(reply), _Mem(), 1, self.log.append,
+                                   items=self.items[:2], essay_dir=os.path.join(self.d, "essays"))
+        self.assertIn("vanity", essay)
+        theme, body = C.read_essay(self.d, 1)
+        self.assertEqual(body, essay)
+        self.assertEqual(theme, cog_texts.essay_for(1)[3])
+        self.assertTrue(any(r.get("essay") for r in self.log))
+
+    def test_no_notes_are_written_any_more(self):
+        C.run_session(FakeModel(lambda m: "Answer: 0"), _Mem(), 1, self.log.append,
+                      items=self.items, essay_dir=os.path.join(self.d, "essays"))
+        self.assertFalse(any("note_for" in r for r in self.log))
+        self.assertFalse(os.path.exists(os.path.join(self.d, "notebook.json")))
+
+    def test_say_back_on_a_few_puzzles_and_passages(self):
+        def reply(msgs):
+            last = msgs[-1]["content"]
+            if last == C.BETWEEN_ASK:
+                return "5"
+            if last == C.SAYBACK_ASK:
+                return "I answered 1, because I counted."
+            return "Answer: 1"
+        C.run_session(FakeModel(reply), _Mem(), 1, self.log.append, items=self.items)
+        sb = [r for r in self.log if "sayback" in r]
+        self.assertTrue(0 < len(sb) <= C.SAYBACK_PER_SESSION)
+        self.assertTrue(all(r["family"] in ("reason", "philo") for r in sb))
+        self.assertTrue(all(r["sayback"]["ok"] for r in sb))
+        s = C.summarise(self.log)
+        self.assertEqual(sum(f["say_ok"] for f in s.values()), len(sb))
 
     def test_every_prompt_and_reply_is_logged(self):
         m = FakeModel(lambda msgs: "Answer: 1")
-        C.run_session(m, self.nb, 1, self.log.append, items=self.items)
-        logged = sum(1 for r in self.log for k in ("blank", "notebook", "reflect")
-                     if k in r and "reply" in r[k]) + sum(1 for r in self.log if "note_for" in r)
+        C.run_session(m, _Mem(), 1, self.log.append, items=self.items)
+        logged = sum(1 for r in self.log for k in ("blank", "memory", "reflect")
+                     if k in r and "reply" in r[k])
+        logged += sum(2 for r in self.log if "sayback" in r)     # between + say back
+        logged += sum(1 for r in self.log if r.get("essay") and "reply" in r)
         self.assertEqual(logged, len(m.calls))
 
-    def test_reflection_counts_a_fix(self):
+    def test_check_counts_a_fix(self):
         it = self.items[0]
         def reply(msgs):
             if msgs[-1]["content"] == C.REFLECT_ASK:
                 return right_answer(it)
-            if "You got this question wrong" in msgs[-1]["content"]:
-                return "note"
             return "Answer: -1"
-        C.run_session(FakeModel(reply), self.nb, 1, self.log.append, items=[it])
+        C.run_session(FakeModel(reply), _Mem(), 1, self.log.append, items=[it])
         s = C.summarise(self.log)["reason"]
         self.assertEqual((s["w2r"], s["r2w"]), (1, 0))
-        # fixed by her own check: no note needed
-        self.assertFalse(any("note_for" in r for r in self.log))
 
-    def test_notes_dropped_until_the_prompt_fits(self):
-        for i in range(5):
-            self.nb.add("reason", "x" * 200 + str(i), 0, "x")
-        m = FakeModel(lambda msgs: "Answer: 1", ceiling_chars=700)
-        C.run_session(m, self.nb, 1, self.log.append, items=self.items[:1])
-        self.assertLess(len(self.log[0]["notebook"]["notes"]), 5)
+    def test_memory_lines_dropped_until_the_prompt_fits(self):
+        mem = _Mem(["x" * 300, "y" * 300])
+        m = FakeModel(lambda msgs: "Answer: 1", ceiling_chars=500)
+        C.run_session(m, mem, 1, self.log.append, items=self.items[:1])
+        self.assertLess(len(self.log[0]["memory"]["lines"]), 2)
 
     def test_brake_stops_the_session(self):
         m = FakeModel(lambda msgs: "Answer: 1", stop_after=3)
         with self.assertRaises(C.Stopped):
-            C.run_session(m, self.nb, 1, self.log.append, items=self.items)
+            C.run_session(m, _Mem(), 1, self.log.append, items=self.items)
+
+
+class Reflect(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        C.write_essay(os.path.join(self.d, "essays"), 1, "m", "ecc.vanity", "Ecc 1:2",
+                      "what the Preacher means by vanity", "All is vanity, he says. " * 30)
+        os.makedirs(os.path.join(self.d, "reviews"))
+        with open(os.path.join(self.d, "reviews", "001.txt"), "w") as f:
+            f.write("You stayed close to the passage. Say where you are unsure.\n")
+        self.posted = []
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def post(self, payload, token):
+        self.posted.append((payload, token))
+        return 200, {"stored": 42, "mode": "cog"}
+
+    def model(self, ceiling=100000):
+        return FakeModel(lambda msgs: "I take from it that I should say where I am unsure.",
+                         ceiling_chars=ceiling)
+
+    def test_reflection_goes_to_the_proxy_with_the_token(self):
+        rec = C.reflect(self.model(), self.d, 1, token="t0k", post=self.post)
+        payload, token = self.posted[0]
+        self.assertEqual(token, "t0k")
+        self.assertEqual(payload["review"], "You stayed close to the passage. Say where you are unsure.")
+        self.assertIn("unsure", payload["reflection"])
+        self.assertEqual(payload["topic"], "what the Preacher means by vanity")
+        self.assertEqual(rec["stored"]["body"]["stored"], 42)
+        self.assertTrue(os.path.exists(os.path.join(self.d, "reviews", "001.reflection.json")))
+
+    def test_once_per_essay_unless_again(self):
+        C.reflect(self.model(), self.d, 1, token="t", post=self.post)
+        with self.assertRaises(ValueError):
+            C.reflect(self.model(), self.d, 1, token="t", post=self.post)
+        C.reflect(self.model(), self.d, 1, token="t", post=self.post, again=True)
+        self.assertEqual(len(self.posted), 2)
+
+    def test_a_refusal_is_kept_apart_and_can_be_tried_again(self):
+        with self.assertRaises(RuntimeError):
+            C.reflect(self.model(), self.d, 1, token="t",
+                      post=lambda p, t: (409, {"error": "the brake is on"}))
+        self.assertTrue(os.path.exists(os.path.join(self.d, "reviews", "001.refused.json")))
+        C.reflect(self.model(), self.d, 1, token="t", post=self.post)
+
+    def test_a_long_essay_is_cut_to_fit(self):
+        m = self.model(ceiling=900)
+        C.reflect(m, self.d, 1, token="t", post=self.post)
+        self.assertIn(" ...", m.calls[0][1]["content"])
+        self.assertIn("Say where you are unsure.", m.calls[0][1]["content"])
+
+    def test_no_review_no_reflection(self):
+        os.remove(os.path.join(self.d, "reviews", "001.txt"))
+        with self.assertRaises(OSError):
+            C.reflect(self.model(), self.d, 1, token="t", post=self.post)
+        self.assertEqual(self.posted, [])
 
 
 class OlderBuild(unittest.TestCase):
@@ -216,37 +345,39 @@ class OlderBuild(unittest.TestCase):
         import logic.training as T
         saved = T.LUKE_KEY
         del T.LUKE_KEY
-        d = tempfile.mkdtemp()
         try:
             log = []
-            nb = C.Notebook(os.path.join(d, "nb.json"))
-            C.run_session(FakeModel(lambda m: "Answer: 1"), nb, 1, log.append,
-                          sizes={"reason": 1, "steps": 1, "luke": 2})
+            C.run_session(FakeModel(lambda m: "Answer: 1"), _Mem(), 1, log.append,
+                          sizes={"reason": 1, "steps": 1, "luke": 2, "philo": 1})
             self.assertEqual(log[0]["skipped"], "luke")
-            self.assertEqual({r["family"] for r in log if "notebook" in r}, {"reason", "steps"})
+            self.assertEqual({r["family"] for r in log if "memory" in r},
+                             {"reason", "steps", "philo"})
         finally:
             T.LUKE_KEY = saved
-            shutil.rmtree(d)
 
 
 class Report(unittest.TestCase):
-    def test_report_reads_the_sessions(self):
+    def test_report_reads_sessions_and_essays(self):
         d = tempfile.mkdtemp()
         try:
             os.makedirs(os.path.join(d, "sessions"))
             log = []
-            nb = C.Notebook(os.path.join(d, "notebook.json"))
-            items = C.reason_items(1, 4)
-            C.run_session(FakeModel(lambda m: "Answer: 0"), nb, 1, log.append, items=items)
+            C.run_session(FakeModel(lambda m: "Answer: 0"), _Mem(), 1, log.append,
+                          items=C.reason_items(1, 4), essay_dir=os.path.join(d, "essays"))
             with open(os.path.join(d, "sessions", "001.jsonl"), "w") as f:
                 for r in log:
                     f.write(json.dumps(r) + "\n")
             text = C.report(d)
             self.assertIn("Session 1", text)
             self.assertIn("reason", text)
-            self.assertIn("Her notebook now:", text)
+            self.assertIn("not reviewed", text)
         finally:
             shutil.rmtree(d)
+
+    def test_reads_a_session_of_build_73(self):
+        recs = [{"family": "reason", "notebook": {"ok": True}, "blank": {"ok": False},
+                 "reflect": {"ok": True}}]
+        self.assertEqual(C.summarise(recs)["reason"]["ab"], 1)
 
 
 class TheRealCounter(unittest.TestCase):
@@ -298,7 +429,7 @@ class EndToEnd(unittest.TestCase):
         url = "http://127.0.0.1:%d" % self.srv.server_port
         self.saved = (C.HAILO, C.PROXY, C.ITEMS)
         C.HAILO = C.PROXY = url
-        C.ITEMS = {"reason": 2, "steps": 1, "luke": 1}
+        C.ITEMS = {"reason": 2, "steps": 1, "luke": 1, "philo": 2}
         self.d = tempfile.mkdtemp()
 
     def tearDown(self):
@@ -315,7 +446,8 @@ class EndToEnd(unittest.TestCase):
         import io
         import contextlib
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            return C.main(["--dir", self.d, "--model", "llama3.2:3b"] + list(extra))
+            return C.main(["--dir", self.d, "--model", "llama3.2:3b",
+                           "--memory", os.path.join(self.d, "none.db")] + list(extra))
 
     def test_two_sessions_then_a_third_continues(self):
         self.assertEqual(self._main("--sessions", "2"), 0)
@@ -324,6 +456,8 @@ class EndToEnd(unittest.TestCase):
         self._main()
         self.assertIn("003.jsonl", os.listdir(os.path.join(self.d, "sessions")))
         self.assertTrue(os.path.exists(os.path.join(self.d, "report.txt")))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.d, "essays"))),
+                         ["001.md", "002.md", "003.md"])
 
     def test_will_not_start_during_a_training_run(self):
         self.state["training"] = "running"

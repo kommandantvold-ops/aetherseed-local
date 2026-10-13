@@ -106,8 +106,9 @@ class TestResolveMode(unittest.TestCase):
         # be set aside, all memories should be properly tagged". Until then
         # 'unverified' came back to no request and fiction to a fiction
         # request only; the tag is what stands in their place.
+        # build log 74: and her COG reflections, tagged
         for m in (FACTUAL, FICTION):
-            self.assertEqual(set(visible_modes(m)), {FACTUAL, FICTION, UNVERIFIED})
+            self.assertEqual(set(visible_modes(m)), {FACTUAL, FICTION, UNVERIFIED, "cog"})
 
 
 class TestRetrievalRule(unittest.TestCase):

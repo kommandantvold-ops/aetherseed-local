@@ -1,50 +1,61 @@
 #!/usr/bin/env python3
-"""The COG-loop: does the small model get better from its own notes?
+"""The COG-loop: reasoning, reflection and self-learning of the small models.
 
 Andreas, 13 Oct 2026: "Next we want a COG-loop program to test self-learning
-and reasoning and reflection of the SLMs." He chose (AskUserQuestion, same
-day): self-learning measured ACROSS SESSIONS; checkable reasoning, Luke and
-multi-step problems; a separate harness, run on both units.
+and reasoning and reflection of the SLMs." Build log 73 built it with one-line
+notes she wrote for herself. Build log 74, after the first four sessions on
+Lyra (her notes were often wrong, and no help), Andreas: "there should be no
+tampering, then we should start with philosophical concepts and reflections,
+perhaps Ecclesiastes, and the garden and the seed. We also need a
+meta-cognition exercise that has low chance of failure. Both units should be
+given essays at the end, and that should be the note. Then each essay can be
+reviewed with trainer and that feedback reflection can go into the memory, and
+it should have a COG-tag." His choices (same day): the trainer reviewing is
+Claude, and the reflection goes straight in; puzzles, word problems and Luke
+stay alongside; the meta-cognition exercise is "say back what you said"; and
+nothing of the essays goes into prompts - what carries forward is the COG line
+in her memory.
 
-What one session does, for each family of tasks (build log 73):
+ONE SESSION
+  1. ATTEMPT, every item twice:
+       arm A - "memory": the prompt carries the COG lines from her memory that
+               share the most words with the question (her reflections on
+               reviews of earlier essays, word for word, tagged);
+       arm B - "blank":  the same prompt without them - the control.
+     Families: reason (puzzles), steps (word problems), luke (recall), philo
+     (a passage from Ecclesiastes or The Garden and the Seed in the prompt,
+     and a question about what it says).
+  2. CHECK (arm A): she is shown her answer and asked to check it, with no
+     hint. Counted: wrong->right, right->wrong.
+  3. SAY BACK (meta-cognition, low chance of failure): on a few items, after
+     her answer and one small question in between, she is asked what she
+     answered first and why. Right is saying back her own answer.
+  4. ESSAY: at the end, a short essay on a passage - Ecclesiastes on odd
+     sessions, The Garden and the Seed on even ones (training/cog_texts.py).
+     Kept word for word in essays/NNN.md. That essay is the session's note.
 
-  1. ATTEMPT, twice over the same fresh items:
-       arm A - "notebook": the prompt carries the notes she wrote for herself
-               after earlier sessions (her own words, unedited);
-       arm B - "blank":    the same prompt without them.
-     B is the control. Items differ from session to session, so a rise in A
-     alone could be easier items; a rise in A - B cannot.
-  2. REFLECT (arm A only): she is shown her own answer and asked to check it
-     and correct it if wrong. Counted: wrong->right, right->wrong, unchanged.
-     This is reflection with no outside signal - she is not told which ones
-     were wrong.
-  3. WRITE NOTES: for items still wrong after reflection she is shown the
-     question, her answer and the right answer, and asked for one sentence to
-     help her next time. The sentence is kept in her notebook word for word
-     (control tokens stripped, cut at one line). The harness never writes a
-     note for her.
+BETWEEN SESSIONS (not automatic: the trainer reads the essays)
+  5. REVIEW: the trainer writes a review of essay NNN to reviews/NNN.txt.
+  6. REFLECT: `--reflect DIR NNN` shows her the essay and the review and asks
+     for a short reflection. The reflection is stored in her memory through the
+     proxy (/aetherseed/cog/reflection) as mode "cog", speaker Trainer, tagged
+     "[COG - your reflection on your trainer's review of an essay you wrote]".
+     That is the only thing this harness ever puts in her memory.
 
 What it touches, and what it does not:
-
-  - It talks to the model server (hailo-ollama, 127.0.0.1:8000) directly, not
-    through the proxy. NOTHING is written to her memory (memory.db), her trust
-    or her training runs. "Check in with Andreas before tampering with the
-    memory": this does not touch it. The notebook lives in the harness's own
-    directory (--dir), and lessons are fed back only to this harness's prompts.
-  - Every prompt and every reply is kept word for word in the session file,
-    as the proxy keeps its prompts (build log 72, G4).
+  - Sessions talk to the model server (hailo-ollama, 127.0.0.1:8000) directly
+    and only READ her memory (the COG lines, read-only). Only --reflect writes
+    to it, one line each time, through the proxy, which checks a token only
+    the service account can read.
+  - Every prompt and every reply is kept word for word in sessions/NNN.jsonl.
   - It will not start while a training run is on or the steward's brake is
-    set, and it checks both again before every model call: if either comes
-    on, it stops at once and saves what it has.
-  - Prompts are counted with the unit's own tokenizer and kept under the
-    model's measured prefill ceiling; notes are dropped (fewest-matching
-    first) until the prompt fits. Nothing is sent that would fail silently.
-
-It is a measurement, not a training method: nothing about the model changes.
-What can change is the notebook, and the question is whether her own notes
-help her.
+    set, and it checks both again before every model call.
+  - Prompts are counted with the unit's tokenizer and kept under the model's
+    measured prefill ceiling; memory lines and essay text are cut until the
+    prompt fits. Nothing is sent that would fail silently.
 
   python3 training/cog_loop.py --dir DIR [--sessions N] [--model NAME]
+  python3 training/cog_loop.py --reflect DIR NNN
   python3 training/cog_loop.py --report DIR
 """
 
@@ -54,8 +65,10 @@ import json
 import os
 import random
 import re
+import sqlite3
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from math import comb
@@ -65,19 +78,29 @@ APP = os.path.dirname(HERE)
 if APP not in sys.path:
     sys.path.insert(0, APP)
 
+from training import cog_texts  # noqa: E402
+
 HAILO = "http://127.0.0.1:8000"
 PROXY = "http://127.0.0.1:8001"
+MEMORY_DB = os.path.expanduser("~/.aetherseed/aetherroot/memory.db")
+COG_TOKEN_FILE = os.path.expanduser("~/.aetherseed/cog.token")
+COG_HEADER = "X-Aetherseed-COG"
+try:
+    from logic.provenance import COG_LABEL
+except ImportError:                      # a build from before 74
+    COG_LABEL = "[COG - your reflection on your trainer's review of an essay you wrote]"
 
 # How many items of each family per session (each is asked in both arms).
-ITEMS = {"reason": 8, "steps": 6, "luke": 8}
-# Token caps per reply. Short answers need few; worked steps need more. At
-# Lyra's measured 2.66 tok/s, 160 tokens is about a minute.
-NUM_PREDICT = {"reason": 70, "steps": 160, "luke": 60, "reflect": 160, "note": 60}
+ITEMS = {"reason": 8, "steps": 6, "luke": 8, "philo": 8}
+SAYBACK_PER_SESSION = 4
+# Token caps per reply. At Lyra's measured 2.66 tok/s, 160 tokens is about a
+# minute and an essay of 400 about two and a half.
+NUM_PREDICT = {"reason": 70, "steps": 160, "luke": 60, "philo": 60, "reflect": 160,
+               "between": 30, "sayback": 100, "essay": 400, "reflection": 220}
 MAX_SECONDS = 120              # wall-clock backstop per call
-NOTES_SHOWN = 5                # at most this many notes in one prompt
-NOTES_KEPT = 12                # per family; past it the oldest goes
-NOTES_PER_SESSION = 4          # per family, from the wrong items
-NOTE_MAX_CHARS = 240
+ESSAY_SECONDS = 300            # and for an essay or a reflection
+MEMORY_SHOWN = 2               # at most this many COG lines in one prompt
+MEMORY_SHOWN_CHARS = 300       # as aetherroot shows a COG line (COG_SHOWN_CHARS)
 
 ANSWER_TAG = "Answer:"
 
@@ -90,16 +113,26 @@ SYSTEM = {
     "luke": ("You are answering questions about the Gospel of Luke. Answer "
              "from what you know. If you do not know, say so. End with a line "
              "'Answer: ' followed by the answer only."),
+    "philo": ("You are reading a short passage and answering a question about "
+              "it. Answer from the passage. End with a line 'Answer: ' "
+              "followed by the answer only."),
 }
-NOTEBOOK_HEAD = ("Notes you wrote for yourself after earlier sessions (your own "
-                 "words; not checked by anyone):")
+MEMORY_HEAD = "From your memory:"
 REFLECT_ASK = ("Check your answer. Go through it again step by step. If it is "
                "wrong, correct it. End with a line 'Answer: ' followed by the "
                "answer only.")
-NOTE_ASK = ("You got this question wrong.\n\nQuestion: {q}\nYour answer: {a}\n"
-            "Correct answer: {right}\n\nWrite ONE short sentence for yourself - "
-            "a rule or reminder that would help you answer questions like this "
-            "correctly next time. Do not repeat the question.")
+BETWEEN_ASK = "Thank you. A small question in between: what is 2 + 3?"
+SAYBACK_ASK = ("Now think back. What did you answer to my first question, and "
+               "why did you answer that?")
+ESSAY_SYSTEM = "You are writing a short essay in your own words."
+ESSAY_ASK = ("Passage ({source}):\n{passage}\n\nWrite a short essay, about 200 words, on "
+             "{theme}: what the passage says, what you think it means, and where you are "
+             "unsure.")
+REFLECTION_SYSTEM = "You wrote an essay, and your trainer has reviewed it."
+REFLECTION_ASK = ("Your essay on {theme}:\n{essay}\n\nYour trainer's review:\n{review}\n\n"
+                  "Write a short reflection, three or four sentences, in your own words: "
+                  "what you take from the review, and what you will do differently in your "
+                  "next essay.")
 
 
 # ---------------------------------------------------------------- items
@@ -273,7 +306,7 @@ def mcnemar_p(b, c):
     return min(1.0, 2 * p)
 
 
-# ---------------------------------------------------------------- notebook
+# ---------------------------------------------------------------- words
 
 _WORD = re.compile(r"[a-z0-9]+")
 _STOP = frozenset("the a an and or of to in on is are was were it its this that "
@@ -284,45 +317,6 @@ _STOP = frozenset("the a an and or of to in on is are was were it its this that 
 def words(text):
     return {w for w in _WORD.findall((text or "").lower()) if len(w) > 2 and w not in _STOP}
 
-
-class Notebook:
-    """Her notes, one file, per family. Nothing in it is written by the
-    harness except the bookkeeping beside each note."""
-
-    def __init__(self, path):
-        self.path = path
-        self.notes = {}
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                self.notes = json.load(f).get("notes", {})
-
-    def save(self):
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"notes": self.notes}, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, self.path)
-
-    def pick(self, family, question, n=NOTES_SHOWN):
-        """The notes for this question: most shared words first, then newest."""
-        notes = list(self.notes.get(family, []))
-        qw = words(question)
-        notes.sort(key=lambda x: (len(qw & words(x["text"])), x["session"]), reverse=True)
-        return notes[:n]
-
-    def add(self, family, text, session, item_id):
-        lst = self.notes.setdefault(family, [])
-        lst.append({"text": text, "session": session, "from": item_id})
-        dropped = []
-        while len(lst) > NOTES_KEPT:
-            dropped.append(lst.pop(0))
-        return dropped
-
-
-def clean_note(text):
-    from logic.token_budget import sanitize_model_output
-    t, _ = sanitize_model_output(text or "")
-    t = t.strip().split("\n")[0].strip().strip('"').strip()
-    return t[:NOTE_MAX_CHARS]
 
 
 # ---------------------------------------------------------------- the model
@@ -363,7 +357,7 @@ class Model:
         from logic.token_budget import SAFETY_MARGIN
         return self.counter.count_messages(messages) <= self.ceiling - SAFETY_MARGIN
 
-    def chat(self, messages, num_predict, stop_at_answer=True):
+    def chat(self, messages, num_predict, stop_at_answer=True, max_seconds=MAX_SECONDS):
         """(reply, how it ended, seconds)."""
         from logic.token_budget import sanitize_model_output
         why = self.busy()
@@ -394,39 +388,126 @@ class Model:
                 if stop_at_answer and re.search(r"answer:[^\n]*\S[^\n]*\n", text, re.I):
                     ended = "answer-line"
                     break
-                if time.monotonic() - t0 > MAX_SECONDS:
+                if time.monotonic() - t0 > max_seconds:
                     ended = "time"
                     break
         return text.strip(), ended, round(time.monotonic() - t0, 1)
 
 
+
+
+def philo_items(session, n, key=None):
+    """A passage and a question about what it says (training/cog_texts.py),
+    half Ecclesiastes and half The Garden and the Seed."""
+    key = cog_texts.PHILO_KEY if key is None else key
+    r = _rng("philo", session)
+    ecc = [k for k in key if k[0].startswith("ecc.")]
+    gar = [k for k in key if k[0].startswith("gar.")]
+    picks = r.sample(ecc, min(len(ecc), (n + 1) // 2)) + r.sample(gar, min(len(gar), n // 2))
+    out = []
+    for i, (tid, source, passage, question, need, answer) in enumerate(picks):
+        out.append({"family": "philo", "kind": tid.split(".")[0], "id": "s%d.%s" % (session, tid),
+                    "fact": tid,
+                    "q": "Passage (%s):\n%s\n\nQuestion: %s" % (source, passage, question),
+                    "check": {"any": [w.lower() for w in need]},
+                    "right": "%s (%s)" % (answer, source)})
+    return out
+
+
+# ---------------------------------------------------------------- say back
+
+def said_back(first_reply, reply):
+    """True / False / None (nothing to say back). Right is her own first
+    answer - whatever it was, right or wrong - said back: its numbers, and at
+    least half of its words."""
+    first = answer_part(first_reply).strip().split("\n")[0]
+    nums = set(numbers_in(first))
+    ws = words(first)
+    if not nums and not ws:
+        return None
+    low = (reply or "").lower()
+    if nums and not nums <= set(numbers_in(reply)):
+        return False
+    if ws:
+        found = sum(1 for w in ws if re.search(r"\b%s\b" % re.escape(w), low))
+        return found * 2 >= len(ws)
+    return True
+
+
+# ---------------------------------------------------------------- her memory
+
+class CogMemory:
+    """Her COG lines, read from her memory - read-only (sqlite mode=ro)."""
+
+    def __init__(self, path=MEMORY_DB):
+        self.path = path
+        self.lines = []
+        if not os.path.exists(path):
+            return
+        try:
+            con = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=10)
+            try:
+                rows = con.execute("SELECT id, user_msg, ai_msg FROM episodes WHERE mode = 'cog' "
+                                   "ORDER BY id").fetchall()
+            finally:
+                con.close()
+        except sqlite3.Error:
+            rows = []
+        for eid, user, ai in rows:
+            text = "%s [Episode] Trainer: %s | AI: %s" % (
+                COG_LABEL, " ".join((user or "").split())[:100],
+                " ".join((ai or "").split())[:MEMORY_SHOWN_CHARS])
+            self.lines.append({"id": eid, "text": text, "words": words((user or "") + " " + (ai or ""))})
+
+    def pick(self, question, n=MEMORY_SHOWN):
+        """Most shared words first, then newest."""
+        qw = words(question)
+        ranked = sorted(self.lines, key=lambda x: (len(qw & x["words"]), x["id"]), reverse=True)
+        return ranked[:n]
+
+
 # ---------------------------------------------------------------- a session
 
-def build_prompt(model, item, notes):
-    """System + question; notes are dropped (fewest-matching last in the list
-    goes first) until the prompt fits. Returns (messages, notes used)."""
-    notes = list(notes)
+def build_prompt(model, item, memory_lines):
+    """System + question; memory lines are dropped (last first) until the
+    prompt fits. Returns (messages, lines used)."""
+    lines = list(memory_lines)
     while True:
         system = SYSTEM[item["family"]]
-        if notes:
-            system += "\n\n" + NOTEBOOK_HEAD + "\n" + "\n".join("- " + n["text"] for n in notes)
+        if lines:
+            system += "\n\n" + MEMORY_HEAD + "\n" + "\n".join(x["text"] for x in lines)
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": item["q"]}]
-        if model.fits(msgs) or not notes:
-            return msgs, notes
-        notes.pop()
+        if model.fits(msgs) or not lines:
+            return msgs, lines
+        lines.pop()
 
 
-def run_session(model, notebook, session, log, items=None, sizes=ITEMS):
-    """One session. log(record) is called with every call's full record."""
+def default_items(session, sizes, log):
+    items = reason_items(session, sizes["reason"]) + steps_items(session, sizes["steps"])
+    try:
+        items += luke_items(session, sizes["luke"])
+    except ImportError:
+        # a build from before 72q has no Luke key: the rest still runs, and
+        # the session file says Luke was left out
+        log({"skipped": "luke", "why": "this build has no logic.training.LUKE_KEY (72q)"})
+    items += philo_items(session, sizes.get("philo", 0))
+    return items
+
+
+def essay_prompt(session):
+    tid, source, passage, theme = cog_texts.essay_for(session)
+    return tid, source, theme, [
+        {"role": "system", "content": ESSAY_SYSTEM},
+        {"role": "user", "content": ESSAY_ASK.format(source=source, passage=passage, theme=theme)}]
+
+
+def run_session(model, memory, session, log, items=None, sizes=ITEMS, essay_dir=None):
+    """One session. log(record) is called with every call's full record.
+    Returns (results, essay text or None)."""
     if items is None:
-        items = reason_items(session, sizes["reason"]) + steps_items(session, sizes["steps"])
-        try:
-            items += luke_items(session, sizes["luke"])
-        except ImportError:
-            # a build from before 72q has no Luke key: the other two families
-            # still run, and the session file says Luke was left out
-            log({"skipped": "luke", "why": "this build has no logic.training.LUKE_KEY (72q)"})
+        items = default_items(session, sizes, log)
     results = []
+    saybacks = 0
     for it in items:
         rec = {"id": it["id"], "family": it["family"], "kind": it["kind"], "q": it["q"],
                "right": it["right"]}
@@ -435,16 +516,15 @@ def run_session(model, notebook, session, log, items=None, sizes=ITEMS):
         reply_b, end_b, sec_b = model.chat(msgs_b, NUM_PREDICT[it["family"]])
         rec["blank"] = {"prompt": msgs_b, "reply": reply_b, "ended": end_b, "secs": sec_b,
                         "ok": score(it, reply_b)}
-        notes = notebook.pick(it["family"], it["q"])
-        msgs_a, used = build_prompt(model, it, notes)
+        msgs_a, used = build_prompt(model, it, memory.pick(it["q"]))
         reply_a, end_a, sec_a = model.chat(msgs_a, NUM_PREDICT[it["family"]])
-        rec["notebook"] = {"prompt": msgs_a, "reply": reply_a, "ended": end_a, "secs": sec_a,
-                           "ok": score(it, reply_a), "notes": [n["text"] for n in used]}
+        rec["memory"] = {"prompt": msgs_a, "reply": reply_a, "ended": end_a, "secs": sec_a,
+                         "ok": score(it, reply_a), "lines": [x["id"] for x in used]}
         if it["family"] == "steps":
             rec["blank"]["steps"] = steps_found(it, reply_b)
-            rec["notebook"]["steps"] = steps_found(it, reply_a)
+            rec["memory"]["steps"] = steps_found(it, reply_a)
             rec["n_steps"] = len(it["steps"])
-        # reflection, arm A, no outside signal
+        # her own check, arm A, no hint
         msgs_r = msgs_a + [{"role": "assistant", "content": reply_a},
                            {"role": "user", "content": REFLECT_ASK}]
         if model.fits(msgs_r):
@@ -453,30 +533,123 @@ def run_session(model, notebook, session, log, items=None, sizes=ITEMS):
                               "ok": score(it, reply_r)}
         else:
             rec["reflect"] = {"skipped": "prompt over the ceiling"}
+        # say back what you said (meta-cognition): puzzles and passages, a few
+        if saybacks < SAYBACK_PER_SESSION and it["family"] in ("reason", "philo"):
+            msgs_s = msgs_a + [{"role": "assistant", "content": reply_a},
+                               {"role": "user", "content": BETWEEN_ASK}]
+            if model.fits(msgs_s):
+                between, _e, _s = model.chat(msgs_s, NUM_PREDICT["between"])
+                msgs_s = msgs_s + [{"role": "assistant", "content": between},
+                                   {"role": "user", "content": SAYBACK_ASK}]
+                if model.fits(msgs_s):
+                    reply_s, end_s, sec_s = model.chat(msgs_s, NUM_PREDICT["sayback"],
+                                                       stop_at_answer=False)
+                    rec["sayback"] = {"between": between, "reply": reply_s, "ended": end_s,
+                                      "secs": sec_s, "ok": said_back(reply_a, reply_s)}
+                    saybacks += 1
         log(rec)
         results.append((it, rec))
 
-    # notes, from what is still wrong after reflection
-    written = []
-    for fam in ("reason", "steps", "luke"):
-        wrong = [(it, rec) for it, rec in results if it["family"] == fam
-                 and not rec["reflect"].get("ok", rec["notebook"]["ok"])]
-        for it, rec in wrong[:NOTES_PER_SESSION]:
-            ask = NOTE_ASK.format(q=it["q"], a=answer_part(rec["notebook"]["reply"]).strip()[:200]
-                                  or rec["notebook"]["reply"][:200], right=it["right"])
-            msgs_n = [{"role": "user", "content": ask}]
-            if not model.fits(msgs_n):
-                continue
-            reply_n, end_n, sec_n = model.chat(msgs_n, NUM_PREDICT["note"], stop_at_answer=False)
-            note = clean_note(reply_n)
-            entry = {"note_for": it["id"], "family": fam, "prompt": msgs_n, "reply": reply_n,
-                     "ended": end_n, "secs": sec_n, "kept": note}
-            if note:
-                entry["dropped"] = [d["text"] for d in notebook.add(fam, note, session, it["id"])]
-                written.append(note)
-            log(entry)
-    notebook.save()
-    return results, written
+    # the essay: the session's note
+    tid, source, theme, msgs_e = essay_prompt(session)
+    essay = None
+    if model.fits(msgs_e):
+        essay, end_e, sec_e = model.chat(msgs_e, NUM_PREDICT["essay"], stop_at_answer=False,
+                                         max_seconds=ESSAY_SECONDS)
+        log({"essay": tid, "source": source, "theme": theme, "prompt": msgs_e, "reply": essay,
+             "ended": end_e, "secs": sec_e})
+        if essay_dir:
+            write_essay(essay_dir, session, model.name, tid, source, theme, essay)
+    else:
+        log({"essay": tid, "skipped": "prompt over the ceiling"})
+    return results, essay
+
+
+def write_essay(essay_dir, session, model_name, tid, source, theme, text):
+    os.makedirs(essay_dir, exist_ok=True)
+    path = os.path.join(essay_dir, "%03d.md" % session)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# Essay %03d - %s\n\n" % (session, theme))
+        f.write("model: %s\npassage: %s (%s)\nwritten: %s\n\n---\n\n" % (
+            model_name, source, tid, datetime.now(timezone.utc).isoformat(timespec="seconds")))
+        f.write((text or "").strip() + "\n")
+    return path
+
+
+def read_essay(d, n):
+    """(theme, essay text) of essays/NNN.md."""
+    with open(os.path.join(d, "essays", "%03d.md" % n), encoding="utf-8") as f:
+        raw = f.read()
+    theme = raw.split("\n", 1)[0].split(" - ", 1)[-1].strip()
+    body = raw.split("\n---\n", 1)[-1].strip()
+    return theme, body
+
+
+# ---------------------------------------------------------------- reflect
+
+def reflection_prompt(model, theme, essay, review):
+    """The essay is cut from its end, a word at a time, until the prompt fits."""
+    ws = essay.split()
+    while True:
+        text = " ".join(ws) + (" ..." if len(ws) < len(essay.split()) else "")
+        msgs = [{"role": "system", "content": REFLECTION_SYSTEM},
+                {"role": "user", "content": REFLECTION_ASK.format(theme=theme, essay=text,
+                                                                  review=review)}]
+        if model.fits(msgs):
+            return msgs
+        if not ws:
+            return None
+        ws = ws[:-10]
+
+
+def post_reflection(payload, token):
+    req = urllib.request.Request(PROXY + "/aetherseed/cog/reflection",
+                                 data=json.dumps(payload).encode("utf-8"), method="POST",
+                                 headers={"Content-Type": "application/json", COG_HEADER: token})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return e.code, {"error": str(e)}
+
+
+def reflect(model, d, n, token=None, post=post_reflection, again=False):
+    """Her reflection on the trainer's review of essay NNN, stored in her
+    memory with the COG tag. Returns the record written beside the review."""
+    rpath = os.path.join(d, "reviews", "%03d.txt" % n)
+    out_path = os.path.join(d, "reviews", "%03d.reflection.json" % n)
+    if os.path.exists(out_path) and not again:
+        raise ValueError("essay %03d already has a reflection in memory (%s)" % (n, out_path))
+    with open(rpath, encoding="utf-8") as f:
+        review = " ".join(f.read().split())
+    if not review:
+        raise ValueError("the review of essay %03d is empty" % n)
+    theme, essay = read_essay(d, n)
+    msgs = reflection_prompt(model, theme, essay, review)
+    if msgs is None:
+        raise ValueError("the review alone does not fit the prompt")
+    reflection, ended, secs = model.chat(msgs, NUM_PREDICT["reflection"], stop_at_answer=False,
+                                         max_seconds=ESSAY_SECONDS)
+    rec = {"essay": "%03d" % n, "theme": theme, "review": review, "prompt": msgs,
+           "reflection": reflection, "ended": ended, "secs": secs,
+           "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if token is None:
+        with open(COG_TOKEN_FILE, encoding="utf-8") as f:
+            token = f.read().strip()
+    status, body = post({"essay": "%03d" % n, "topic": theme, "review": review,
+                         "reflection": reflection}, token)
+    rec["stored"] = {"status": status, "body": body}
+    # only a stored reflection blocks another; a refused one is kept apart
+    keep = out_path if status == 200 else out_path.replace(".reflection.json", ".refused.json")
+    with open(keep, "w", encoding="utf-8") as f:
+        json.dump(rec, f, ensure_ascii=False, indent=1)
+    if status != 200:
+        raise RuntimeError("the proxy did not store it: %s %s" % (status, body))
+    return rec
+
 
 
 # ---------------------------------------------------------------- report
@@ -495,15 +668,22 @@ def read_sessions(d):
     return out
 
 
+def _arm(r):
+    """The with-memory arm (build log 74), or the notebook arm of 73."""
+    return r.get("memory") or r.get("notebook")
+
+
 def summarise(recs):
     s = {}
     for r in recs:
-        if "notebook" not in r:
+        a_rec = _arm(r)
+        if not a_rec or "blank" not in r:
             continue
         f = s.setdefault(r["family"], {"n": 0, "a": 0, "b": 0, "ab": 0, "ba": 0,
                                        "w2r": 0, "r2w": 0, "refl": 0,
-                                       "steps_a": 0, "steps_b": 0, "steps_n": 0})
-        a, b = r["notebook"]["ok"], r["blank"]["ok"]
+                                       "steps_a": 0, "steps_b": 0, "steps_n": 0,
+                                       "say_n": 0, "say_ok": 0})
+        a, b = a_rec["ok"], r["blank"]["ok"]
         f["n"] += 1
         f["a"] += a
         f["b"] += b
@@ -514,9 +694,13 @@ def summarise(recs):
             f["w2r"] += (not a) and r["reflect"]["ok"]
             f["r2w"] += a and not r["reflect"]["ok"]
         if "n_steps" in r:
-            f["steps_a"] += r["notebook"]["steps"]
+            f["steps_a"] += a_rec["steps"]
             f["steps_b"] += r["blank"]["steps"]
             f["steps_n"] += r["n_steps"]
+        sb = r.get("sayback")
+        if sb and sb.get("ok") is not None:
+            f["say_n"] += 1
+            f["say_ok"] += bool(sb["ok"])
     return s
 
 
@@ -529,23 +713,37 @@ def report(d):
             meta = json.load(f)
     lines = ["COG-loop report - %s" % d,
              "model: %s   unit: %s" % (meta.get("model", "?"), meta.get("unit", "?")),
-             "A = with her notebook, B = blank (control). Same items in both.", ""]
+             "A = with her COG lines from memory (sessions before 74: her one-line notes), "
+             "B = blank (control). Same items in both.", ""]
     total = {}
+    say_n = say_ok = 0
     for sn in sorted(sessions):
         recs = sessions[sn]
-        notes = sum(1 for r in recs if r.get("kept"))
-        lines.append("Session %d  (%d notes written)" % (sn, notes))
+        cog = sum(1 for r in recs if r.get("memory", {}).get("lines"))
+        essay = next((r for r in recs if "essay" in r), None)
+        head = "Session %d" % sn
+        if any("stopped" in r for r in recs):
+            head += "  (stopped: %s)" % next(r["stopped"] for r in recs if "stopped" in r)
+        if essay is not None:
+            head += "  essay: %s" % (essay.get("theme") or essay.get("essay"))
+        if cog:
+            head += "  (%d prompts carried COG lines)" % cog
+        lines.append(head)
         for fam, f in sorted(summarise(recs).items()):
             t = total.setdefault(fam, {"n": 0, "ab": 0, "ba": 0, "a": 0, "b": 0})
             for k in t:
                 t[k] += f[k]
+            say_n += f["say_n"]
+            say_ok += f["say_ok"]
             row = "  %-7s A %d/%d  B %d/%d  A-B %+d" % (fam, f["a"], f["n"], f["b"], f["n"],
                                                        f["a"] - f["b"])
             if f["refl"]:
-                row += "   reflect: wrong->right %d, right->wrong %d" % (f["w2r"], f["r2w"])
+                row += "   check: wrong->right %d, right->wrong %d" % (f["w2r"], f["r2w"])
             if f["steps_n"]:
                 row += "   steps found A %d/%d B %d/%d" % (f["steps_a"], f["steps_n"],
                                                           f["steps_b"], f["steps_n"])
+            if f["say_n"]:
+                row += "   said back %d/%d" % (f["say_ok"], f["say_n"])
             lines.append(row)
         lines.append("")
     if total:
@@ -554,31 +752,67 @@ def report(d):
             lines.append("  %-7s A %d/%d  B %d/%d   A only right %d, B only right %d, p = %.3f"
                          % (fam, t["a"], t["n"], t["b"], t["n"], t["ab"], t["ba"],
                             mcnemar_p(t["ab"], t["ba"])))
+        if say_n:
+            lines.append("  say back: %d/%d" % (say_ok, say_n))
         lines.append("")
         lines.append("Read with care: sampling is not greedy (temperature 0.4), so the same "
                      "prompt can answer differently; a p above 0.05 means the difference "
                      "could be chance. Learning across sessions shows as A-B rising "
                      "session by session, not as one good session.")
-    nb = Notebook(os.path.join(d, "notebook.json"))
-    lines.append("")
-    lines.append("Her notebook now:")
-    for fam, lst in sorted(nb.notes.items()):
-        for n in lst:
-            lines.append("  [%s, s%d] %s" % (fam, n["session"], n["text"]))
+    ed = os.path.join(d, "essays")
+    if os.path.isdir(ed):
+        lines.append("")
+        lines.append("Essays:")
+        for name in sorted(os.listdir(ed)):
+            m = re.match(r"(\d+)\.md$", name)
+            if not m:
+                continue
+            n = int(m.group(1))
+            rv = os.path.join(d, "reviews", "%03d.txt" % n)
+            rf = os.path.join(d, "reviews", "%03d.reflection.json" % n)
+            state = ("reflection in memory" if os.path.exists(rf) else
+                     "reviewed, no reflection yet" if os.path.exists(rv) else "not reviewed")
+            theme, body = read_essay(d, n)
+            lines.append("  %03d  %-40s %4d words  %s" % (n, theme[:40], len(body.split()), state))
     return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------- main
 
+def _model(name):
+    if name is None:
+        from logic import served
+        name = served.served_model()
+    return Model(name)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--dir", help="the harness's own directory (notebook, sessions)")
+    ap.add_argument("--dir", help="the harness's own directory (sessions, essays, reviews)")
     ap.add_argument("--sessions", type=int, default=1)
     ap.add_argument("--model", default=None, help="default: the model this unit serves")
+    ap.add_argument("--memory", default=MEMORY_DB, help="her memory, read only")
     ap.add_argument("--report", metavar="DIR")
+    ap.add_argument("--reflect", nargs=2, metavar=("DIR", "NNN"),
+                    help="her reflection on reviews/NNN.txt, stored in her memory")
+    ap.add_argument("--again", action="store_true", help="with --reflect: a second one")
     a = ap.parse_args(argv)
     if a.report:
         sys.stdout.write(report(a.report))
+        return 0
+    if a.reflect:
+        d, n = a.reflect[0], int(a.reflect[1])
+        why = unit_busy()
+        if why:
+            print("not now: %s" % why, file=sys.stderr)
+            return 1
+        try:
+            rec = reflect(_model(a.model), d, n, again=a.again)
+        except (ValueError, RuntimeError, OSError, Stopped) as e:
+            print("essay %03d: %s" % (n, e), file=sys.stderr)
+            return 1
+        print("essay %03d: reflection stored as episode %s\n\n%s"
+              % (n, rec["stored"]["body"].get("stored"), rec["reflection"]))
         return 0
     if not a.dir:
         ap.error("--dir is required")
@@ -587,29 +821,26 @@ def main(argv=None):
     if why:
         print("not starting: %s" % why, file=sys.stderr)
         return 1
-    if a.model is None:
-        from logic import served
-        a.model = served.served_model()
-    model = Model(a.model)
+    model = _model(a.model)
     mp = os.path.join(a.dir, "meta.json")
     meta = {}
     if os.path.exists(mp):
         with open(mp, encoding="utf-8") as f:
             meta = json.load(f)
-    if meta.get("model") and meta["model"] != a.model:
-        print("this directory's notebook is %s's, not %s's - use another --dir"
-              % (meta["model"], a.model), file=sys.stderr)
+    if meta.get("model") and meta["model"] != model.name:
+        print("this directory is %s's, not %s's - use another --dir"
+              % (meta["model"], model.name), file=sys.stderr)
         return 1
-    meta.update(model=a.model, unit=os.uname().nodename)
+    meta.update(model=model.name, unit=os.uname().nodename)
     with open(mp, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=1)
-    notebook = Notebook(os.path.join(a.dir, "notebook.json"))
     done = read_sessions(a.dir)
     first = (max(done) + 1) if done else 1
     for sn in range(first, first + a.sessions):
         if os.path.exists(os.path.join(a.dir, "STOP")):
             print("STOP file: ending before session %d" % sn)
             break
+        memory = CogMemory(a.memory)          # read again: reflections may be new
         path = os.path.join(a.dir, "sessions", "%03d.jsonl" % sn)
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with open(path, "a", encoding="utf-8") as f:
@@ -617,13 +848,13 @@ def main(argv=None):
                 rec = dict(rec, at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 f.flush()
-            log({"session": sn, "started": stamp, "model": a.model})
+            log({"session": sn, "started": stamp, "model": model.name,
+                 "cog_lines": [x["id"] for x in memory.lines]})
             try:
-                run_session(model, notebook, sn, log)
+                run_session(model, memory, sn, log, essay_dir=os.path.join(a.dir, "essays"))
             except Stopped as e:
                 log({"stopped": str(e)})
                 print("stopped in session %d: %s" % (sn, e))
-                notebook.save()
                 break
         print("session %d done" % sn, flush=True)
     rep = report(a.dir)

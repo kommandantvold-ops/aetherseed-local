@@ -81,7 +81,7 @@ from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 marker_prefix_len, strip_bare_tags, opening_hold, unwrap_corrections,
                                 PromptTooLarge, TokenizerUnavailable)
 from logic.provenance import (detect_mode, resolve_mode, is_record_question,
-                             summarise_record, FICTION, UNVERIFIED, TAG_NOTE)
+                             summarise_record, FICTION, UNVERIFIED, TAG_NOTE, COG)
 
 # One tokenizer per served model for the process. Loading one costs ~17MB and
 # a moment, so each is built once, lazily, and reused. Which model a request
@@ -382,6 +382,64 @@ _TRAINING_LOCK = threading.Lock()
 # The newest turn in her memory before the question in hand was asked: only a
 # turn after it can be the one the check's verdict belongs to.
 _TRAINING_FLOOR = {"id": 0}
+
+
+# ---- THE COG-LOOP'S REFLECTIONS (build log 74; training/cog_loop.py) -------
+# Andreas, 13 Oct 2026: "each essay can be reviewed with trainer and that
+# feedback reflection can go into the memory, and it should have a COG-tag."
+# The harness runs outside this process, as the service account; what it may
+# put in her memory is exactly one kind of line - her reflection on a trainer's
+# review of an essay of hers, stored as mode "cog", speaker Trainer, waiting for
+# no ring. It proves itself with a token this process writes at each start to a
+# file only the service account can read; nothing else can store through here.
+COG_TOKEN_FILE = os.path.expanduser("~/.aetherseed/cog.token")
+COG_HEADER = "X-Aetherseed-COG"
+COG_LOG = os.path.expanduser("~/.aetherseed/cog.log")
+COG_REVIEW_MAX = 1200
+COG_REFLECTION_MAX = 1500
+_COG_TOKEN = secrets.token_hex(24)
+
+
+def _write_cog_token():
+    os.makedirs(os.path.dirname(COG_TOKEN_FILE), exist_ok=True)
+    tmp = COG_TOKEN_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(_COG_TOKEN)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, COG_TOKEN_FILE)
+
+
+def store_cog_reflection(req, token):
+    """(status, body). Stores one COG reflection in her memory."""
+    if not isinstance(token, str) or not hmac.compare_digest(token, _COG_TOKEN):
+        return 403, {"error": "not the COG-loop", "code": "token"}
+    if BRAKE.is_set():
+        return 409, {"error": "the brake is on: nothing is stored", "code": "brake"}
+    if not isinstance(req, dict):
+        return 400, {"error": "a JSON object", "code": "body"}
+    review = " ".join(str(req.get("review") or "").split())
+    reflection = str(req.get("reflection") or "").strip()
+    topic = " ".join(str(req.get("topic") or "").split())[:80]
+    essay = " ".join(str(req.get("essay") or "").split())[:40]
+    if not review or not reflection:
+        return 400, {"error": "a review and a reflection", "code": "empty"}
+    if len(review) > COG_REVIEW_MAX or len(reflection) > COG_REFLECTION_MAX:
+        return 400, {"error": "too long", "code": "length"}
+    reflection, _n = sanitize_model_output(reflection)
+    user_msg = ("Review of your essay%s: %s" % ((" on " + topic) if topic else "", review))
+    ep = root.store_interaction(user_msg, reflection, resonance=0.5, mode=COG,
+                                speaker=TRAINER, rings=False)
+    try:
+        with open(COG_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                "episode": ep, "essay": essay, "topic": topic,
+                                "review": review, "reflection": reflection},
+                               ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"[cog] the log could not be written: {e!r}", flush=True)
+    print(f"[cog] reflection on essay {essay or '?'} stored as episode {ep}", flush=True)
+    return 200, {"stored": ep, "mode": COG}
 
 
 class _Gated:
@@ -2575,6 +2633,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(out)
             return
 
+        if self.path == "/aetherseed/cog/reflection":
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = None
+            status, out = store_cog_reflection(req, self.headers.get(COG_HEADER))
+            self._send_json(out, status=status)
+            return
+
         if self.path == "/aetherseed/brake":
             # The steward's brake (build log 72): {"action": "on"|"off", "reason"}.
             try:
@@ -2783,6 +2850,11 @@ def main():
             own_shelf.read_in_background(entry, done=_shelf_read)
     except Exception as e:
         print(f"[shelf] could not look at the shelf: {e!r}", flush=True)
+
+    try:
+        _write_cog_token()
+    except OSError as e:
+        print(f"[cog] the COG-loop's token could not be written: {e!r}", flush=True)
 
     server = ThreadedHTTPServer((PROXY_BIND, PROXY_PORT), ProxyHandler)
     try:
