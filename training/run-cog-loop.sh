@@ -1,13 +1,13 @@
 #!/bin/bash
-# The COG-loop (training/cog_loop.py, build log 73).
+# The COG-loop (training/cog_loop.py, build logs 73 and 74).
 #
 #   sudo bash /opt/aetherseed/training/run-cog-loop.sh [SESSIONS]
 #
-# SESSIONS defaults to 1 (about half an hour on Lyra). It starts in the
-# background and returns at once. Her notebook is kept per model in
-# /var/lib/aetherseed/cog/<model>/, so each new start continues where the last
-# one ended - that is what "across sessions" measures. Her memory, trust and
-# training runs are never written to.
+# SESSIONS defaults to 1. It starts in the background and returns at once.
+# Sessions, essays and reviews are kept per model in /var/lib/aetherseed/cog/
+# <model>/, so each new start continues where the last one ended. Sessions only
+# read her memory; what goes into it is her reflection on a review, through
+# cog_loop.py --reflect (training/README.md).
 set -euo pipefail
 
 SESSIONS="${1:-1}"
@@ -54,7 +54,7 @@ systemd-run --quiet --unit="$UNIT" --uid=aetherseed --gid=aetherseed \
 
 cat <<EOF
 Started: $UNIT, $SESSIONS session(s), model $MODEL.
-  her notebook and sessions:  $DIR
+  sessions, essays, reviews:  $DIR
   watch:    journalctl -f -u $UNIT
   so far:   sudo -u aetherseed $PY $APP/training/cog_loop.py --report $DIR
   stop:     sudo -u aetherseed touch $DIR/STOP   (ends before the next session)
