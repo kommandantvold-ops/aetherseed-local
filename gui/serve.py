@@ -49,7 +49,11 @@ PROXIED_POST = ("/api/chat", "/aetherseed/setup", "/aetherseed/steward",
                 # build log 64: the training loop's buttons, and who her steward is
                 "/aetherseed/training", "/aetherseed/steward-name",
                 # build log 72: the steward's brake; trust management
-                "/aetherseed/brake", "/aetherseed/trust", "/aetherseed/approvals")
+                "/aetherseed/brake", "/aetherseed/trust", "/aetherseed/approvals",
+                # build log 74c/74d: the COG panel. Not /aetherseed/cog/reflection
+                # or /aetherseed/cog/remove: those are the harness's, by token.
+                "/aetherseed/cog/start", "/aetherseed/cog/stop", "/aetherseed/cog/review",
+                "/aetherseed/cog/correct", "/aetherseed/cog/reflect", "/aetherseed/cog/forget")
 
 # THE STEWARD'S OWN SHELF (build log 62). Andreas, 5 Oct 2026: "a file upload
 # button in the gui, that adds documents to the library/workspace". The body
@@ -151,8 +155,10 @@ PROXIED_GET = ("/aetherseed/status", "/aetherseed/record", "/aetherseed/rings", 
                "/aetherseed/shelf", "/aetherseed/training", "/aetherseed/trust-record",
                "/aetherseed/brake", "/aetherseed/trust",
                # build log 72: her records checked; her workspace, read-only
-               "/aetherseed/records", "/aetherseed/workspace", "/aetherseed/approvals")
-PROXIED_GET_QUERY = ("/aetherseed/memories",)
+               "/aetherseed/records", "/aetherseed/workspace", "/aetherseed/approvals",
+               # build log 74d: the COG panel - its state, and one essay (?n=)
+               "/aetherseed/cog")
+PROXIED_GET_QUERY = ("/aetherseed/memories", "/aetherseed/cog/essay")
 
 # The page's own script is pinned by the hash of its bytes.
 #
@@ -303,7 +309,7 @@ class Console(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.split("?", 1)[0] in PROXIED_GET_QUERY:
-            _tally("memories")
+            _tally("memories" if self.path.startswith("/aetherseed/memories") else "cog")
             self._relay("GET")
             return
         if self.path in PROXIED_GET:
@@ -318,7 +324,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
                    else "rings" if self.path.endswith("/rings")
                    else "shelf" if self.path.endswith("/shelf")
                    else "training" if self.path.endswith("/training")
-                   else "record" if self.path.endswith("/trust-record") else "page")
+                   else "record" if self.path.endswith("/trust-record")
+                   else "cog" if self.path == "/aetherseed/cog" else "page")
             self._relay("GET")
             return
         if self.path == FIRST_START_PATH:
@@ -503,7 +510,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
         _tally("setup" if self.path == "/aetherseed/setup"
                else "steward" if self.path in ("/aetherseed/steward", "/aetherseed/steward-name")
                else "training" if self.path == "/aetherseed/training"
-               else "shelf" if self.path.startswith("/aetherseed/shelf") else "chat")
+               else "shelf" if self.path.startswith("/aetherseed/shelf")
+               else "cog" if self.path.startswith("/aetherseed/cog/") else "chat")
         n = int(self.headers.get("Content-Length", 0))
         self._relay("POST", self.rfile.read(n) if n else b"")
 

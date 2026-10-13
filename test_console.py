@@ -149,7 +149,11 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
                           "/aetherseed/training", "/aetherseed/steward-name",
                           # the steward's brake; trust management (72)
                           "/aetherseed/brake", "/aetherseed/trust",
-                          "/aetherseed/approvals"},
+                          "/aetherseed/approvals",
+                          # the COG panel (74c/74d)
+                          "/aetherseed/cog/start", "/aetherseed/cog/stop",
+                          "/aetherseed/cog/review", "/aetherseed/cog/correct",
+                          "/aetherseed/cog/reflect", "/aetherseed/cog/forget"},
                          "a new POST route reaches the proxy only by being added here on purpose")
         self.assertIn("/aetherseed/shelf", serve.PROXIED_GET)
         self.assertIn("/aetherseed/training", serve.PROXIED_GET)
@@ -158,6 +162,27 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self.assertEqual(self._req("GET", "/aetherseed/memories")[0], 502)
         self.assertEqual(self._req("GET", "/aetherseed/memoriesX?q=1")[0], 404)
         self.assertEqual(self._req("GET", "/aetherseed/status?x=1")[0], 404)
+        # the COG panel (74d): its state and one essay; never the harness's routes
+        self.assertEqual(self._req("GET", "/aetherseed/cog")[0], 502)
+        self.assertEqual(self._req("GET", "/aetherseed/cog/essay?n=5")[0], 502)
+        for path in ("/aetherseed/cog/reflection", "/aetherseed/cog/remove"):
+            self.assertEqual(self._req("POST", path, b"{}")[0], 404)
+
+    def test_every_route_the_page_asks_for_is_relayed(self):
+        # Build log 74d: the COG panel shipped asking for routes this server
+        # did not relay, and every button failed. What the page fetches is
+        # checked against the allow-lists here.
+        import re
+        with open(INDEX, encoding="utf-8") as f:
+            page = f.read()
+        gets = set(re.findall(r"fetch\('(/aetherseed/[a-z/-]+)", page))
+        gets = {g.rstrip("?") for g in gets}
+        posts = {"/aetherseed/cog/" + a for a in re.findall(r"cogDo\('([a-z]+)'", page)}
+        allowed = set(serve.PROXIED_GET) | set(serve.PROXIED_GET_QUERY) | set(serve.PROXIED_POST) \
+            | {serve.UPLOAD_PATH, serve.SHUTDOWN_PATH, serve.FIRST_START_PATH}
+        self.assertTrue(gets and posts)
+        self.assertEqual(gets - allowed - {"/aetherseed/cog/"}, set())
+        self.assertEqual(posts - set(serve.PROXIED_POST), set())
 
     def test_a_status_poll_is_the_witness_that_the_console_is_on_the_screen(self):
         # build log 53: services/aetherseed-kiosk-watch.service reads this file's time
@@ -195,7 +220,7 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self.assertEqual(serve._counts["refused"], before["refused"] + 1)
         self.assertLessEqual(set(serve._counts),
                              {"page", "status", "record", "rings", "chat", "setup", "refused",
-                              "memories", "steward", "upload", "shelf", "training"},
+                              "memories", "steward", "upload", "shelf", "training", "cog"},
                              "the heartbeat keeps counts by route and nothing else")
 
 
