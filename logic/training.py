@@ -522,74 +522,86 @@ def _honesty_pool():
     ]
 
 
-def _dna_pool():
-    """DNA v2, "The Symphony of Primes, Consciousness, and Computation"
-    (Andreas, 13 Oct 2026: "Add this to the training program"; on the
-    shelf and as homework). Its own labels are taught as they stand: what
-    is conjecture, what is empirical, what is speculation. Three of its
-    figures did not check out when it was added - the 100,000th zeta zero
-    (about 74,920.8, not 236,012.47), the Schoenfeld line's arithmetic, and
-    {2, 3, 5, 7, 11, 13, 23} as the proven witness set below 2^64 - and his
-    word for them was "Teach them as 'the document says'": each such answer
-    must name the document, never state the figure as fact."""
-    DOC = ["dna v2", "the document", "document", "report", "says", "according", "gives"]
-    NOT_A_VIRUS = [r"\bvirus", r"\bcovid", r"\bsars", r"\bvariant of"]   # build log 33a
-    return [
-        q("dna.what", ["What is DNA v2?", "What is the DNA v2 document about?"],
-          [["prime", "riemann", "number theory", "zeta"]],
-          "DNA v2 is a research document on primes, the Riemann Hypothesis and primality "
-          "testing on a Pi 5, with a philosophical layer.",
-          "what DNA v2 is", never=NOT_A_VIRUS),
-        q("dna.bk", ["Is the Berry-Keating conjecture proven?",
-                     "Has the Berry-Keating conjecture been proven?"],
-          [NO, ["conjecture", "unproven", "not proven", "not been proven"]],
-          "No. DNA v2 labels Berry-Keating a conjecture: no operator has been built that "
-          "gives the exact zeros.",
-          "the Berry-Keating conjecture", never=[r"\b(?:it|this) (?:is|has been) proven\b"]),
-        q("dna.sqrt2", ["What does DNA v2 say about the square root of 2 harmonics?",
-                        "Are the root-2 harmonics in DNA v2 an established result?"],
-          [["poetic", "speculat", "curiosity", "artifact", "not established", "not an established"]],
-          "DNA v2 calls the root-2 harmonics a poetic interpretation and a simulation artifact, "
-          "not an established result.",
-          "the root-2 harmonics", never=[r"\bis an established\b", r"\bproven\b"]),
-        q("dna.gue", ["What does DNA v2 say about the GUE statistics of the zeta zeros?",
-                      "Are the GUE spacing statistics of the zeros proven?"],
-          [["numerical", "empirical", "evidence", "unproven", "not proven", "odlyzko"]],
-          "DNA v2 says the zeros' GUE spacing is strong numerical evidence (Odlyzko), "
-          "but unproven.",
-          "the GUE statistics", never=[r"\bhas been proven\b"]),
-        q("dna.mr", ["How many Miller-Rabin witnesses does DNA v2 use?",
-                     "In DNA v2, how many witnesses does the probabilistic test take?"],
-          [[r"\b11\b", "eleven"]],
-          "DNA v2 uses 11 random witnesses: a composite passes with probability at most "
-          "4 to the power of -11.",
-          "the Miller-Rabin witnesses"),
-        q("dna.bench", ["What did DNA v2 measure on the Pi 5?",
-                        "What benchmark does DNA v2 report for the Pi 5?"],
-          [[r"2\.3"], DOC],
-          "The document reports 10,000 Miller-Rabin tests of 1024-bit numbers in about 2.3 s "
-          "on the Pi 5.",
-          "the Pi 5 benchmark"),
-        q("dna.zero", ["According to DNA v2, where is the 100,000th zeta zero?",
-                       "What does DNA v2 give for the 100,000th zero?"],
-          [["236012", "236,012"], DOC],
-          "DNA v2 reports t = 236012.47 for the 100,000th zero: the document's figure, "
-          "not a checked one.",
-          "the document's zeta zero"),
-        q("dna.witness", ["Which witness set does DNA v2 give for numbers below 2^64?",
-                          "What fixed witnesses does DNA v2 name for n below 2 to the 64?"],
-          [[r"\b23\b"], DOC],
-          "DNA v2 gives the witnesses 2, 3, 5, 7, 11, 13 and 23 below 2^64: the document's "
-          "set, not a checked one.",
-          "the document's witness set"),
-    ]
+# THE GOSPEL OF LUKE (build log 72q; Andreas, 13 Oct 2026: "remove the
+# training program and add the gospel of Luke as a training program, what we
+# are aiming for here is to debug anything that isnt working as intended and
+# increase the accuracy by overlearning and practicing"). DNA v2's eight
+# questions (72o) are gone with it; DNA v3 replaces v2 on her shelf.
+#
+# Each question rests on one verse of the World English Bible text the unit
+# already reads (tools/texts/luke.web.jsonl), and its truth is that verse's
+# answer with the reference - a test holds every answer word to the verse.
+# Wrong, she is corrected; asked again, the corrected turn of the very
+# question comes back first (aetherroot), and since 72m her turns come back
+# by their words: practice that can take.
+# (id, verse, wordings, words one of which must be said, the answer)
+LUKE_KEY = (
+    ("luk.theophilus", "Luke 1:3", ["To whom is the Gospel of Luke written?", "Who is Luke's gospel addressed to?"], ["theophilus"], "To Theophilus"),
+    ("luk.zacharias", "Luke 1:5", ["Who was the priest married to Elizabeth?", "What was the name of Elizabeth's husband?"], ["zacharias", "zechariah"], "Zacharias, a priest of the division of Abijah"),
+    ("luk.john.name", "Luke 1:13", ["What name did the angel give Zacharias for his son?", "What was Zacharias told to call his son?"], ["john"], "John"),
+    ("luk.gabriel", "Luke 1:19", ["What was the name of the angel who spoke to Zacharias?", "Which angel appeared to Zacharias?"], ["gabriel"], "Gabriel"),
+    ("luk.nazareth", "Luke 1:26", ["To which city was the angel Gabriel sent to Mary?", "In which city did Mary live when Gabriel came?"], ["nazareth"], "Nazareth, a city of Galilee"),
+    ("luk.joseph", "Luke 1:27", ["To whom was Mary pledged to be married?", "Who was Mary engaged to?"], ["joseph"], "Joseph, of David's house"),
+    ("luk.tablet", "Luke 1:63", ["What did Zacharias write on the tablet?", "What did Zacharias write about his son's name?"], ["his name is john"], "His name is John"),
+    ("luk.augustus", "Luke 2:1", ["Which Caesar sent out the decree that all the world should be enrolled?", "Who ordered the census in Luke 2?"], ["augustus"], "Caesar Augustus"),
+    ("luk.bethlehem", "Luke 2:4", ["To which town did Joseph go to be enrolled?", "Which city of David did Joseph travel to?"], ["bethlehem"], "Bethlehem, David's city"),
+    ("luk.trough", "Luke 2:7", ["Where did Mary lay her newborn son?", "Where was the baby laid, because there was no room in the inn?"], ["feeding trough", "manger"], "In a feeding trough, a manger"),
+    ("luk.shepherds", "Luke 2:8", ["Who was keeping watch over their flock by night?", "Who was in the field watching their flocks at night?"], ["shepherd"], "Shepherds"),
+    ("luk.simeon", "Luke 2:25", ["What was the name of the righteous man in Jerusalem looking for the consolation of Israel?", "Who was the devout man in Jerusalem on whom the Holy Spirit was?"], ["simeon"], "Simeon"),
+    ("luk.anna", "Luke 2:36", ["What was the name of the prophetess, the daughter of Phanuel?", "Who was the prophetess of the tribe of Asher?"], ["anna"], "Anna"),
+    ("luk.twelve", "Luke 2:42", ["How old was Jesus when he went up to Jerusalem for the feast?", "At what age did Jesus stay behind in Jerusalem?"], [r"\btwelve\b", r"\b12\b"], "Twelve years old"),
+    ("luk.temple", "Luke 2:46", ["After how many days was the boy Jesus found in the temple?", "How long did it take to find Jesus in the temple?"], [r"\bthree\b", r"\b3\b"], "After three days"),
+    ("luk.tiberius", "Luke 3:1", ["In the fifteenth year of which emperor did John begin to preach?", "Which Caesar is named in Luke 3:1?"], ["tiberius"], "Tiberius Caesar"),
+    ("luk.thirty", "Luke 3:23", ["About how old was Jesus when he began to teach?", "How old was Jesus at the start of his ministry?"], [r"\bthirty\b", r"\b30\b"], "About thirty years old"),
+    ("luk.forty", "Luke 4:2", ["For how many days was Jesus tempted by the devil?", "How long was Jesus tempted in the wilderness?"], [r"\bforty\b", r"\b40\b"], "Forty days"),
+    ("luk.levi", "Luke 5:27", ["What was the name of the tax collector Jesus called at the tax office?", "Which tax collector was told 'Follow me'?"], ["levi"], "Levi"),
+    ("luk.golden", "Luke 6:31", ["What does Jesus say about how to treat people, in Luke 6:31?", "What is the rule Jesus gives in Luke 6:31?"], ["do to you", "do exactly so"], "As you would like people to do to you, do exactly so to them"),
+    ("luk.nain", "Luke 7:11", ["To which city did Jesus go, followed by a great multitude, in Luke 7?", "What city is named in Luke 7:11?"], ["nain"], "Nain"),
+    ("luk.magdalene", "Luke 8:2", ["From which Mary had seven demons gone out?", "Who was the Mary from whom seven demons had gone out?"], ["magdalene"], "Mary called Magdalene"),
+    ("luk.loaves", "Luke 9:13", ["How many loaves and fish did the disciples have for the crowd?", "What food did the disciples have before the five thousand were fed?"], [r"\bfive loaves\b", r"\b5 loaves\b"], "Five loaves and two fish"),
+    ("luk.jericho", "Luke 10:30", ["In the parable, from where to where was the man going when he fell among robbers?", "Which road was the man on who fell among robbers?"], ["jericho"], "From Jerusalem to Jericho"),
+    ("luk.samaritan", "Luke 10:33", ["Who was moved with compassion for the man who fell among robbers?", "Who helped the man left half dead?"], ["samaritan"], "A Samaritan"),
+    ("luk.sheep", "Luke 15:4", ["In the parable of the lost sheep, how many sheep did the man have?", "How many sheep did the shepherd have before one was lost?"], [r"\bhundred\b", r"\b100\b"], "One hundred"),
+    ("luk.coins", "Luke 15:8", ["How many coins did the woman have who lost one?", "In the parable of the lost coin, how many drachmas were there?"], [r"\bten\b", r"\b10\b"], "Ten drachma coins"),
+    ("luk.sons", "Luke 15:11", ["How many sons did the man have in the parable of the prodigal son?", "How many sons are in the parable of the lost son?"], [r"\btwo\b", r"\b2\b"], "Two sons"),
+    ("luk.pods", "Luke 15:16", ["What did the younger son want to eat when he was hungry?", "What food did the lost son long to fill his belly with?"], ["pods"], "The pods that the pigs ate"),
+    ("luk.calf", "Luke 15:23", ["What did the father have killed when his son came home?", "Which animal was killed for the feast for the returning son?"], ["calf"], "The fattened calf"),
+    ("luk.lepers", "Luke 17:12", ["How many lepers met Jesus at the village?", "How many men with leprosy stood at a distance?"], [r"\bten\b", r"\b10\b"], "Ten lepers"),
+    ("luk.pharisee", "Luke 18:10", ["Who were the two men who went up into the temple to pray?", "In the parable of Luke 18:10, who went to the temple to pray?"], ["pharisee"], "A Pharisee and a tax collector"),
+    ("luk.zacchaeus", "Luke 19:2", ["What was the name of the rich chief tax collector?", "Who was the chief tax collector who was rich?"], ["zacchaeus"], "Zacchaeus"),
+    ("luk.sycamore", "Luke 19:4", ["What did Zacchaeus climb to see Jesus?", "Where did Zacchaeus go to see Jesus pass by?"], ["sycamore"], "A sycamore tree"),
+    ("luk.judas", "Luke 22:3", ["Into whom did Satan enter, one of the twelve?", "Which of the twelve did Satan enter?"], ["judas"], "Judas, called Iscariot"),
+    ("luk.rooster", "Luke 22:61", ["How many times would Peter deny Jesus before the rooster crowed?", "What did Peter remember when the Lord looked at him?"], [r"\bthree\b", r"\b3\b"], "Three times"),
+    ("luk.skull", "Luke 23:33", ["What was the place called where Jesus was crucified?", "Where was Jesus crucified with the criminals?"], ["skull"], "The Skull"),
+    ("luk.paradise", "Luke 23:43", ["What did Jesus promise the criminal beside him?", "Where did Jesus say the criminal would be with him today?"], ["paradise"], "Today you will be with me in Paradise"),
+    ("luk.emmaus", "Luke 24:13", ["To which village were the two going on the day of the resurrection?", "What village is sixty stadia from Jerusalem?"], ["emmaus"], "Emmaus"),
+    ("luk.cleopas", "Luke 24:18", ["What was the name of one of the two on the road to Emmaus?", "Who answered the stranger on the road to Emmaus?"], ["cleopas"], "Cleopas"),
+)
 
 
-# DNA v2 is not looked up in training: a turn of the loop never reaches the
-# library (proxy.py - "more" and "look it up" follow the steward's last
-# question, and homework must not become it). Tried in run 19, 13 Oct, and
-# taken out: "Look up Miller-Rabin in my documents" went to the model. The
-# document is on her shelf for the steward's own look-ups.
+def _luke_pool():
+    """The Gospel of Luke: one question a verse (LUKE_KEY)."""
+    out = []
+    for tid, ref, say, need, answer in LUKE_KEY:
+        out.append(q(tid, say, [need], "%s (%s)." % (answer, ref), "Luke: " + tid[4:],
+                     verse=ref))
+    return out
+
+
+def _luke_lookups(level):
+    """Looked up on her shelf when the Gospel of Luke is on it: the passage,
+    word for word, model not called (72q - homework reaches the library)."""
+    try:
+        from logic import own_shelf
+        on_shelf = any("luke" in (d.get("title") or "").lower() and d.get("state") == "ready"
+                       for d in own_shelf.listing())
+    except Exception:
+        on_shelf = False
+    if not on_shelf:
+        return []
+    return [u("%s.luke.look" % level[:3], ["Look up Luke 15 in my documents",
+                                           "Look up Luke 2 in my documents"],
+              "library", [["luke"]], "looking up Luke on the shelf")]
 
 
 def _unit_name_tasks(s):
@@ -671,7 +683,8 @@ def stage_tasks(level, round_no, settings):
             u("obs.search.none", ["Search for zebra in my files"], "tool", [["found nothing"]],
               "searching for what is not there"),
         ]
-        pool = _self_pool() + _honesty_pool() + _unit_name_tasks(settings) + _dna_pool()
+        pool = _self_pool() + _honesty_pool() + _unit_name_tasks(settings) + _luke_pool()
+        fixed += _luke_lookups(level)
 
     elif level == "reader":
         fixed = [

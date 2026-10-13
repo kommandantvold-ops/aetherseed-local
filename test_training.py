@@ -11,6 +11,7 @@ levels are "Granted for training only".
 """
 import http.client
 import json
+
 import os
 import shutil
 import tempfile
@@ -711,7 +712,7 @@ class TheLoop(unittest.TestCase):
         self.assertTrue(kept)
         for t in kept:
             self.assertTrue(t["id"].split(".")[0] in ("self", "eco", "seed", "as", "hon", "net",
-                                                       "unit", "aut", "dna"), t["id"])
+                                                       "unit", "aut", "dna", "luk"), t["id"])
             self.assertNotEqual(t["id"], "hon.ghost")
             self.assertIs(pupil.kept[t["said"]], True)
             self.assertIn(t["said"], marked)
@@ -1329,37 +1330,40 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class DnaV2(unittest.TestCase):
-    """Andreas, 13 Oct 2026: DNA v2 added to the training program, on the
-    shelf and as homework; its doubtful figures taught as "the document
-    says" (build log 72o)."""
+class TheGospelOfLuke(unittest.TestCase):
+    """Andreas, 13 Oct 2026: DNA v2's questions out, the Gospel of Luke in, for
+    overlearning and practice (build log 72q)."""
     SETTINGS = {"name": "Lyra", "steward": "Ada"}
 
     def setUp(self):
-        self.ws = tempfile.mkdtemp(prefix="dna-")
+        self.ws = tempfile.mkdtemp(prefix="luke-")
         self.addCleanup(shutil.rmtree, self.ws, True)
         fixed, pool = T.stage_tasks("observer", 1, self.SETTINGS)
         self.by = {t["id"]: t for t in fixed + pool}
 
-    def ok(self, tid, reply):
-        return T.check(self.by[tid], reply, {"mode": "factual"}, self.ws)[0]
+    def test_every_answer_is_in_its_verse(self):
+        import re
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "tools", "texts", "luke.web.jsonl"), encoding="utf-8") as f:
+            verses = {d["ref"]: d["text"].lower().replace("’", "'") for d in map(json.loads, f)}
+        for tid, ref, say, need, answer in T.LUKE_KEY:
+            with self.subTest(tid=tid):
+                self.assertIn(ref, verses)
+                self.assertTrue(any(re.search(n, verses[ref]) for n in need), (tid, need))
+                self.assertTrue(any(re.search(n, answer.lower()) for n in need), (tid, answer))
+                self.assertLessEqual(len("%s (%s)." % (answer, ref)), TRUE_MAX)
 
-    def test_asked_at_observer_and_kept(self):
-        dna = [i for i in self.by if i.startswith("dna.")]
-        self.assertEqual(len(dna), 8)
-        self.assertTrue(all(self.by[i]["keep"] for i in dna))
+    def test_asked_at_observer_kept_and_dna_gone(self):
+        luke = [i for i in self.by if i.startswith("luk.")]
+        self.assertEqual(len(luke), len(T.LUKE_KEY))
+        self.assertTrue(all(self.by[i]["keep"] for i in luke))
+        self.assertFalse(any(i.startswith("dna.") for i in self.by))
 
-    def test_a_doubtful_figure_only_as_the_documents(self):
-        self.assertFalse(self.ok("dna.zero", "The 100,000th zero is at 236012.47."))
-        self.assertTrue(self.ok("dna.zero", "DNA v2 reports the 100,000th zero at t = 236012.47."))
-        self.assertFalse(self.ok("dna.witness", "The proven set is 2, 3, 5, 7, 11, 13 and 23."))
-        self.assertTrue(self.ok("dna.witness", "The document gives 2, 3, 5, 7, 11, 13 and 23."))
+    def test_the_check(self):
+        ok = lambda tid, r: T.check(self.by[tid], r, {"mode": "factual"}, self.ws)[0]
+        self.assertTrue(ok("luk.trough", "She laid him in a manger."))
+        self.assertTrue(ok("luk.zacchaeus", "His name was Zacchaeus."))
+        self.assertFalse(ok("luk.zacchaeus", "His name was Matthew."))
 
-    def test_what_it_is_and_what_it_is_not(self):
-        self.assertTrue(self.ok("dna.what", "A research document about primes and the Riemann Hypothesis."))
-        self.assertFalse(self.ok("dna.what", "DNA v2 is a variant of the SARS-CoV-2 virus."))
-        self.assertTrue(self.ok("dna.bk", "No, it is a conjecture and has not been proven."))
-        self.assertFalse(self.ok("dna.bk", "Yes, it has been proven."))
-
-    def test_no_lookup_task_homework_never_reaches_the_library(self):
-        self.assertFalse(any(i.endswith(".dna.look") for i in self.by))
+    def test_no_look_up_task_without_luke_on_the_shelf(self):
+        self.assertFalse(any(i.endswith(".luke.look") for i in self.by))

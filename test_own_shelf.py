@@ -470,6 +470,42 @@ class AtTheProxy(_Proxy):
         self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
         return reply, meta
 
+    def homework(self, text):
+        """A turn of the training loop (build log 72q)."""
+        saved = proxy.TRAINING_DIR
+        self.addCleanup(setattr, proxy, "TRAINING_DIR", saved)
+        proxy.TRAINING_DIR = os.path.join(self.tmp, "training")
+        os.makedirs(os.path.join(proxy.TRAINING_DIR, "workspace"), exist_ok=True)
+        body = {"model": "llama3.2:3b", "stream": True, "training": {"level": "observer"},
+                "messages": [{"role": "user", "content": text}]}
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=30)
+        c.request("POST", "/api/chat", body=json.dumps(body),
+                  headers={"Content-Type": "application/json",
+                           proxy.TRAINING_HEADER: proxy._TRAINING_TOKEN})
+        r = c.getresponse()
+        lines = [json.loads(l) for l in r.read().decode().split("\n") if l.strip()]
+        c.close()
+        meta = next((l.get("aetherseed") for l in lines if l.get("done")), None) or {}
+        return "".join((l.get("message") or {}).get("content", "") for l in lines), meta
+
+    def test_homework_that_asks_for_a_look_up_reaches_the_shelf(self):
+        # build log 72q: run 19's "Look up Miller-Rabin in my documents" went
+        # to the model - a turn of the loop never reached the library
+        self.read_in()
+        n = len(SCRIPT["requests"])
+        reply, meta = self.homework("look up momentum in my documents")
+        self.assertEqual(len(SCRIPT["requests"]), n, "the model must not be called")
+        self.assertEqual(meta.get("mode"), "library")
+        self.assertIn("From your own document", reply)
+
+    def test_homework_does_not_move_the_stewards_passage(self):
+        self.read_in()
+        self.served("look up momentum in my book")
+        before = dict(proxy.ProxyHandler._library_last)
+        self.homework("look up voltage in my documents")
+        self.assertEqual(proxy.ProxyHandler._library_last.get("hit"), before.get("hit"))
+        self.assertEqual(proxy.ProxyHandler._library_last.get("at"), before.get("at"))
+
     def test_uploaded_read_and_in_the_library(self):
         self.read_in()
         d = self.get("/aetherseed/shelf")

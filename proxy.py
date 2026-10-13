@@ -1259,6 +1259,29 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # the library the same thing (build log 59). In memory only.
     _library_asked = {"q": None, "at": 0.0}
 
+    def _look_up_for_homework(self, model: str, user_msg: str) -> bool:
+        """"look up X [in my documents]" for a turn of the training loop: the
+        passage word for word, as the steward would be shown it - without the
+        steward's state ("more", "look it up", "explain that") read or moved."""
+        try:
+            library = lib.library()
+            asked = lib.lookup_query(user_msg)
+            if not library or asked is None:
+                return False
+            own_only = lib.lookup_in_own(user_msg)
+            hit = library.look_up(asked, own_only=own_only)
+            if hit is None:
+                text = lib.nothing(asked, library.own_names() if own_only else library.holds())
+            else:
+                text = lib.shown(hit)
+            print(f"[library] homework look-up: {'found' if hit else 'nothing'} "
+                  f"(model not called)", flush=True)
+            self._serve_plain(model, text, source="library", mode="library")
+            return True
+        except Exception as e:
+            print(f"[library] homework look-up failed: {e!r}", flush=True)
+            return False
+
     def _answer_from_the_library(self, model: str, user_msg: str,
                                  speaker: str = STEWARD) -> bool:
         """Show a passage word for word, model not called. True if handled.
@@ -1811,6 +1834,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         library_line = False
         # Not for homework either: "more" and "look it up" follow the steward's
         # last question, and a turn of the loop must not become it.
+        if lesson and not intent and not a_story and lib.lookup_query(user_msg) is not None:
+            # Homework that asks for a look-up by name reaches the library
+            # (build log 72q; Andreas, 13 Oct 2026: "If she couldnt reach the
+            # shelf we should find out why and fix it"). Only the explicit
+            # "look up X ...": "more" and "look it up" follow the steward's
+            # last question, and the steward's last passage and question are
+            # neither read nor moved by a turn of the loop.
+            if self._look_up_for_homework(model, user_msg):
+                return
         if not intent and not reading and not a_story and not lesson:
             if self._answer_from_the_library(model, user_msg, speaker):
                 return
