@@ -1361,5 +1361,5 @@ class DnaV2(unittest.TestCase):
         self.assertTrue(self.ok("dna.bk", "No, it is a conjecture and has not been proven."))
         self.assertFalse(self.ok("dna.bk", "Yes, it has been proven."))
 
-    def test_no_lookup_task_without_the_document_on_the_shelf(self):
+    def test_no_lookup_task_homework_never_reaches_the_library(self):
         self.assertFalse(any(i.endswith(".dna.look") for i in self.by))

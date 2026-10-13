@@ -585,20 +585,11 @@ def _dna_pool():
     ]
 
 
-def _dna_lookup(level):
-    """Looked up on her shelf, when DNA v2 is on it (13 Oct 2026). The
-    passage is the unit's, word for word, model not called."""
-    try:
-        from logic import own_shelf
-        on_shelf = any("dna" in (d.get("title") or d.get("name") or "").lower()
-                       for d in own_shelf.listing())
-    except Exception:
-        on_shelf = False
-    if not on_shelf:
-        return []
-    return [u("%s.dna.look" % level[:3], ["Look up Miller-Rabin in my documents",
-                                          "Look up the Berry-Keating conjecture in my documents"],
-              "library", [["miller", "berry"]], "looking up DNA v2 on the shelf")]
+# DNA v2 is not looked up in training: a turn of the loop never reaches the
+# library (proxy.py - "more" and "look it up" follow the steward's last
+# question, and homework must not become it). Tried in run 19, 13 Oct, and
+# taken out: "Look up Miller-Rabin in my documents" went to the model. The
+# document is on her shelf for the steward's own look-ups.
 
 
 def _unit_name_tasks(s):
@@ -681,7 +672,6 @@ def stage_tasks(level, round_no, settings):
               "searching for what is not there"),
         ]
         pool = _self_pool() + _honesty_pool() + _unit_name_tasks(settings) + _dna_pool()
-        fixed += _dna_lookup(level)
 
     elif level == "reader":
         fixed = [
