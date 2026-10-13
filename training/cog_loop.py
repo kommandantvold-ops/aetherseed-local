@@ -419,8 +419,13 @@ def build_prompt(model, item, notes):
 def run_session(model, notebook, session, log, items=None, sizes=ITEMS):
     """One session. log(record) is called with every call's full record."""
     if items is None:
-        items = (reason_items(session, sizes["reason"]) + steps_items(session, sizes["steps"])
-                 + luke_items(session, sizes["luke"]))
+        items = reason_items(session, sizes["reason"]) + steps_items(session, sizes["steps"])
+        try:
+            items += luke_items(session, sizes["luke"])
+        except ImportError:
+            # a build from before 72q has no Luke key: the other two families
+            # still run, and the session file says Luke was left out
+            log({"skipped": "luke", "why": "this build has no logic.training.LUKE_KEY (72q)"})
     results = []
     for it in items:
         rec = {"id": it["id"], "family": it["family"], "kind": it["kind"], "q": it["q"],

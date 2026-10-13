@@ -211,6 +211,24 @@ class Session(unittest.TestCase):
             C.run_session(m, self.nb, 1, self.log.append, items=self.items)
 
 
+class OlderBuild(unittest.TestCase):
+    def test_no_luke_key_runs_the_rest_and_says_so(self):
+        import logic.training as T
+        saved = T.LUKE_KEY
+        del T.LUKE_KEY
+        d = tempfile.mkdtemp()
+        try:
+            log = []
+            nb = C.Notebook(os.path.join(d, "nb.json"))
+            C.run_session(FakeModel(lambda m: "Answer: 1"), nb, 1, log.append,
+                          sizes={"reason": 1, "steps": 1, "luke": 2})
+            self.assertEqual(log[0]["skipped"], "luke")
+            self.assertEqual({r["family"] for r in log if "notebook" in r}, {"reason", "steps"})
+        finally:
+            T.LUKE_KEY = saved
+            shutil.rmtree(d)
+
+
 class Report(unittest.TestCase):
     def test_report_reads_the_sessions(self):
         d = tempfile.mkdtemp()
