@@ -131,6 +131,7 @@ ESSAY_ASK = ("Passage ({source}):\n{passage}\n\nWrite a short essay, about 200 w
              "{theme}: what the passage says, what you think it means, and where you are "
              "unsure.")
 REFLECTION_SYSTEM = "You wrote an essay, and your trainer has reviewed it."
+CORRECTED_AS = "Your essay on {theme}, as your trainer corrected it:\n{essay}"
 REFLECTION_ASK = ("Your essay on {theme}:\n{essay}\n\nYour trainer's review:\n{review}\n\n"
                   "Write a short reflection, three or four sentences, in your own words: "
                   "what you take from the review, and what you will do differently in your "
@@ -592,6 +593,24 @@ def write_essay(essay_dir, session, model_name, tid, source, theme, text):
     return path
 
 
+def read_corrected(d, n):
+    """The trainer's corrected text of essay NNN (74c), or None. Hers in
+    essays/NNN.md is never changed."""
+    p = os.path.join(d, "essays", "%03d.corrected.md" % n)
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        return f.read().split("\n---\n", 1)[-1].strip()
+
+
+def write_corrected(d, n, text):
+    p = os.path.join(d, "essays", "%03d.corrected.md" % n)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("# Essay %03d, as the trainer corrected it\n\ncorrected: %s\n\n---\n\n%s\n"
+                % (n, datetime.now(timezone.utc).isoformat(timespec="seconds"), text.strip()))
+    return p
+
+
 def read_essay(d, n):
     """(theme, essay text) of essays/NNN.md."""
     with open(os.path.join(d, "essays", "%03d.md" % n), encoding="utf-8") as f:
@@ -603,14 +622,19 @@ def read_essay(d, n):
 
 # ---------------------------------------------------------------- reflect
 
-def reflection_prompt(model, theme, essay, review):
-    """The essay is cut from its end, a word at a time, until the prompt fits."""
+def reflection_prompt(model, theme, essay, review, corrected=False):
+    """The essay is cut from its end, ten words at a time, until the prompt
+    fits. corrected: the essay is the trainer's corrected text (74c), and is
+    shown as that."""
     ws = essay.split()
     while True:
         text = " ".join(ws) + (" ..." if len(ws) < len(essay.split()) else "")
+        ask = REFLECTION_ASK.format(theme=theme, essay=text, review=review)
+        if corrected:
+            ask = ask.replace("Your essay on %s:\n%s" % (theme, text),
+                              CORRECTED_AS.format(theme=theme, essay=text), 1)
         msgs = [{"role": "system", "content": REFLECTION_SYSTEM},
-                {"role": "user", "content": REFLECTION_ASK.format(theme=theme, essay=text,
-                                                                  review=review)}]
+                {"role": "user", "content": ask}]
         if model.fits(msgs):
             return msgs
         if not ws:
@@ -644,12 +668,14 @@ def reflect(model, d, n, token=None, post=post_reflection, again=False):
     if not review:
         raise ValueError("the review of essay %03d is empty" % n)
     theme, essay = read_essay(d, n)
-    msgs = reflection_prompt(model, theme, essay, review)
+    corrected = read_corrected(d, n)
+    msgs = reflection_prompt(model, theme, corrected or essay, review, corrected=bool(corrected))
     if msgs is None:
         raise ValueError("the review alone does not fit the prompt")
     reflection, ended, secs = model.chat(msgs, NUM_PREDICT["reflection"], stop_at_answer=False,
                                          max_seconds=ESSAY_SECONDS)
     rec = {"essay": "%03d" % n, "theme": theme, "review": review, "prompt": msgs,
+           "corrected": bool(corrected),
            "reflection": reflection, "ended": ended, "secs": secs,
            "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     if token is None:
@@ -701,6 +727,10 @@ def forget(d, n, why, token=None, post=post_remove):
     rec["removed"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                       "why": why, "episode": ep}
     out = path.replace(".reflection.json", ".reflection.removed.json")
+    k = 2
+    while os.path.exists(out):              # an earlier removal is kept too
+        out = path.replace(".reflection.json", ".reflection.removed-%d.json" % k)
+        k += 1
     with open(out, "w", encoding="utf-8") as f:
         json.dump(rec, f, ensure_ascii=False, indent=1)
     os.remove(path)

@@ -220,6 +220,13 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
 .tmtool .nm small{display:block; color:var(--ink-3)}
 .tmtool .st{color:var(--ink-3)} .tmtool .st.open{color:var(--accent)} .tmtool .st.rule{color:var(--brass)}
 .tmhist, .reclist, .wslist{margin:0; padding-left:18px; font-size:13px; color:var(--ink-2)}
+/* the COG panel (build log 74c) */
+.cog textarea{width:100%; min-height:90px; font-size:14px}
+.cog textarea.essay{min-height:200px}
+.cog pre{white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; color:var(--ink-2);
+  background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius); padding:8px 10px; margin:6px 0}
+.cog .count{font-size:12px; color:var(--ink-3)} .cog .count.over{color:var(--alarm)}
+.cog .open{border-color:var(--accent)}
 .tmhist li, .reclist li, .wslist li{margin:3px 0; overflow-wrap:anywhere}
 .reclist li.bad{color:var(--alarm)}
 .wstodo{white-space:pre-wrap; font:inherit; font-size:13px; color:var(--ink-2); margin:0;
@@ -341,6 +348,7 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
     <div class="chips row-chips">
       <button id="trainBtn"></button>
       <button id="shelfBtn"></button>
+      <button id="cogBtn"></button>
     </div>
     <section class="sec">
       <h2 id="apTitle"></h2>
@@ -409,6 +417,52 @@ button.chip:hover{color:var(--ink); border-color:var(--ink-3)}
     <p class="err" id="shelfError" hidden></p>
     <div class="tree" id="shelfBody"></div>
     <p class="help how" id="shelfHow"></p>
+  </div>
+</div>
+
+<!-- The COG-loop (build logs 73-74c): sessions started from here, and each
+     essay read, corrected and reviewed by the steward before her reflection on
+     the review goes into her memory. -->
+<div class="setup" id="cog" hidden>
+  <div class="card wide cog">
+    <div class="top"><h1 id="cogTitle"></h1><button type="button" id="cogClose"></button></div>
+    <p class="help" id="cogHelp"></p>
+    <p class="state" id="cogState"></p>
+    <div class="acts">
+      <select id="cogN"></select>
+      <button type="button" class="send" id="cogStart"></button>
+      <button type="button" id="cogStop"></button>
+    </div>
+    <p class="err" id="cogMsg" hidden></p>
+    <section class="sec">
+      <h2 id="cogEssaysTitle"></h2>
+      <div class="tmtools" id="cogEssays"></div>
+    </section>
+    <section class="sec" id="cogOne" hidden>
+      <h2 id="cogOneTitle"></h2>
+      <p class="state aside" id="cogOneState"></p>
+      <h3 id="cogHersTitle"></h3>
+      <pre id="cogHers"></pre>
+      <h3 id="cogFixTitle"></h3>
+      <p class="help" id="cogFixHelp"></p>
+      <textarea class="essay" id="cogFix" spellcheck="true"></textarea>
+      <div class="acts"><button type="button" id="cogFixSave"></button><button type="button" id="cogFixDrop"></button></div>
+      <h3 id="cogReviewTitle"></h3>
+      <textarea id="cogReview" spellcheck="true"></textarea>
+      <p class="count" id="cogCount"></p>
+      <div class="acts"><button type="button" id="cogReviewSave"></button><button type="button" class="send" id="cogReflect"></button></div>
+      <h3 id="cogReflTitle"></h3>
+      <pre id="cogRefl"></pre>
+      <div class="acts" id="cogForgetRow">
+        <input id="cogWhy" maxlength="300" autocomplete="off" spellcheck="false">
+        <button type="button" id="cogForget"></button>
+      </div>
+      <p class="err" id="cogOneMsg" hidden></p>
+    </section>
+    <section class="sec">
+      <h2 id="cogReportTitle"></h2>
+      <pre id="cogReport"></pre>
+    </section>
   </div>
 </div>
 
@@ -615,6 +669,26 @@ const T = {
                 characters: 'Letters, digits, spaces, hyphens and apostrophes only.',
                 no_letter: 'A name needs at least one letter.',
                 same_as_companion: 'The steward cannot have the companion’s own name.' },
+    cog: 'COG-loop', cogTitle: 'COG-loop',
+    cogHelp: (n) => `Sessions of puzzles, word problems, Luke and passages, each ending with an essay. You read and correct each essay and write the review; then ${n || 'the companion'} reflects on it, and the reflection goes into memory with the COG tag.`,
+    cogStart: 'Start', cogStop: 'Stop after this session', cogSessions: (k) => k === 1 ? '1 session' : `${k} sessions`,
+    cogIdle: 'Not running.', cogRunning: (what) => `Running: ${what}.`, cogStopping: 'Stopping after this session.',
+    cogBusy: (why) => `Cannot start now: ${why}.`,
+    cogEssaysTitle: 'Essays', cogNoEssays: 'No essays yet.',
+    cogStates: { waiting: 'waiting for your review', reviewed: 'reviewed — reflection not stored yet',
+                 reflected: 'reflection in memory', removed: 'reflection removed' },
+    cogWords: (w) => `${w} words`, cogFixed: 'corrected', cogOpen: 'Open',
+    cogOneTitle: (n, theme) => `Essay ${n} — ${theme}`,
+    cogHersTitle: 'As she wrote it', cogFixTitle: 'Your corrected text',
+    cogFixHelp: 'Kept beside hers; hers is never changed. When she reflects she is shown your corrected text.',
+    cogFixSave: 'Save correction', cogFixDrop: 'Remove correction',
+    cogReviewTitle: 'Your review', cogReviewSave: 'Save review', cogReflect: 'Let her reflect',
+    cogCount: (k, max) => `${k} / ${max} characters`,
+    cogReflTitle: 'Her reflection', cogNoRefl: 'Not yet.',
+    cogEpisode: (ep) => `In memory as episode ${ep}.`, cogRemoved: (why) => `Removed: ${why}`,
+    cogWhy: 'Why remove it? (kept in the log)', cogForget: 'Remove from memory',
+    cogSaved: 'Saved.', cogStarted: 'Started.', cogReflecting: 'She is reflecting — about two minutes.',
+    cogReportTitle: 'Report', cogFailed: 'That did not work.', cogNoRead: 'Could not read the COG-loop.',
     shelf: 'Documents', shelfTitle: 'Your documents',
     shelfHelp: (n) => `Documents you add are kept on this unit and become part of ${n || 'the companion'}’s library. Nothing is sent anywhere.`,
     shelfAdd: 'Add a document', shelfKinds: (mb) => `A PDF or a plain text file, up to ${mb} MB.`,
@@ -849,6 +923,26 @@ const T = {
                 characters: 'Bare bokstaver, tall, mellomrom, bindestrek og apostrof.',
                 no_letter: 'Et navn må ha minst én bokstav.',
                 same_as_companion: 'Forvalteren kan ikke ha følgesvennens eget navn.' },
+    cog: 'COG-løkke', cogTitle: 'COG-løkke',
+    cogHelp: (n) => `Økter med gåter, regnestykker, Lukas og tekstutdrag, som hver ender med et essay. Du leser og retter hvert essay og skriver vurderingen; så reflekterer ${n || 'følgesvennen'} over den, og refleksjonen lagres i minnet med COG-merket.`,
+    cogStart: 'Start', cogStop: 'Stopp etter denne økten', cogSessions: (k) => k === 1 ? '1 økt' : `${k} økter`,
+    cogIdle: 'Går ikke.', cogRunning: (what) => `Går: ${what}.`, cogStopping: 'Stopper etter denne økten.',
+    cogBusy: (why) => `Kan ikke starte nå: ${why}.`,
+    cogEssaysTitle: 'Essays', cogNoEssays: 'Ingen essays ennå.',
+    cogStates: { waiting: 'venter på din vurdering', reviewed: 'vurdert — refleksjonen er ikke lagret ennå',
+                 reflected: 'refleksjonen er i minnet', removed: 'refleksjonen er fjernet' },
+    cogWords: (w) => `${w} ord`, cogFixed: 'rettet', cogOpen: 'Åpne',
+    cogOneTitle: (n, theme) => `Essay ${n} — ${theme}`,
+    cogHersTitle: 'Slik hun skrev det', cogFixTitle: 'Din rettede tekst',
+    cogFixHelp: 'Lagres ved siden av hennes; hennes endres aldri. Når hun reflekterer, får hun se din rettede tekst.',
+    cogFixSave: 'Lagre rettelse', cogFixDrop: 'Fjern rettelse',
+    cogReviewTitle: 'Din vurdering', cogReviewSave: 'Lagre vurdering', cogReflect: 'La henne reflektere',
+    cogCount: (k, max) => `${k} / ${max} tegn`,
+    cogReflTitle: 'Hennes refleksjon', cogNoRefl: 'Ikke ennå.',
+    cogEpisode: (ep) => `I minnet som episode ${ep}.`, cogRemoved: (why) => `Fjernet: ${why}`,
+    cogWhy: 'Hvorfor fjerne den? (lagres i loggen)', cogForget: 'Fjern fra minnet',
+    cogSaved: 'Lagret.', cogStarted: 'Startet.', cogReflecting: 'Hun reflekterer — omtrent to minutter.',
+    cogReportTitle: 'Rapport', cogFailed: 'Det virket ikke.', cogNoRead: 'Kunne ikke lese COG-løkken.',
     shelf: 'Dokumenter', shelfTitle: 'Dine dokumenter',
     shelfHelp: (n) => `Dokumenter du legger til, blir liggende på denne enheten og blir en del av biblioteket til ${n || 'følgesvennen'}. Ingenting sendes noe sted.`,
     shelfAdd: 'Legg til et dokument', shelfKinds: (mb) => `En PDF eller en ren tekstfil, opptil ${mb} MB.`,
@@ -967,6 +1061,7 @@ function applyLanguage() {
   $('memoryLabel').textContent = s.memory;
   $('recordBtn').textContent = s.record;
   $('shelfBtn').textContent = s.shelf;
+  $('cogBtn').textContent = s.cog;
   $('trainBtn').textContent = s.train;
   $('offBtn').textContent = s.off;
   $('brakeBtn').textContent = s.brake;
@@ -1268,7 +1363,7 @@ document.addEventListener('keydown', (e) => {
 });
 // what a panel opens is shown alone
 [['memoryChip', 'rootPanel'], ['rings', 'rootPanel'], ['trainBtn', 'sparkPanel'],
- ['shelfBtn', 'sparkPanel'], ['recordBtn', 'seedPanel']].forEach(([b, p]) => {
+ ['shelfBtn', 'sparkPanel'], ['cogBtn', 'sparkPanel'], ['recordBtn', 'seedPanel']].forEach(([b, p]) => {
   $(b).addEventListener('click', () => { $(p).hidden = true; });
 });
 
@@ -1628,6 +1723,157 @@ $('shelfFile').onchange = () => {
   x.send(f);
 };
 
+// ---- the COG-loop (build log 74c) ------------------------------------------
+// Andreas, 13 Oct 2026: "Also I would like to trigger and review/correct the
+// essays." Her essays are set as text, never as markup.
+const COG_REVIEW_MAX = 1200;
+let cogTimer = null, cogN = null, cogData = null;
+
+async function cogPost(action, body) {
+  const r = await fetch('/aetherseed/cog/' + action, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  let d = {};
+  try { d = await r.json(); } catch {}
+  if (!r.ok) throw new Error(d.error || String(r.status));
+  return d;
+}
+function cogSay(id, text) { const e = $(id); e.textContent = text || ''; e.hidden = !text; }
+const pad3 = (n) => String(n).padStart(3, '0');
+
+async function loadCog() {
+  const s = t();
+  clearTimeout(cogTimer);
+  let d;
+  try { d = await (await fetch('/aetherseed/cog')).json(); }
+  catch { cogSay('cogMsg', s.cogNoRead); return; }
+  cogData = d;
+  $('cogState').textContent = d.running ? (d.stopping ? s.cogStopping : s.cogRunning(d.doing))
+    : (d.busy ? s.cogBusy(d.busy) : s.cogIdle);
+  $('cogStart').disabled = d.running || !!d.busy;
+  $('cogStop').disabled = !d.running || d.stopping;
+  const list = $('cogEssays');
+  list.replaceChildren();
+  if (!d.essays.length) list.append(el('p', 'state aside', s.cogNoEssays));
+  d.essays.slice().reverse().forEach((e) => {
+    const row = el('div', 'tmtool' + (e.n === cogN ? ' open' : ''));
+    const nm = el('span', 'nm', `${pad3(e.n)} · ${e.theme}`);
+    nm.append(el('small', null, [s.cogWords(e.words), e.corrected ? s.cogFixed : null,
+      s.cogStates[e.state] || e.state].filter(Boolean).join(' · ')));
+    const b = el('button', null, s.cogOpen);
+    b.type = 'button';
+    b.onclick = () => openCogEssay(e.n);
+    row.append(nm, b);
+    list.append(row);
+  });
+  $('cogReport').textContent = d.report || '';
+  if (cogN != null && !$('cogOne').hidden && !d.running) {
+    const st = (d.essays.find((e) => e.n === cogN) || {}).state;
+    if (st && st !== $('cogOne').dataset.state) openCogEssay(cogN, true);
+  }
+  if (!$('cog').hidden && d.running) cogTimer = setTimeout(loadCog, 5000);
+}
+
+function cogCount() {
+  const s = t(), k = $('cogReview').value.trim().replace(/\s+/g, ' ').length;
+  $('cogCount').textContent = s.cogCount(k, COG_REVIEW_MAX);
+  $('cogCount').classList.toggle('over', k > COG_REVIEW_MAX);
+}
+
+async function openCogEssay(n, keepMsg) {
+  const s = t();
+  let d;
+  try {
+    const r = await fetch('/aetherseed/cog/essay?n=' + n);
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+  } catch (e) { cogSay('cogMsg', e.message || s.cogNoRead); return; }
+  cogN = n;
+  const one = $('cogOne');
+  one.hidden = false;
+  one.dataset.state = d.state;
+  if (!keepMsg) cogSay('cogOneMsg', '');
+  $('cogOneTitle').textContent = s.cogOneTitle(pad3(n), d.theme);
+  $('cogOneState').textContent = s.cogStates[d.state] || d.state;
+  $('cogHers').textContent = d.essay;
+  $('cogFix').value = d.corrected || d.essay;
+  $('cogFixDrop').disabled = !d.corrected;
+  $('cogReview').value = d.review || '';
+  const reflected = d.state === 'reflected';
+  $('cogReview').disabled = reflected;
+  $('cogReviewSave').disabled = reflected;
+  $('cogReflect').disabled = d.state !== 'reviewed' || (cogData && (cogData.running || cogData.busy));
+  cogCount();
+  const r = d.reflection || d.removed;
+  $('cogRefl').textContent = r ? [r.text, d.reflection ? s.cogEpisode(r.episode)
+    : s.cogRemoved((r.removed || {}).why || '')].join('\n\n') : s.cogNoRefl;
+  $('cogForgetRow').hidden = !reflected;
+  $('cogWhy').value = '';
+  document.querySelectorAll('#cogEssays .tmtool').forEach((x) => x.classList.remove('open'));
+  loadCog();
+}
+
+async function cogDo(action, body, okText, msgId) {
+  const s = t();
+  cogSay(msgId, '');
+  try {
+    await cogPost(action, body);
+    cogSay(msgId, okText);
+    return true;
+  } catch (e) { cogSay(msgId, e.message || s.cogFailed); return false; }
+}
+
+$('cogBtn').onclick = () => {
+  if (!name) return;
+  const s = t();
+  $('cogTitle').textContent = s.cogTitle;
+  $('cogClose').textContent = s.close;
+  $('cogHelp').textContent = s.cogHelp(name);
+  $('cogStart').textContent = s.cogStart;
+  $('cogStop').textContent = s.cogStop;
+  $('cogEssaysTitle').textContent = s.cogEssaysTitle;
+  $('cogHersTitle').textContent = s.cogHersTitle;
+  $('cogFixTitle').textContent = s.cogFixTitle;
+  $('cogFixHelp').textContent = s.cogFixHelp;
+  $('cogFixSave').textContent = s.cogFixSave;
+  $('cogFixDrop').textContent = s.cogFixDrop;
+  $('cogReviewTitle').textContent = s.cogReviewTitle;
+  $('cogReviewSave').textContent = s.cogReviewSave;
+  $('cogReflect').textContent = s.cogReflect;
+  $('cogReflTitle').textContent = s.cogReflTitle;
+  $('cogWhy').placeholder = s.cogWhy;
+  $('cogForget').textContent = s.cogForget;
+  $('cogReportTitle').textContent = s.cogReportTitle;
+  const sel = $('cogN');
+  sel.replaceChildren();
+  [1, 2, 3, 4].forEach((k) => { const o = el('option', null, s.cogSessions(k)); o.value = k; sel.append(o); });
+  cogSay('cogMsg', '');
+  $('cogOne').hidden = true; cogN = null;
+  $('cog').hidden = false;
+  $('cogClose').focus();
+  loadCog();
+};
+$('cogClose').onclick = () => { $('cog').hidden = true; clearTimeout(cogTimer); };
+$('cogStart').onclick = async () => {
+  if (await cogDo('start', { sessions: +$('cogN').value }, t().cogStarted, 'cogMsg')) loadCog();
+};
+$('cogStop').onclick = async () => { if (await cogDo('stop', {}, '', 'cogMsg')) loadCog(); };
+$('cogReview').oninput = cogCount;
+$('cogFixSave').onclick = async () => {
+  if (await cogDo('correct', { n: cogN, text: $('cogFix').value }, t().cogSaved, 'cogOneMsg')) openCogEssay(cogN, true);
+};
+$('cogFixDrop').onclick = async () => {
+  if (await cogDo('correct', { n: cogN, text: '' }, t().cogSaved, 'cogOneMsg')) openCogEssay(cogN, true);
+};
+$('cogReviewSave').onclick = async () => {
+  if (await cogDo('review', { n: cogN, text: $('cogReview').value }, t().cogSaved, 'cogOneMsg')) openCogEssay(cogN, true);
+};
+$('cogReflect').onclick = async () => {
+  if (await cogDo('reflect', { n: cogN }, t().cogReflecting, 'cogOneMsg')) loadCog();
+};
+$('cogForget').onclick = async () => {
+  if (await cogDo('forget', { n: cogN, why: $('cogWhy').value }, t().cogSaved, 'cogOneMsg')) openCogEssay(cogN, true);
+};
+
 // ---- the ring tree ----------------------------------------------------------
 // Everything shown here is set as text, never as markup: the turns and the
 // model's sentence are things people and the model said.
@@ -1934,6 +2180,7 @@ $('treeClose').onclick = () => { $('tree').hidden = true; };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('tree').hidden) $('tree').hidden = true;
   if (e.key === 'Escape' && !$('shelf').hidden) $('shelfClose').click();
+  if (e.key === 'Escape' && !$('cog').hidden) $('cogClose').click();
   if (e.key === 'Escape' && !$('training').hidden) $('trainClose').click();
 });
 

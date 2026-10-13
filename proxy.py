@@ -476,6 +476,55 @@ def remove_cog_reflection(req, token):
     return 200, {"removed": ep}
 
 
+_COG_CONSOLE = None
+
+
+def cog_console():
+    """The COG panel's side of the proxy (build log 74c; logic/cog_console.py)."""
+    global _COG_CONSOLE
+    if _COG_CONSOLE is None:
+        from logic.cog_console import CogConsole
+
+        def busy():
+            if BRAKE.is_set():
+                return "the steward's brake is on"
+            try:
+                if training_loop().status().get("status") == "running":
+                    return "a training run is on"
+            except Exception:
+                pass
+            return None
+        _COG_CONSOLE = CogConsole(MODEL, busy, remove_cog_reflection, _COG_TOKEN)
+    return _COG_CONSOLE
+
+
+def cog_console_post(path, req):
+    """(status, body) for POST /aetherseed/cog/<action> from the console."""
+    from logic.cog_console import ConsoleError
+    if not isinstance(req, dict):
+        return 400, {"error": "a JSON object", "code": "body"}
+    c = cog_console()
+    n = req.get("n")
+    try:
+        if path == "/aetherseed/cog/start":
+            return 200, c.start(req.get("sessions"))
+        if path == "/aetherseed/cog/stop":
+            return 200, c.stop()
+        if not isinstance(n, int):
+            return 400, {"error": "an essay number", "code": "n"}
+        if path == "/aetherseed/cog/review":
+            return 200, c.review(n, req.get("text"))
+        if path == "/aetherseed/cog/correct":
+            return 200, c.correct(n, req.get("text"))
+        if path == "/aetherseed/cog/reflect":
+            return 200, c.reflect(n)
+        if path == "/aetherseed/cog/forget":
+            return 200, c.forget(n, req.get("why"))
+    except ConsoleError as e:
+        return e.status, {"error": e.message, "code": e.code}
+    return 404, {"error": "no such action", "code": "action"}
+
+
 class _Gated:
     """What execute_intent() needs of AetherSpark: its gate."""
 
@@ -2352,6 +2401,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/aetherseed/training":
             self._send_json(training_loop().status())
             return
+        if self.path == "/aetherseed/cog":
+            self._send_json(cog_console().status())
+            return
+        if self.path.startswith("/aetherseed/cog/essay?"):
+            from urllib.parse import urlparse, parse_qs
+            from logic.cog_console import ConsoleError
+            try:
+                n = int((parse_qs(urlparse(self.path).query).get("n") or ["x"])[0])
+                self._send_json(cog_console().essay(n))
+            except ValueError:
+                self._send_json({"error": "an essay number", "code": "n"}, status=400)
+            except ConsoleError as e:
+                self._send_json({"error": e.message, "code": e.code}, status=e.status)
+            return
         if self.path == "/aetherseed/brake":
             self._send_json({"brake": brake_state()})
             return
@@ -2665,6 +2728,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
             out["done"] = result
             self._send_json(out)
+            return
+
+        if self.path in ("/aetherseed/cog/start", "/aetherseed/cog/stop", "/aetherseed/cog/review",
+                         "/aetherseed/cog/correct", "/aetherseed/cog/reflect",
+                         "/aetherseed/cog/forget"):
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = None
+            status, out = cog_console_post(self.path, req)
+            self._send_json(out, status=status)
             return
 
         if self.path == "/aetherseed/cog/remove":

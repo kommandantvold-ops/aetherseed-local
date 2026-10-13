@@ -139,6 +139,55 @@ class TheEndpoint(_Proxy):
             proxy.COG_TOKEN_FILE = saved
 
 
+class ThePanelRoutes(_Proxy):
+    """74c: the console's COG routes reach logic/cog_console.py."""
+
+    def setUp(self):
+        super().setUp()
+        from logic import cog_console
+        from training import cog_loop
+        self._base, self._console = cog_console.BASE, proxy._COG_CONSOLE
+        cog_console.BASE = os.path.join(self.tmp, "cog")
+        proxy._COG_CONSOLE = None
+        c = proxy.cog_console()
+        cog_loop.write_essay(os.path.join(c.dir, "essays"), 1, "m", "ecc.vanity", "Ecc 1:2",
+                             "vanity", "All is vanity.")
+
+    def tearDown(self):
+        from logic import cog_console
+        cog_console.BASE, proxy._COG_CONSOLE = self._base, self._console
+        super().tearDown()
+
+    def get(self, path):
+        with urllib.request.urlopen(self.url + path, timeout=10) as r:
+            return json.loads(r.read())
+
+    def post(self, path, body):
+        req = urllib.request.Request(self.url + path, data=json.dumps(body).encode(),
+                                     method="POST", headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_status_essay_review(self):
+        st = self.get("/aetherseed/cog")
+        self.assertEqual([e["n"] for e in st["essays"]], [1])
+        self.assertEqual(self.post("/aetherseed/cog/review", {"n": 1, "text": "Good."})[0], 200)
+        self.assertEqual(self.get("/aetherseed/cog/essay?n=1")["review"], "Good.")
+        self.assertEqual(self.post("/aetherseed/cog/review", {"text": "x"})[0], 400)
+        self.assertEqual(self.post("/aetherseed/cog/forget", {"n": 1, "why": "x"})[0], 404)
+
+    def test_nothing_starts_with_the_brake_on(self):
+        proxy.BRAKE.set()
+        try:
+            status, out = self.post("/aetherseed/cog/start", {"sessions": 1})
+        finally:
+            proxy.BRAKE.clear()
+        self.assertEqual((status, out["code"]), (409, "unit_busy"))
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()
