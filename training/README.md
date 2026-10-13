@@ -236,3 +236,33 @@ differently, and the ones still wrong, by name. A key is repaired between
 builds; without this, the repair is counted as her progress. Lyra's first
 two runs: 88.3 % then, 89.6 % now, 95.8 % now-shown, on the 1093 answers
 that this build still asks her.
+
+# The COG-loop — does she get better from her own notes?
+
+Andreas, 13 Oct 2026: *"Next we want a COG-loop program to test self-learning
+and reasoning and reflection of the SLMs."* He chose: self-learning measured
+**across sessions**; checkable reasoning, Luke and multi-step problems; a
+separate harness, on both units (build log 73).
+
+```bash
+sudo bash /opt/aetherseed/training/run-cog-loop.sh 1      # sessions; ~30 min each on Lyra
+sudo -u aetherseed /opt/aetherseed/venv/bin/python3 /opt/aetherseed/training/cog_loop.py \
+     --report /var/lib/aetherseed/cog/<model>
+```
+
+Each session asks fresh items twice: **A** with the notes she wrote for herself
+after earlier sessions, **B** without (the control). Then she checks her own A
+answers with no hint of which were wrong (reflection), and for what is still
+wrong she is shown the right answer and writes one sentence for next time. That
+sentence goes into her notebook word for word. Learning across sessions shows as
+A − B rising from session to session; the report gives an exact McNemar p over
+all sessions so chance can be told from a real difference.
+
+- It talks to the model server directly. **Her memory, trust and training runs
+  are never written to.** The notebook is the harness's own file,
+  `/var/lib/aetherseed/cog/<model>/notebook.json`, one per model.
+- Every prompt and reply is kept in `sessions/NNN.jsonl`.
+- It will not start during a training run or with the brake on, and stops at the
+  next model call if either comes on.
+- Luke here measures the model plus its notebook only: what the training loop
+  puts in her memory is not in these prompts.
