@@ -668,6 +668,21 @@ FILE_EVIDENCE = ("file_read", "summarize", "file_search")
 # build log 68): llama3.2:3b on Lyra and the pilots, llama3.2:1b on a unit on
 # HailoRT 5.4.0. A name without a measured ceiling stops the proxy here.
 MODEL = served.served_model()
+
+# AetherRoot's memory budget (DEFAULT_CONFIG["max_context_chars"]) was sized
+# for llama3.2:3b's 864-token ceiling ("1500 did not fit the 864-token
+# prefill ceiling" - aetherroot.py). A model with a larger measured ceiling
+# (build log 76, Andreas: "do the numbers for qwen3 and propose fixes" ->
+# "the easy fix first") has room for proportionally more retrieved memory
+# without enforce_budget ever needing to trim it back out. Scaled off the
+# same 864-token baseline so llama3.2:3b's own value is unchanged (800 * 864
+# / 864 == 800); only a model whose ceiling actually differs gets a different
+# budget. enforce_budget's token-exact trimming is still the real backstop -
+# this just stops a bigger-ceilinged model from throwing away headroom it
+# already has before that backstop is ever reached.
+_ceiling = MODELS.get(MODEL, {}).get("ceiling")
+if _ceiling:
+    root.config["max_context_chars"] = int(800 * _ceiling / 864)
 _OWN_WORDS_LOCK = threading.Lock()
 
 
