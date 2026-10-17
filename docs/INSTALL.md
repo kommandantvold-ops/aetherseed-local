@@ -406,8 +406,36 @@ sudo /opt/aetherseed/tools/hotspot.sh off       # takes it down and removes it
 ```
 
 `on` undoes one line of step 2: `wpa_supplicant` is enabled again (the access
-point needs it). Whoever holds the passkey is at the console — it is the
-steward's, like the screen.
+point needs it). Until step 80 whoever held the passkey was at the console as
+the steward; now it makes a phone a guest, and the steward signs in (below).
+
+**Signing in as the steward from a phone (step 80).** Andreas, 18 Oct 2026:
+the steward signs in from a phone with his name and the Wi-Fi passkey; a phone
+that has not signed in is a guest. A guest can talk with her, and what it says
+is remembered as a guest's (speaker "Guest"); her panels, the brake and
+quantum rest are the steward's. The unit's own screen is the steward without
+signing in. A sign-in lasts 12 hours on that phone, or until the console
+restarts. Five wrong tries from a phone within a quarter of an hour shut that
+phone out for up to 15 minutes; twenty from all phones within an hour shut
+every phone out for up to an hour (the unit's own screen never).
+
+`hotspot.sh on` keeps a hash of the passkey for this in
+`/etc/aetherseed/steward.key` (never the passkey). A unit whose Wi-Fi was set
+up before step 80 gets it from its network profile:
+
+```bash
+sudo install -o root -g root -m 644 gui/signin.py        /opt/aetherseed/gui/signin.py
+sudo install -o root -g root -m 644 tools/steward_key.py /opt/aetherseed/tools/steward_key.py
+sudo /usr/bin/python3 /opt/aetherseed/tools/steward_key.py wifi
+/usr/bin/python3 /opt/aetherseed/tools/steward_key.py status
+```
+
+The name is the one under AetherSeed, *"Its steward is called"*; with none
+set, no phone can sign in. **What it does not stop:** whoever was given the
+Wi-Fi holds its passkey, and the steward's name is no secret, so a guest who
+wants to can sign in as the steward. A passkey of the steward's own closes
+that: `sudo /usr/bin/python3 /opt/aetherseed/tools/steward_key.py own`
+(asked for twice, without echo). `hotspot.sh on` does not replace it.
 
 **A unit set up under step 54** (Stella, Xena) gets the rule without its
 passkey being typed again: install `tools/hotspot.sh` and
