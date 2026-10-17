@@ -669,20 +669,26 @@ FILE_EVIDENCE = ("file_read", "summarize", "file_search")
 # HailoRT 5.4.0. A name without a measured ceiling stops the proxy here.
 MODEL = served.served_model()
 
-# AetherRoot's memory budget (DEFAULT_CONFIG["max_context_chars"]) was sized
-# for llama3.2:3b's 864-token ceiling ("1500 did not fit the 864-token
-# prefill ceiling" - aetherroot.py). A model with a larger measured ceiling
-# (build log 76, Andreas: "do the numbers for qwen3 and propose fixes" ->
-# "the easy fix first") has room for proportionally more retrieved memory
-# without enforce_budget ever needing to trim it back out. Scaled off the
-# same 864-token baseline so llama3.2:3b's own value is unchanged (800 * 864
-# / 864 == 800); only a model whose ceiling actually differs gets a different
-# budget. enforce_budget's token-exact trimming is still the real backstop -
-# this just stops a bigger-ceilinged model from throwing away headroom it
-# already has before that backstop is ever reached.
+# AetherRoot's memory budget (max_context_chars, 800) was sized for
+# llama3.2:3b's 864-token ceiling ("1500 did not fit the 864-token prefill
+# ceiling" - aetherroot.py). A model with a larger measured ceiling has room
+# for proportionally more retrieved memory (build log 76, Andreas: "do the
+# numbers for qwen3 and propose fixes" -> "the easy fix first"): qwen3:1.7b,
+# ceiling 1536, gets 1422 characters. The unit's own value is what is scaled -
+# the config file's value still wins (build log 71), read as the budget at the
+# 3B's ceiling - so the 3B is unchanged, and the file is never written with
+# the scaled figure (it is written only at a unit's first boot), so it cannot
+# compound. enforce_budget's token-exact trimming is still the backstop.
+BASELINE_CEILING = 864
 _ceiling = MODELS.get(MODEL, {}).get("ceiling")
-if _ceiling:
-    root.config["max_context_chars"] = int(800 * _ceiling / 864)
+# A stand-in with no config (the tests' import stub of AetherRoot) is left alone.
+if (_ceiling and _ceiling != BASELINE_CEILING
+        and isinstance(getattr(root, "config", None), dict)):
+    _base_chars = root.config["max_context_chars"]
+    root.config["max_context_chars"] = int(_base_chars * _ceiling / BASELINE_CEILING)
+    print("[proxy] memory budget %d characters for %s (ceiling %d; %d at the 3B's %d)"
+          % (root.config["max_context_chars"], MODEL, _ceiling, _base_chars,
+             BASELINE_CEILING), flush=True)
 _OWN_WORDS_LOCK = threading.Lock()
 
 

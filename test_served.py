@@ -145,5 +145,44 @@ class TheStatusSaysTheServedCeiling(unittest.TestCase):
         self.assertNotIn('"prompt_ceiling": 864', src)
 
 
+class TheMemoryBudgetFollowsTheCeiling(unittest.TestCase):
+    """Build log 76 (Andreas, after DaVinci's first days on Qwen3: she asks for
+    context instead of finding it; "the easy fix first"). The real proxy,
+    imported in a throwaway home with the model set: what AetherRoot will
+    retrieve up to, in characters."""
+
+    def budget(self, model, on_file=None):
+        import json
+        import subprocess
+        import sys
+        home = tempfile.mkdtemp(prefix="budget-")
+        if on_file is not None:
+            d = os.path.join(home, ".aetherseed", "aetherroot")
+            os.makedirs(d)
+            with open(os.path.join(d, "config.json"), "w") as f:
+                json.dump({"max_context_chars": on_file}, f)
+        env = dict(os.environ, HOME=home, AETHERSEED_MODEL=model,
+                   AETHERSEED_MODEL_FILE="/nonexistent")
+        here = os.path.dirname(os.path.abspath(__file__))
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "import proxy; print('BUDGET', proxy.root.config['max_context_chars'])"],
+            cwd=here, env=env, capture_output=True, text=True, timeout=120)
+        line = [l for l in out.stdout.splitlines() if l.startswith("BUDGET ")]
+        self.assertTrue(line, out.stdout[-500:] + out.stderr[-1500:])
+        return int(line[-1].split()[1])
+
+    def test_the_3b_keeps_800(self):
+        self.assertEqual(self.budget("llama3.2:3b"), 800)
+
+    def test_qwen3_gets_its_share_of_1536(self):
+        self.assertEqual(self.budget("qwen3:1.7b"), int(800 * 1536 / 864))   # 1422
+
+    def test_the_units_own_value_is_what_is_scaled(self):
+        # The file's value still wins (build log 71); on Qwen3 it is scaled.
+        self.assertEqual(self.budget("llama3.2:3b", on_file=600), 600)
+        self.assertEqual(self.budget("qwen3:1.7b", on_file=600), int(600 * 1536 / 864))
+
+
 if __name__ == "__main__":
     unittest.main()
