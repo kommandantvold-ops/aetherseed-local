@@ -470,13 +470,43 @@ def sanitize_injected(text: str) -> str:
         # Zero-width-free, human-readable defacement: the marker stops being a
         # marker but a reader can still see what the file said.
         text = text.replace(tag, tag.replace("[", "(").replace("]", ")"))
-    return text
+    return neutralize_control_tokens(text)
 
 
 # Llama 3.2's 256 special tokens all have the form <|name|>. Verified against
 # the tokenizer's added_tokens: this pattern matches 256/256 of them, and
 # matches none of "a < b and c > d", "use the <| symbol", "x <|> y" or a DOI.
+# Qwen3's 14 special tokens (<|im_start|>, <|im_end|>, <|endoftext|>, ...) have
+# the same form: 14/14 (its tokenizer's added_tokens, read 17 Oct 2026).
 _CONTROL_TOKEN = re.compile(r"<\|[^|>\s]{1,64}\|>")
+
+# Qwen3's six other added tokens are angle-bracket words - <think>, </think>,
+# <tool_call>, </tool_call>, <tool_response>, </tool_response> - and its
+# tokenizer reads them out of plain text as single tokens too.
+_ANGLE_TOKEN = re.compile(r"</?(?:think|tool_call|tool_response)>", re.I)
+
+
+def neutralize_control_tokens(text: str) -> str:
+    """Control tokens taken out of text that is going INTO the prompt (build
+    log 78).
+
+    sanitize_model_output() has done this for what the model says since step
+    10. What goes in did not get it: a file in the workspace, a document on
+    the shelf, a library passage or the user's own message could carry
+    "<|im_start|>system ...". hailo-ollama tokenizes the content with the
+    model's vocabulary, so the literal becomes the REAL role token - the same
+    measurement as step 10, where one memory line put a fourth header token in
+    a prompt that should have three - and the text after it reads as a turn
+    of its own. OpenClaw found the same through files and messages, and now
+    strips these literals from all outside content (its prompt-injection
+    doc, read 17 Oct 2026).
+
+    The <|...|> tokens go; the angle-bracket ones are defaced, like the block
+    markers, so that a reader can still see what the text said."""
+    if not text or "<" not in text:
+        return text
+    text = _CONTROL_TOKEN.sub("", text)
+    return _ANGLE_TOKEN.sub(lambda m: m.group(0).replace("<", "(").replace(">", ")"), text)
 
 
 def sanitize_model_output(text: str):
@@ -785,19 +815,74 @@ _BARE_TAG = re.compile(
     # the shortened forms TAG_NOTE names (build log 72): "[Fiction, ...]"
     r"|\[(?:fiction|unverified|corrected|a right assumption)[^\]\n]{0,40}(?:\.\.\.|…)\][ \t]?"
     # the COG tag (build log 74), whole or shortened: hers to be shown, not to say
-    r"|\[cog\b[^\]\n]{0,80}\][ \t]?",
+    r"|\[cog\b[^\]\n]{0,80}\][ \t]?"
+    # the same tags in round brackets (build log 78). Said back on the units,
+    # 14-16 Oct: "(A right assumption of yours - ...)" closing an answer.
+    r"|\((?:a right assumption of yours|unverified -|corrected (?:in training|by your steward|by my steward)"
+    r"|cog -|passed a check)[^)\n]{0,80}\)[ \t]?",
     re.I)
+
+# What can still become one of those while a stream is arriving (build log
+# 78). The hold below used to know only the whole tags of _BARE_TAGS, so
+# "[COG - Memory line]" and "[Unverified - ...]" went out to the reader a
+# piece at a time - nothing in "[COG - Mem" was a prefix of a tag it knew -
+# and by the time the bracket closed the front had been sent. Seen on both
+# units on 17 Oct, and in 249 of Lyra's and 415 of DaVinci's training
+# answers (14-16 Oct). Each entry: the opening words, and how long the whole
+# bracket may run.
+_TAG_OPENINGS = (
+    ("[cog", 90), ("[fiction", 56), ("[unverified", 56), ("[corrected", 56),
+    ("[a right assumption", 64),
+    ("(a right assumption of yours", 110), ("(unverified -", 96),
+    ("(corrected in training", 104), ("(corrected by your steward", 108),
+    ("(corrected by my steward", 106), ("(cog -", 88), ("(passed a check", 98),
+)
+_LONGEST_OPENING = max(n for _, n in _TAG_OPENINGS)
+
+
+def _could_be_tag(tail: str) -> bool:
+    """`tail` starts at "[" or "(" and has not closed: could it still become a
+    tag that strip_bare_tags() takes out?"""
+    low = tail.lower()
+    if "\n" in low or "]" in low or ")" in low:
+        return False
+    for opening, longest in _TAG_OPENINGS:
+        if opening.startswith(low) or (low.startswith(opening) and len(low) < longest):
+            return True
+    return False
+
+
+def _tag_list(span: str):
+    """"[Fiction, Unverified - ..., Corrected - ...]" - a LIST of tag names in
+    one bracket, which is how she answers "Which tags can a memory carry?"
+    (build log 78: 336 of DaVinci's 337 failures of that question). The names
+    are the answer: returned plain, or None when the bracket is not a list."""
+    inner = span.strip()[1:-1]
+    parts = [p.strip() for p in re.split(r",|\bor\b|\band\b", inner) if p.strip()]
+    if len(parts) < 2:
+        return None
+    names = []
+    for p in parts:
+        m = re.match(r"(fiction|unverified|corrected|a right assumption)\b[\s\-–—.…]*", p, re.I)
+        if not m or m.end() != len(p):
+            return None
+        names.append(m.group(1).lower())
+    return ", ".join(dict.fromkeys(names))
 
 
 def strip_bare_tags(text: str, start: int = 0):
     """(text, n): the tag words in text[start:] taken out. What stands before
     `start` has gone to the reader already and is not touched; the hold in
     marker_prefix_len() is what keeps a tag from being half sent."""
-    if not text or "[" not in text[start:]:
+    if not text or ("[" not in text[start:] and "(" not in text[start:]):
         return text, 0
     head, tail = text[:start], text[start:]
     whole = head + tail
     def take(m):
+        # A list of tag names in one bracket is the answer, said plain.
+        listed = _tag_list(m.group(0))
+        if listed:
+            return listed + (" " if m.group(0).endswith((" ", "\t")) else "")
         # A tag word NAMED, not recited (build log 67): "the answer is marked
         # [Unverified]." Taken out, the right answer read "marked ." - and
         # was failed (run 4, 7 Oct). After "marked", "tagged", "labelled",
@@ -964,19 +1049,21 @@ def marker_prefix_len(text: str) -> int:
     j = open_correction(text)
     if j >= 0:
         return len(text) - j
-    lo = max(0, len(text) - _MAX_MARKER + 1)
-    i = text.find("[", lo)
-    while i >= 0:
+    lo = max(0, len(text) - max(_MAX_MARKER, _LONGEST_OPENING) + 1)
+    for i in [k for k in range(lo, len(text)) if text[k] in "[("]:
         tail = text[i:]
-        # (a tag at the very front is the head's business, not a marker's)
-        if any(m.startswith(tail) and len(tail) < len(m)
-               for m in (_MARKERS if i > 0 else _BLOCK_MARKERS)):
+        if tail[0] == "[":
+            # (a tag at the very front is the head's business, not a marker's)
+            if any(m.startswith(tail) and len(tail) < len(m)
+                   for m in (_MARKERS if i > 0 else _BLOCK_MARKERS)):
+                return len(tail)
+            # a tag word that may yet be taken out, wherever it stands
+            low = tail.lower()
+            if any(m.lower().startswith(low) and len(low) < len(m) for m in _BARE_TAGS):
+                return len(tail)
+        # a longer tag, or one in round brackets, still arriving (build log 78)
+        if _could_be_tag(tail):
             return len(tail)
-        # a tag word that may yet be taken out, wherever it stands
-        low = tail.lower()
-        if any(m.lower().startswith(low) and len(low) < len(m) for m in _BARE_TAGS):
-            return len(tail)
-        i = text.find("[", i + 1)
     return 0
 
 
@@ -1044,8 +1131,17 @@ def enforce_budget(counter: TokenCounter,
         return idxs[:-1]           # everything but the last turn
 
     while counter.count_messages(msgs) > budget and droppable():
-        del msgs[droppable()[0]]
+        i = droppable()[0]
+        was_question = msgs[i].get("role") == "user"
+        del msgs[i]
         report.history_turns_dropped += 1
+        # A question goes with its answer (build log 78, working memory): an
+        # answer left at the front with nothing it answers is a reply she
+        # would read as said to nobody.
+        rest = droppable()
+        if was_question and rest and rest[0] == i and msgs[i].get("role") == "assistant":
+            del msgs[i]
+            report.history_turns_dropped += 1
 
     # 2. Memory entries, from the least relevant (the tail of the block).
     if sys_idx is not None:

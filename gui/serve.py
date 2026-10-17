@@ -249,6 +249,49 @@ def _heartbeat():
             print("[gui] %ds  idle" % HEARTBEAT_SECONDS, flush=True)
 
 
+# ---- ONLY REQUESTS ADDRESSED TO THE UNIT (build log 78) ----------------------
+# A phone on the unit's own Wi-Fi often keeps its mobile data, and a web page it
+# opens over that data can still send requests to http://10.42.0.1:2077. Two
+# ways in, both found in this year's personal agents (OpenClaw CVE-2026-25253,
+# Hermes Agent CVE-2026-53869, read 17 Oct 2026):
+#   - a CROSS-SITE request: the page posts to the console - a chat turn, an
+#     approval, an upload - and the console cannot tell it from its own page.
+#     The browser says where it came from in the Origin header;
+#   - DNS REBINDING: a name the page controls is made to point at the unit, so
+#     the browser counts the console as the page's own site and lets it read
+#     the answers too. The Host header then carries that name, not the unit's.
+# So: the Host must name the unit - localhost, its loopback address, or the
+# address the request came in on - and a request that changes something and
+# says where it came from must come from the console's own page. A request
+# that says nothing (curl, the unit's own tools) is judged by its Host alone.
+_LOCAL_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+EXTRA_HOSTS = frozenset(h.strip().lower() for h in
+                        os.environ.get("AETHERSEED_CONSOLE_HOSTS", "").split(",") if h.strip())
+
+
+def _host_name(value: str) -> str:
+    """The name in a Host header, lower-case, without its port."""
+    v = (value or "").strip().lower()
+    if v.startswith("["):                      # [::1]:2077
+        return v[1:v.index("]")] if "]" in v else v
+    return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+
+
+def addressed_here(host, origin, method, here, own_screen) -> bool:
+    """(build log 78) Is this request addressed to the unit itself and, if it
+    changes something and a browser says where it comes from, from its page?"""
+    if host is None:
+        return own_screen                       # no Host at all: the unit's own only
+    name = _host_name(host)
+    if name not in _LOCAL_NAMES | EXTRA_HOSTS | {(here or "").lower()}:
+        return False
+    if method in ("GET", "HEAD") or origin is None:
+        return True
+    if origin.strip().lower() in ("null", ""):
+        return False
+    return origin.strip().lower() == "http://" + host.strip().lower()
+
+
 class Console(http.server.SimpleHTTPRequestHandler):
 
     def __init__(self, *a, **kw):
@@ -256,6 +299,23 @@ class Console(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, *a):
         pass
+
+    def _refused_if_not_from_here(self) -> bool:
+        """True (and answered 403) when the request is not addressed to the unit."""
+        try:
+            here = self.connection.getsockname()[0]
+        except (OSError, AttributeError, IndexError):
+            here = ""
+        if addressed_here(self.headers.get("Host"), self.headers.get("Origin"),
+                          self.command, here, self._own_screen()):
+            return False
+        _tally("refused")
+        print("[gui] refused a %s %s: Host %r, Origin %r - not addressed to this unit"
+              % (self.command, self.path.split("?", 1)[0], self.headers.get("Host"),
+                 self.headers.get("Origin")), flush=True)
+        self._json(403, {"error": "This console answers only its own page on this unit.",
+                         "code": "not_from_here"})
+        return True
 
     def end_headers(self):
         # The page loads nothing from anywhere, and runs only its own script.
@@ -308,6 +368,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
             ).encode())
 
     def do_GET(self):
+        if self._refused_if_not_from_here():
+            return
         if self.path.split("?", 1)[0] in PROXIED_GET_QUERY:
             _tally("memories" if self.path.startswith("/aetherseed/memories") else "cog")
             self._relay("GET")
@@ -493,6 +555,8 @@ class Console(http.server.SimpleHTTPRequestHandler):
                     headers={"Content-Type": UPLOAD_TYPE, "X-Filename": name})
 
     def do_POST(self):
+        if self._refused_if_not_from_here():
+            return
         if self.path == SHUTDOWN_PATH:
             self._shutdown()
             return

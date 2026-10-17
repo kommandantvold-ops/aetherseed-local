@@ -72,6 +72,7 @@ from logic import trust_control
 from logic import approvals
 from logic import prompts
 from logic.attribution import check as steward_check
+from logic.working_memory import WorkingMemory, as_messages
 from logic.prompt_builder import DATA_NOTE
 from logic.prompt_builder import FICTION_NOTE
 from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected, MODELS,
@@ -79,6 +80,7 @@ from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected,
                                 ends_sentence, cut_at_scaffold_marker,
                                 strip_leading_artefacts, opening_may_be_artefact,
                                 marker_prefix_len, strip_bare_tags, opening_hold, unwrap_corrections,
+                                neutralize_control_tokens,
                                 PromptTooLarge, TokenizerUnavailable)
 from logic.provenance import (detect_mode, resolve_mode, is_record_question,
                              summarise_record, FICTION, UNVERIFIED, TAG_NOTE, COG)
@@ -104,6 +106,8 @@ def token_counter(model=None):
 # ============================================================
 
 root = AetherRoot()
+# The last exchanges of the conversation, in this process only (build log 78).
+WORKING = WorkingMemory()
 trust = TrustEvolution()
 trust_level = trust.get_trust_level_name()
 spark = AetherSpark({
@@ -923,6 +927,12 @@ def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
     """
     if BRAKE.is_set():
         raise Braked()                       # no model call while the brake is on
+    # No control token reaches the model inside a message's content, whatever
+    # put it there: the user, a file, a document, a passage, a memory (build
+    # log 78; logic/token_budget.neutralize_control_tokens). On the exit, so
+    # that the next path someone adds cannot miss it.
+    messages = [dict(m, content=neutralize_control_tokens(m["content"]))
+                if isinstance(m.get("content"), str) else m for m in messages]
     messages, budget = enforce_budget(token_counter(model), messages)
     if budget.trimmed:
         print(f"[token-budget] {budget.summary()}", flush=True)
@@ -1411,6 +1421,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/x-ndjson")
         self.end_headers()
         self.wfile.write(raw)
+        self._wm_note(text)                 # the unit's answer is part of it too
+
+    def _wm_note(self, reply: str):
+        """This turn's exchange into working memory, once (build log 78)."""
+        turn = getattr(self, "_wm_turn", None)
+        self._wm_turn = None
+        if turn and reply:
+            WORKING.add(turn[0], turn[1], reply)
 
     # ---- THE LIBRARY (build log 57) --------------------------------------
     # The last passage shown, so that "more" can walk on. In memory only; one
@@ -1720,6 +1738,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _proxy_chat_augmented(self, body: bytes):
         prompts.forget()                    # this turn's prompt, and no other (72)
+        self._wm_turn = None                # this turn's exchange, and no other (78)
         lesson = self._lesson(body)
         if lesson is None:
             return self._chat_turn(body)
@@ -1803,6 +1822,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # question, and earns nothing (trust_evolution.refusal_unpaid, step 46).
         # Declared, never verified; it can only withhold trust, never add it.
         reading = data.get("reading") is True
+
+        # ---- WORKING MEMORY (build log 78; logic/working_memory.py) ----
+        # A conversation's last exchange goes with its next turn. Only for the
+        # console's shape - one user message, no history of the caller's own -
+        # and never for homework or a reading: the loop's questions stand
+        # alone, and a verse is not a conversation.
+        if (not lesson and not reading
+                and sum(1 for m in messages if m.get("role") != "system") == 1):
+            self._wm_turn = (speaker, user_msg)
 
         # ---- THE RECORD ----
         # Asked about its own failures, the node answers FROM THE FILE and the
@@ -2087,6 +2115,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not has_system:
             messages.insert(0, {"role": "system", "content": system_prompt})
 
+        # The conversation so far (build log 78): the last exchanges of this
+        # speaker, as the messages they were, in front of this turn. Not with
+        # a file read for the question - the file is the evidence (build log
+        # 70), as it is for her long-term memory.
+        wm_shown = 0
+        if getattr(self, "_wm_turn", None) and not file_evidence:
+            history = as_messages(WORKING.recent(speaker))
+            if history:
+                messages[-1:-1] = history
+                wm_shown = len(history) // 2
+
         data["messages"] = messages
 
         # Forward to hailo-ollama
@@ -2116,6 +2155,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                           f"sent; read after the turn as not shown"
                           + (f"; notes left out with them: {', '.join(gone)}" if gone else ""),
                           flush=True)
+            if wm_shown:
+                # What the speaker said a moment ago is evidence for the
+                # answer, as a memory line of it would be; what she said is
+                # not (build log 78). Only what the budget let through.
+                said = [m["content"] for m in messages[:-1] if m.get("role") == "user"]
+                if said:
+                    trusted_context = "\n".join(([trusted_context] if trusted_context else [])
+                                                + said)
+                print(f"[working-memory] {len(said)} of {wm_shown} earlier exchange(s) "
+                      f"of this conversation sent with the turn", flush=True)
             raw_response, ai_content = call_hailo_chat(model, messages, emit=stream)
         except Braked as e:
             self._answer_braked(model, stream=stream, user_msg=user_msg, partial=e.partial,
@@ -2357,6 +2406,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             else:
                 print("[provenance] asked to invent and declined - "
                       "recorded, not remembered", flush=True)
+            self._wm_note(ai_content)       # the conversation goes on (78)
 
             if stored_mode != "factual":
                 because = ("credits the steward with something not shown"
