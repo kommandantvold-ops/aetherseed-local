@@ -200,6 +200,18 @@ class WorkingMemoryThroughTheProxy(_Proxy):
         self.assertEqual(self.sent()[2]["content"], "Lovely plan.")
         self.assertEqual(self.sent()[3]["content"], "And what day is that happening?")
 
+    def test_three_back_with_an_unrelated_turn_between(self):
+        # 78a: the four turns of 77d, tried on copies of Lyra - with two
+        # exchanges the turn that said "Saturday" fell out behind the coffee
+        # question, and she answered "the 10th day".
+        self.ask("I'm planting a cherry tree by the north wall on Saturday.")
+        self.ask("What is a good way to keep coffee warm for longer?")
+        self.ask("Which wall did I say the tree would go by?")
+        self.ask("And what day is that happening?")
+        users = [m["content"] for m in self.sent() if m["role"] == "user"]
+        self.assertEqual(len(users), 4)
+        self.assertIn("on Saturday", users[0])
+
     def test_the_first_turn_goes_alone(self):
         self.ask("Hello.")
         self.assertEqual([m["role"] for m in self.sent()], ["system", "user"])
@@ -281,3 +293,20 @@ class TheConsoleAnswersOnlyItsOwnPage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- 79
+class GenesisForTheShelf(unittest.TestCase):
+    """Build log 79: the document put on Lyra's shelf, 18 Oct 2026, is made
+    from the repository's own copy of the verses, unchanged."""
+
+    def test_the_document_is_the_one_on_the_shelf(self):
+        import hashlib
+        sys.path.insert(0, os.path.join(HERE, "tools", "texts"))
+        import shelf_md
+        with open(os.path.join(HERE, "tools", "texts", "genesis.web.jsonl"), encoding="utf-8") as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+        text = shelf_md.shelf_md(rows, "Genesis")
+        self.assertEqual(sum(1 for line in text.splitlines() if line[:1].isdigit()), 1533)
+        self.assertEqual(text.count("\n## Genesis "), 50)
+        self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest()[:8], "ba09f7d0")

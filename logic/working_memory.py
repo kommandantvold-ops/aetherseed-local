@@ -17,7 +17,7 @@ user/assistant messages - OpenClaw, Hermes Agent, nanobot, NanoClaw, ZeroClaw,
 PicoClaw, Moltis - and only then adds long-term memory. This is that, at the
 size of this unit:
 
-  - at most MAX_EXCHANGES exchanges, each within WINDOW_S of the next turn;
+  - at most MAX_EXCHANGES (3) exchanges, each within WINDOW_S of the next turn;
   - the same speaker only: the steward's conversation is not shown to a guest;
   - kept in this process only, never written: a restart forgets it, and the
     long-term memory is where a turn is remembered;
@@ -34,7 +34,13 @@ import threading
 import time
 
 WINDOW_S = 600           # ten minutes between the last exchange and this turn
-MAX_EXCHANGES = 2
+# Three, not two (build log 78a). Tried on copies of Lyra, 18 Oct 2026, the
+# four turns of 77d: with two, "And what day is that happening?" lost "...on
+# Saturday" behind an unrelated turn in between (a library passage), and she
+# answered "the 10th day". With three, the turn it refers to is in front of
+# her. Three exchanges cost about 150-450 tokens of a 1536-token prompt, and
+# the budget guard drops the oldest first.
+MAX_EXCHANGES = 3
 REPLY_MAX = 400          # characters of a reply carried (a passage can be long)
 USER_MAX = 400
 
