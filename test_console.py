@@ -179,7 +179,9 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         gets = {g.rstrip("?") for g in gets}
         posts = {"/aetherseed/cog/" + a for a in re.findall(r"cogDo\('([a-z]+)'", page)}
         allowed = set(serve.PROXIED_GET) | set(serve.PROXIED_GET_QUERY) | set(serve.PROXIED_POST) \
-            | {serve.UPLOAD_PATH, serve.SHUTDOWN_PATH, serve.FIRST_START_PATH}
+            | {serve.UPLOAD_PATH, serve.SHUTDOWN_PATH, serve.FIRST_START_PATH,
+               # the console's own, not relayed: signing in and out (build log 80)
+               serve.SIGNIN_PATH, serve.SIGNOUT_PATH, serve.WHOAMI_PATH}
         self.assertTrue(gets and posts)
         self.assertEqual(gets - allowed - {"/aetherseed/cog/"}, set())
         self.assertEqual(posts - set(serve.PROXIED_POST), set())
@@ -220,7 +222,8 @@ class TestWhatTheConsoleRelays(unittest.TestCase):
         self.assertEqual(serve._counts["refused"], before["refused"] + 1)
         self.assertLessEqual(set(serve._counts),
                              {"page", "status", "record", "rings", "chat", "setup", "refused",
-                              "memories", "steward", "upload", "shelf", "training", "cog"},
+                              "memories", "steward", "upload", "shelf", "training", "cog",
+                              "signin"},
                              "the heartbeat keeps counts by route and nothing else")
 
 
@@ -328,32 +331,38 @@ class OnlyTheUnitsOwnScreenIsTheWitness(unittest.TestCase):
         d = tempfile.mkdtemp(prefix="seen-")
         saved, serve.CONSOLE_SEEN = serve.CONSOLE_SEEN, os.path.join(d, "console-seen")
         saved_rest, serve.SHUTDOWN_REQUEST = serve.SHUTDOWN_REQUEST, os.path.join(d, "shutdown-request")
+        saved_sessions, serve.SESSIONS = serve.SESSIONS, serve.signin.Sessions()
 
-        def req(host, method, path):
+        def req(host, method, path, body=b"{}", cookie=None):
+            h = {"Content-Type": "application/json"}
+            if cookie:
+                h["Cookie"] = cookie
             c = http.client.HTTPConnection(host, port, timeout=10)
-            c.request(method, path, body=b"{}" if method == "POST" else None,
-                      headers={"Content-Type": "application/json"})
+            c.request(method, path, body=body if method == "POST" else None, headers=h)
             r = c.getresponse(); r.read(); c.close()
             return r.status
         try:
             self.assertEqual(req(addr, "GET", "/"), 200)                    # the page
             self.assertEqual(req(addr, "GET", "/aetherseed/status"), 502)   # relayed
             self.assertFalse(os.path.exists(serve.CONSOLE_SEEN))
-            # quantum rest from a screen that is not the unit's own (63): an
-            # unconfirmed request files nothing, a confirmed one does
-            self.assertEqual(req(addr, "POST", "/aetherseed/shutdown"), 400)
+            # quantum rest from a screen that is not the unit's own (63) - since
+            # build log 80 only from a phone signed in as the steward: a guest's
+            # request files nothing, confirmed or not
+            self.assertEqual(req(addr, "POST", "/aetherseed/shutdown"), 401)
+            self.assertEqual(req(addr, "POST", "/aetherseed/shutdown", b'{"confirm": "shut down"}'), 401)
             self.assertFalse(os.path.exists(serve.SHUTDOWN_REQUEST))
-            c = http.client.HTTPConnection(addr, port, timeout=10)
-            c.request("POST", "/aetherseed/shutdown", body=b'{"confirm": "shut down"}',
-                      headers={"Content-Type": "application/json"})
-            r = c.getresponse(); r.read(); c.close()
-            self.assertEqual(r.status, 202)
+            cookie = "aetherseed_steward=" + serve.SESSIONS.open(addr)
+            self.assertEqual(req(addr, "POST", "/aetherseed/shutdown", cookie=cookie), 400)
+            self.assertFalse(os.path.exists(serve.SHUTDOWN_REQUEST))
+            self.assertEqual(req(addr, "POST", "/aetherseed/shutdown", b'{"confirm": "shut down"}',
+                                 cookie=cookie), 202)
             self.assertTrue(os.path.exists(serve.SHUTDOWN_REQUEST))
             self.assertEqual(req("127.0.0.1", "GET", "/aetherseed/status"), 502)
             self.assertTrue(os.path.exists(serve.CONSOLE_SEEN))
         finally:
             serve.CONSOLE_SEEN = saved
             serve.SHUTDOWN_REQUEST = saved_rest
+            serve.SESSIONS = saved_sessions
             srv.shutdown(); srv.server_close()
             shutil.rmtree(d, ignore_errors=True)
 

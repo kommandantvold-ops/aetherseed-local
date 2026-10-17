@@ -197,7 +197,13 @@ class AtTheConsole(unittest.TestCase):
             self.assertIn(needle, html)
         self.assertNotIn('type="date"', html,
                          "the browser's own date box writes the day and the month in an order nobody chose")
-        self.assertNotIn('type="password"', html,
+        # The passkey is CHOSEN here, so it is typed in the open: it must be
+        # read back to be written down. (Signing in with it later, on a phone
+        # with guests about, is another field, and that one is hidden - build
+        # log 80.)
+        import re
+        key_field = re.search(r'<input id="keyInput"[^>]*>', html).group(0)
+        self.assertNotIn('type="password"', key_field,
                          "the passkey is typed in the open: it must be read back to be written down")
 
 

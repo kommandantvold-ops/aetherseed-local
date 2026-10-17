@@ -43,7 +43,10 @@ class TheHeader(unittest.TestCase):
     def test_three_categories_the_brake_and_quantum_rest(self):
         h = self.header()
         ids = re.findall(r'<button[^>]*id="(\w+)"', h)
-        self.assertEqual(ids, ["catSeed", "catRoot", "catSpark", "brakeBtn", "offBtn"])
+        # Build log 80: a phone that has not signed in as the steward sees
+        # "Sign in" in place of the five, which are the steward's. The
+        # steward's header is still the five (sign-out is in AetherSeed).
+        self.assertEqual(ids, ["signInBtn", "catSeed", "catRoot", "catSpark", "brakeBtn", "offBtn"])
         self.assertIn('id="health"', h, "on device / unreachable stays in sight")
 
     def test_what_left_the_header_is_in_its_category(self):

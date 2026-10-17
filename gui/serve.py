@@ -20,19 +20,32 @@ shut anything down itself.
 A document for the steward's own shelf (build log 62) passes THROUGH this
 server and is never written by it: the upload is relayed to the proxy, which
 keeps it under its own state directory (logic/own_shelf.py).
+
+Who is the steward here (build log 80): the unit's own screen, and a phone
+that has signed in with the steward's name and the passkey (gui/signin.py).
+Any other phone is a guest: it may talk with her, and its turns are stored as
+a guest's; everything else this server relays or does is the steward's.
 """
 import base64
 import hashlib
+import hmac
 import http.server
 import json
+import math
 import os
 import re
+import secrets
 import socketserver
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+import signin  # noqa: E402  (gui/signin.py, beside this file)
 
 BIND = os.environ.get("AETHERSEED_GUI_BIND", "127.0.0.1")
 PORT = int(os.environ.get("AETHERSEED_GUI_PORT", "2077"))
@@ -124,8 +137,39 @@ def check_when(when):
 
 def check_passkey(key):
     """A WPA2 passkey: 8-63 printable ASCII characters (tools/hotspot.sh)."""
-    return (isinstance(key, str) and 8 <= len(key) <= 63
-            and all(32 <= ord(c) < 127 for c in key))
+    return signin.passkey_shape_ok(key)
+
+
+# ---- THE STEWARD, AND A GUEST (build log 80) ------------------------------------
+# Andreas, 18 Oct 2026: the steward signs in from a phone with "steward name +
+# passkey", the passkey being "The Wi-Fi passkey"; a chat from a phone that
+# has not signed in is remembered as "A guest". How, and what it does not
+# protect against: gui/signin.py.
+#
+# What a guest may use: the page, the unit's status (names and counts, no
+# words of anyone's), the model list, a chat turn and signing in. Everything
+# else this server relays or does is the steward's - her memory and records,
+# corrections, trust, approvals, training, the COG panel, documents, the
+# brake and quantum rest. Andreas, 11 Oct 2026, on the brake: "an authorized
+# person should always be able to pause or shut down a model mid-task".
+STEWARD_KEY = os.environ.get("AETHERSEED_STEWARD_KEY", "/etc/aetherseed/steward.key")
+SIGNIN_PATH = "/aetherseed/steward-signin"
+SIGNOUT_PATH = "/aetherseed/steward-signout"
+WHOAMI_PATH = "/aetherseed/whoami"
+OWN_SCREEN = frozenset({"127.0.0.1", "::1"})     # the unit's own screen: loopback
+OPEN_GET = frozenset({"/aetherseed/status", "/api/tags", FIRST_START_PATH, WHOAMI_PATH})
+# A guest's turn is stored under this name (logic/speaker.py GUEST).
+GUEST = "Guest"
+GUEST_CHAT_MAX = 64 * 1024
+SESSIONS = signin.Sessions()
+LOCKOUT = signin.Lockout()
+# A guest's conversation is told apart from another guest's by the address it
+# comes from, hashed with a secret of this process - so the working memory of
+# one phone is not shown to another (build log 78 keeps it per speaker, and
+# every guest is "Guest"). The id means nothing after a restart.
+_GUEST_SALT = secrets.token_bytes(16)
+
+
 # THE CONSOLE WAS SEEN. The page asks for /aetherseed/status every 15 seconds
 # for as long as it is loaded, so "the browser is showing the console" has a
 # cheap witness: this file's modification time, touched on every status poll.
@@ -217,7 +261,7 @@ CSP = None      # set in __main__, once index.html is known to exist
 HEARTBEAT_SECONDS = int(os.environ.get("AETHERSEED_GUI_HEARTBEAT", "300"))
 
 _counts = {"page": 0, "status": 0, "record": 0, "rings": 0, "chat": 0, "setup": 0,
-           "refused": 0, "upload": 0, "shelf": 0, "training": 0}
+           "refused": 0, "upload": 0, "shelf": 0, "training": 0, "signin": 0}
 _counts_lock = threading.Lock()
 
 
@@ -240,11 +284,12 @@ def _heartbeat():
                 _counts[k] = 0
         if sum(seen.values()):
             print("[gui] %ds  page=%d status=%d record=%d rings=%d chat=%d setup=%d "
-                  "refused=%d upload=%d shelf=%d training=%d"
+                  "refused=%d upload=%d shelf=%d training=%d signin=%d"
                   % (HEARTBEAT_SECONDS, seen["page"], seen["status"],
                      seen["record"], seen["rings"], seen["chat"],
                      seen["setup"], seen["refused"], seen.get("upload", 0),
-                     seen.get("shelf", 0), seen.get("training", 0)), flush=True)
+                     seen.get("shelf", 0), seen.get("training", 0),
+                     seen.get("signin", 0)), flush=True)
         else:
             print("[gui] %ds  idle" % HEARTBEAT_SECONDS, flush=True)
 
@@ -367,19 +412,156 @@ class Console(http.server.SimpleHTTPRequestHandler):
                 {"error": "the node is not answering", "detail": repr(e)[:160]}
             ).encode())
 
+    # ---- who is asking (build log 80) ----------------------------------------
+    def _is_steward(self) -> bool:
+        """The unit's own screen, or a phone signed in from this address."""
+        if self._own_screen():
+            return True
+        return SESSIONS.valid(signin.token_from_cookie(self.headers.get("Cookie")),
+                              self.client_address[0])
+
+    def _steward_only(self) -> bool:
+        """True (and answered 401) when this is not the steward."""
+        if self._is_steward():
+            return False
+        _tally("refused")
+        self._json(401, {"error": "Sign in as the steward to use this.", "code": "sign_in"})
+        return True
+
+    def _whoami(self):
+        # "key" says which passkey a phone signs in with - the Wi-Fi's, or one
+        # of the steward's own (tools/steward_key.py) - so the page can name it
+        own = self._own_screen()
+        rec = None if own else signin.load_record(STEWARD_KEY)
+        self._json(200, {"steward": self._is_steward(), "own_screen": own,
+                         "sign_in": rec is not None, "key": rec["source"] if rec else None})
+
+    def _steward_name(self):
+        """(the steward's name or None, whether the proxy answered at all)."""
+        try:
+            with urllib.request.urlopen(BACKEND + "/aetherseed/status", timeout=10) as up:
+                d = json.loads(up.read(262144))
+        except Exception:
+            return None, False
+        c = d.get("companion") if isinstance(d, dict) else None
+        name = c.get("steward") if isinstance(c, dict) else None
+        return (name if isinstance(name, str) and name.strip() else None), True
+
+    def _sign_in(self):
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            self._json(415, {"error": "expected application/json"})
+            return
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        if n < 0 or n > 4096:
+            self.close_connection = True
+            self._json(400, {"error": "not a sign-in", "code": "bad_request"})
+            return
+        try:
+            data = json.loads(self.rfile.read(n) if n else b"{}")
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if self._own_screen():
+            self._json(200, {"steward": True, "own_screen": True})   # nothing to sign in to
+            return
+        addr = self.client_address[0]
+        wait = LOCKOUT.wait(addr)
+        if wait > 0:
+            self._json(429, {"error": "Too many tries. Wait, then try again.", "code": "locked",
+                             "wait_s": int(math.ceil(wait))})
+            return
+        rec = signin.load_record(STEWARD_KEY)
+        if rec is None:
+            self._json(503, {"error": "Signing in as the steward is not set up on this unit.",
+                             "code": "no_key"})
+            return
+        steward_name, answered = self._steward_name()
+        if not answered:
+            self._json(502, {"error": "the node is not answering", "code": "network"})
+            return
+        if not steward_name:
+            self._json(409, {"error": "This unit has no steward's name yet.", "code": "no_steward_name"})
+            return
+        # Both are checked every time, whichever is wrong, and the answer does
+        # not say which. The passkey is not kept, logged or sent back.
+        key_ok = signin.passkey_matches(rec, data.get("passkey"))
+        name_ok = signin.names_match(data.get("name"), steward_name)
+        del data
+        if not (key_ok and name_ok):
+            LOCKOUT.failed(addr)
+            print("[gui] a steward sign-in from %s did not match" % addr, flush=True)
+            self._json(401, {"error": "That name and passkey do not match.", "code": "wrong"})
+            return
+        LOCKOUT.succeeded(addr)
+        token = SESSIONS.open(addr)
+        print("[gui] the steward signed in from %s" % addr, flush=True)
+        self._json(200, {"steward": True, "own_screen": False},
+                   headers={"Set-Cookie": signin.set_cookie(token)})
+
+    def _sign_out(self):
+        token = signin.token_from_cookie(self.headers.get("Cookie"))
+        if token and SESSIONS.valid(token, self.client_address[0]):
+            print("[gui] the steward signed out from %s" % self.client_address[0], flush=True)
+        if token:
+            SESSIONS.close(token)
+        own = self._own_screen()
+        self._json(200, {"steward": own, "own_screen": own},
+                   headers={"Set-Cookie": signin.clear_cookie()})
+
+    def _guest_conversation(self) -> str:
+        return hmac.new(_GUEST_SALT, self.client_address[0].encode("utf-8"),
+                        hashlib.sha256).hexdigest()[:16]
+
+    def _guest_chat(self):
+        """A guest's turn: the console's shape and nothing else - one message,
+        stored as a guest's (build log 80). Whatever else a request carries -
+        a name of its own choosing, a history, a system message, a flag - is
+        not passed on: a guest cannot speak as anyone, or put words in her
+        mouth."""
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        if n <= 0 or n > GUEST_CHAT_MAX:
+            self.close_connection = True
+            self._json(413 if n > GUEST_CHAT_MAX else 400,
+                       {"error": "not a chat turn from the console", "code": "bad_chat"})
+            return
+        try:
+            data = json.loads(self.rfile.read(n))
+        except Exception:
+            data = None
+        msgs = data.get("messages") if isinstance(data, dict) else None
+        last = msgs[-1] if isinstance(msgs, list) and msgs else None
+        text = last.get("content") if isinstance(last, dict) and last.get("role") == "user" else None
+        if not isinstance(text, str) or not text.strip():
+            self._json(400, {"error": "a chat turn is one message from you", "code": "bad_chat"})
+            return
+        body = {"stream": data.get("stream") is not False,
+                "messages": [{"role": "user", "content": text}],
+                "speaker": GUEST, "conversation": self._guest_conversation()}
+        if isinstance(data.get("model"), str) and len(data["model"]) <= 64:
+            body["model"] = data["model"]
+        self._relay("POST", json.dumps(body).encode("utf-8"))
+
     def do_GET(self):
         if self._refused_if_not_from_here():
             return
+        if self.path == WHOAMI_PATH:
+            _tally("status")
+            self._whoami()
+            return
         if self.path.split("?", 1)[0] in PROXIED_GET_QUERY:
+            if self._steward_only():
+                return
             _tally("memories" if self.path.startswith("/aetherseed/memories") else "cog")
             self._relay("GET")
             return
         if self.path in PROXIED_GET:
+            if self.path not in OPEN_GET and self._steward_only():
+                return
             # Only the unit's own screen is the witness: a phone on the
             # unit's Wi-Fi polls too (build log 54), and its polls must not
             # hide a blank page on the screen from the kiosk watch.
-            if (self.path == "/aetherseed/status"
-                    and self.client_address[0] in ("127.0.0.1", "::1")):
+            if self.path == "/aetherseed/status" and self._own_screen():
                 _console_seen()
             _tally("status" if self.path.endswith("/status")
                    else "record" if self.path.endswith("/record")
@@ -403,22 +585,25 @@ class Console(http.server.SimpleHTTPRequestHandler):
         _tally("page")
         super().do_GET()
 
-    def _json(self, code, obj):
+    def _json(self, code, obj, headers=None):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
     def _shutdown(self):
-        # From any screen that reaches the console (build log 63). Andreas,
-        # 5 Oct 2026: "I need a way to initiate quantum rest from the phone
-        # or laptop". Step 54 had it at the unit only; a phone on the unit's
-        # own Wi-Fi is the steward's second screen, and whoever is on that
-        # network holds its passkey. Nothing else reaches this server: the
-        # firewall admits the console port on loopback and on the unit's own
-        # Wi-Fi, not on a cable network (services/nftables.conf).
+        # From the steward's screens (build log 63). Andreas, 5 Oct 2026: "I
+        # need a way to initiate quantum rest from the phone or laptop". Step
+        # 54 had it at the unit only. Until build log 80 any phone on the
+        # unit's own Wi-Fi could ask for it; now a phone must be signed in as
+        # the steward (do_POST checks before this is reached). Nothing else
+        # reaches this server: the firewall admits the console port on
+        # loopback and on the unit's own Wi-Fi, not on a cable network
+        # (services/nftables.conf).
         # JSON with an explicit confirmation: a stray form post or a link cannot
         # send a JSON content type cross-origin without a preflight.
         if not (self.headers.get("Content-Type") or "").startswith("application/json"):
@@ -439,12 +624,12 @@ class Console(http.server.SimpleHTTPRequestHandler):
             print(f"[gui] shutdown requested but could not be filed: {e!r}", flush=True)
             self._json(503, {"error": "shutdown is not available on this unit"})
             return
-        print("[gui] shutdown requested from %s" % ("the unit's own screen" if self.client_address[0]
-              in ("127.0.0.1", "::1") else "a screen on the unit's Wi-Fi"), flush=True)
+        print("[gui] shutdown requested from %s" % ("the unit's own screen" if self._own_screen()
+              else "the steward's phone on the unit's Wi-Fi"), flush=True)
         self._json(202, {"shutting_down": True})
 
     def _own_screen(self):
-        return self.client_address[0] in ("127.0.0.1", "::1")
+        return self.client_address[0] in OWN_SCREEN
 
     def _first_start_state(self):
         # What the page needs to decide whether to show the first-start step:
@@ -557,19 +742,39 @@ class Console(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self._refused_if_not_from_here():
             return
+        if self.path == SIGNIN_PATH:
+            _tally("signin")
+            self._sign_in()
+            return
+        if self.path == SIGNOUT_PATH:
+            _tally("signin")
+            self._sign_out()
+            return
         if self.path == SHUTDOWN_PATH:
+            if self._steward_only():
+                return
             self._shutdown()
             return
         if self.path == FIRST_START_PATH:
+            # the unit's own screen only - checked in _first_start - and the
+            # unit's own screen is the steward
             _tally("setup")
             self._first_start()
             return
         if self.path == UPLOAD_PATH:
+            if self._steward_only():
+                return
             self._upload()
             return
         if self.path not in PROXIED_POST:
             _tally("refused")
             self.send_error(404)
+            return
+        if self.path == "/api/chat" and not self._is_steward():
+            _tally("chat")
+            self._guest_chat()
+            return
+        if self.path != "/api/chat" and self._steward_only():
             return
         _tally("setup" if self.path == "/aetherseed/setup"
                else "steward" if self.path in ("/aetherseed/steward", "/aetherseed/steward-name")

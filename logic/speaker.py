@@ -35,6 +35,14 @@ Rows from before this field existed carry UNKNOWN (an empty string) and render
 exactly as they always did - "User" - so adding the column changes nothing a
 unit already says. Filling them in is an operator act, with a reason and a
 trail (tools/correct_memory.py --speaker), and only with the steward's say-so.
+
+A GUEST (build log 80). Andreas, 18 Oct 2026: a chat from a phone that has not
+signed in as the steward is remembered as "A guest". The console declares
+GUEST for such a turn itself (gui/serve.py), whatever the phone sent; the
+unit's own screen and a signed-in phone still declare nothing and are the
+steward. GUEST is an ordinary name, not a reserved one - reserving it would
+refuse the console's own declaration - so a caller on the unit itself may
+declare it too, as it may any name.
 """
 
 import unicodedata
@@ -63,6 +71,7 @@ RESERVED = frozenset({
 })
 
 TRAINER = "Trainer"   # stored for a turn of the training loop
+GUEST = "Guest"       # stored for a turn from a phone not signed in (build log 80)
 
 ERRORS = {
     "not_text": "a speaker must be a name",

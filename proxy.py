@@ -60,7 +60,7 @@ PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
 # tokens, different final paragraph).
 from logic.prompt_builder import charter
 from logic import companion
-from logic.speaker import validate_speaker, STEWARD, TRAINER, is_steward
+from logic.speaker import validate_speaker, STEWARD, TRAINER, GUEST, is_steward
 from logic import training
 from logic import steward
 from logic import library as lib
@@ -108,6 +108,19 @@ def token_counter(model=None):
 root = AetherRoot()
 # The last exchanges of the conversation, in this process only (build log 78).
 WORKING = WorkingMemory()
+_CONVERSATION = re.compile(r"^[a-z0-9]{1,32}$")
+
+
+def _conversation_key(speaker: str, conversation) -> str:
+    """Whose conversation a turn is in, for the working memory: the speaker,
+    and - when the console names one (a guest's phone, build log 80) - which
+    conversation of that speaker's. Anything not of the console's shape is
+    ignored, never refused: it can only keep a turn apart, never join one."""
+    if isinstance(conversation, str) and _CONVERSATION.match(conversation):
+        return "%s#%s" % (speaker, conversation)
+    return speaker
+
+
 trust = TrustEvolution()
 trust_level = trust.get_trust_level_name()
 spark = AetherSpark({
@@ -1828,9 +1841,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # console's shape - one user message, no history of the caller's own -
         # and never for homework or a reading: the loop's questions stand
         # alone, and a verse is not a conversation.
+        # Kept per speaker - and, for a guest, per phone (build log 80): every
+        # guest is "Guest", and one guest's conversation is not another's.
+        # The console says which phone in `conversation`, a short id of its
+        # own making; a caller on the unit itself may leave it out.
         if (not lesson and not reading
                 and sum(1 for m in messages if m.get("role") != "system") == 1):
-            self._wm_turn = (speaker, user_msg)
+            self._wm_turn = (_conversation_key(speaker, data.get("conversation")), user_msg)
 
         # ---- THE RECORD ----
         # Asked about its own failures, the node answers FROM THE FILE and the
@@ -2062,7 +2079,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # can be right, and a teacher is not mistaken for the person the node
         # serves ("I exist solely for Claude's use", build log 35).
         if speaker != STEWARD:
-            system_prompt += "\n" + f"You are talking with {speaker}, not your steward."
+            # A guest (build log 80) is "a guest" in the sentence, not "Guest".
+            who = "a guest" if speaker == GUEST else speaker
+            system_prompt += "\n" + f"You are talking with {who}, not your steward."
 
         retrieval = {}
         try:
@@ -2121,7 +2140,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # 70), as it is for her long-term memory.
         wm_shown = 0
         if getattr(self, "_wm_turn", None) and not file_evidence:
-            history = as_messages(WORKING.recent(speaker))
+            history = as_messages(WORKING.recent(self._wm_turn[0]))
             if history:
                 messages[-1:-1] = history
                 wm_shown = len(history) // 2

@@ -18,7 +18,11 @@ PicoClaw, Moltis - and only then adds long-term memory. This is that, at the
 size of this unit:
 
   - at most MAX_EXCHANGES (3) exchanges, each within WINDOW_S of the next turn;
-  - the same speaker only: the steward's conversation is not shown to a guest;
+  - the same speaker only: the steward's conversation is not shown to a guest -
+    and, since build log 80, the same conversation: every guest is "Guest",
+    so the console names each phone's conversation and the key is both
+    (proxy._conversation_key). Conversations on two screens run side by side:
+    a turn on one does not end the other;
   - kept in this process only, never written: a restart forgets it, and the
     long-term memory is where a turn is remembered;
   - timed by time.monotonic(), so that a clock set back or forward (build log
@@ -66,18 +70,23 @@ class WorkingMemory:
             reply = reply[:REPLY_MAX].rsplit(" ", 1)[0] + " ..."
         with self._lock:
             self._turns.append((self.clock(), speaker, user, reply))
-            del self._turns[:-max(self.max_exchanges * 4, 8)]
+            # room for a few conversations side by side (build log 80)
+            del self._turns[:-max(self.max_exchanges * 8, 16)]
 
     def recent(self, speaker: str) -> list:
         """[(user, reply), ...], oldest first: the last exchanges of `speaker`
-        that run up to now without a gap longer than the window. A turn of
-        someone else in between ends the conversation."""
+        (a speaker, or a speaker's conversation) that run up to now without a
+        gap longer than the window. Another conversation's turns in between
+        are passed over: until build log 80 they ended this one, which was
+        right for one screen and wrong for a phone beside it."""
         now = self.clock()
         out = []
         with self._lock:
             edge = now
             for at, who, user, reply in reversed(self._turns):
-                if who != speaker or edge - at > self.window_s:
+                if who != speaker:
+                    continue
+                if edge - at > self.window_s:
                     break
                 out.append((user, reply))
                 edge = at

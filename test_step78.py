@@ -161,11 +161,15 @@ class WorkingMemoryItself(unittest.TestCase):
         self.clock.t += 10
         self.assertEqual(self.wm.recent("Andreas"), [("after", "r2")])
 
-    def test_another_speaker_does_not_see_it_and_ends_it(self):
+    def test_another_speaker_does_not_see_it(self):
         self.wm.add("Andreas", "mine", "r")
         self.assertEqual(self.wm.recent("Guest"), [])
+        # Build log 80: another conversation in between no longer ends this
+        # one - a guest on a phone and the steward at the screen talk side by
+        # side, and neither cuts the other short.
         self.wm.add("Guest", "theirs", "r")
-        self.assertEqual(self.wm.recent("Andreas"), [])
+        self.assertEqual(self.wm.recent("Andreas"), [("mine", "r")])
+        self.assertEqual(self.wm.recent("Guest"), [("theirs", "r")])
 
     def test_a_long_reply_is_cut(self):
         self.wm.add("Andreas", "q", "word " * 500)

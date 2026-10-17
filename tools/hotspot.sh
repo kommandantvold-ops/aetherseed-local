@@ -44,10 +44,15 @@
 # so a phone will say "no internet". That is the design.
 #
 # The passkey is kept in the profile only (root, mode 600), never in the
-# build, a log or the cartridge. Whoever holds it is at the console: it is the
-# steward's, like the screen.
+# build, a log or the cartridge. Until build log 80 whoever held it was at the
+# console as the steward. Now it gets a phone onto the unit's network as a
+# guest, and the steward signs in there with his name and this passkey: its
+# hash - never the passkey - goes to /etc/aetherseed/steward.key
+# (tools/steward_key.py), unless he has set a passkey of his own.
 set -u
 export PATH=$PATH:/usr/sbin:/sbin
+HERE=$(cd "$(dirname "$0")" && pwd)
+STEWARD_KEY_TOOL=${AETHERSEED_STEWARD_KEY_TOOL:-$HERE/steward_key.py}
 
 PROFILE=aetherseed-hotspot
 ADDRESS=10.42.0.1/24
@@ -206,6 +211,10 @@ case ${1:-} in
       wifi-sec.psk "$key" \
       ipv4.method shared ipv4.addresses "$ADDRESS" ipv6.method disabled >/dev/null \
       || die "the profile could not be written"
+    # The steward signs in from a phone with this passkey (build log 80).
+    # The Wi-Fi does not depend on it: if it fails, phones are guests only.
+    printf '%s\n' "$key" | python3 "$STEWARD_KEY_TOOL" wifi --stdin \
+      || echo "hotspot: the steward's sign-in could not be set from this passkey (tools/steward_key.py)" >&2
     unset key
     # From here the rule decides: up now if no cable is linked, off if one is.
     systemctl enable "$WATCHER" >/dev/null 2>&1
