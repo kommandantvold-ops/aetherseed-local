@@ -1,0 +1,16 @@
+# AetherSeed Companion - the first start, started only by aetherseed-first-start.path.
+#
+# Sets the clock and the unit's own Wi-Fi from what was typed at the unit's
+# own screen, and only on a unit that is armed for its first start
+# (/etc/aetherseed/first-start; tools/source_card.sh arms it, this disarms
+# it). The script removes the request before anything else, so the path unit
+# cannot fire again on the same request.
+
+[Unit]
+Description=AetherSeed Companion - first start (clock and the unit's own Wi-Fi)
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=NetworkManager.service aetherseed-proxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/aetherseed/tools/first_start.sh

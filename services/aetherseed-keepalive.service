@@ -1,0 +1,50 @@
+[Unit]
+# research INSTRUMENT, not part of the product yet.
+#
+# Holds the model resident so the first words of an answer cost 4 s rather than
+# 22 s (the eviction cliff), and records one identical request every
+# three minutes so latency drift is visible over weeks. Whether a shipped unit
+# should keep its NPU awake permanently is a product decision, not made here.
+#
+# Since it runs as the service account from the application tree, not
+# as an operator from a home directory: the script and power.py are in
+# /opt/aetherseed/tools, hashed with the rest of the application, and its log
+# is in its own state directory. The video group is for vcgencmd, which reads
+# the board's temperature and rails through /dev/vcio_gencmd (root:video, 660).
+Description=AetherSeed Companion - keepalive and degradation log (R&D)
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=hailo-ollama.service
+Wants=hailo-ollama.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=aetherseed
+Group=aetherseed
+SupplementaryGroups=video
+StateDirectory=aetherseed-keepalive
+Environment=KEEPALIVE_DIR=/var/lib/aetherseed-keepalive
+Environment=KEEPALIVE_SECONDS=180
+Environment=PYTHONUNBUFFERED=1
+# The unit's own model; absent = llama3.2:3b.
+EnvironmentFile=-/etc/aetherseed/model.env
+ExecStart=/usr/bin/python3 /opt/aetherseed/tools/keepalive.py
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aetherseed-keepalive
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

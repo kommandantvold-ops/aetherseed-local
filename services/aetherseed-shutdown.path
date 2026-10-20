@@ -1,0 +1,20 @@
+# AetherSeed Companion - watch for a shutdown requested from the console.
+#
+# The console (aetherseed-gui, unprivileged, NoNewPrivileges) cannot power the
+# device off and must not be able to. It writes an empty request file in its
+# own runtime directory; this unit sees it and starts aetherseed-shutdown.service,
+# which runs as root. /run is tmpfs, so no request outlives a boot.
+#
+# The Pi 5's own power button does the same thing through logind
+# (HandlePowerKey=poweroff) now that the kiosk no longer inhibits it.
+
+[Unit]
+Description=AetherSeed Companion - shutdown requested from the console
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+
+[Path]
+PathExists=/run/aetherseed-gui/shutdown-request
+Unit=aetherseed-shutdown.service
+
+[Install]
+WantedBy=multi-user.target

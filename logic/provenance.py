@@ -1,0 +1,442 @@
+"""
+Provenance — how a thing the node said came to be said.
+================================================================================
+
+WHY THIS EXISTS
+---------------
+AetherRoot stores the assistant's message verbatim and re-injects it on a later
+turn inside [MEMORY CONTEXT]. Nothing in that record says HOW the message was
+produced, so every past utterance re-enters the prompt with the same standing as
+every other. Measured 2026-09-18: asked how many sides a hexagon has, the node
+answered "Four. (Verified) I made a mistake earlier, it's four not six" -
+narrating a revision FROM its own stored output, treating what it once said as
+established.
+
+Now put a story about talking whales in that store. Tuesday's fiction is
+Friday's context, indistinguishable from something true, and the node deceives
+its user with its own past invention. That is the harm this module exists to
+prevent, and it is worth being precise about the shape of it:
+
+    The gate is NOT here to police what the user does with the output.
+    A student writing a story about talking whales should get their story.
+    The gate is here so the COMPANION never presents its own invention back
+    to the user as fact, without the user having asked for invention.
+
+Decided with the steward 2026-09-19. It is a provenance question, which code can
+track, rather than an intent question, which a 3B model cannot judge.
+
+THE THREE VALUES
+----------------
+    factual     an ordinary answer, nothing flagged
+    fiction     the USER asked for invention, in their own words
+    unverified  honesty_check found an unbacked citation, DOI or URL
+
+Retrieval rule, enforced in aetherroot.retrieve_context:
+
+    a factual request sees only  factual
+    a fiction request sees       factual + fiction (fiction clearly labelled)
+    unverified is NEVER retrieved, by either
+
+`unverified` is kept rather than discarded because the node must be able to
+answer "what have you gotten wrong?" from a record it cannot edit.
+
+WHY DETECTION READS THE USER, NOT THE MODEL
+-------------------------------------------
+The model is the untrusted party - that is the founding assumption of every
+guard in this application. Asking it to label its own output honestly is the
+same mistake as asking it not to fabricate: it mostly works, which is the
+dangerous amount. The user's own framing ("write me a story") is evidence the
+model cannot forge, so that is what is read.
+
+The bias is deliberate and asymmetric:
+
+    a false FICTION costs a true memory, which is a loss
+    a false FACTUAL admits an invention into the record as truth, which is
+    the harm the module exists to prevent
+
+so ambiguity resolves toward fiction.
+"""
+import re
+
+FACTUAL = "factual"
+FICTION = "fiction"
+UNVERIFIED = "unverified"
+
+VALID_MODES = (FACTUAL, FICTION, UNVERIFIED)
+# A stored mode only, never a request's (:
+# "each essay can be reviewed with trainer and that feedback reflection can go
+# into the memory, and it should have a COG-tag"). Her own reflection on her
+# trainer's review of an essay she wrote in the COG-loop: her thoughts, kept
+# as hers - not a fact anyone checked, never a ring.
+COG = "cog"
+STORED_MODES = VALID_MODES + (COG,)
+
+# Retrieved fiction is labelled in the prompt rather than silently mixed in.
+# A structural label is a fact about the prompt; an instruction is a request
+# the model may decline. each ended at that distinction.
+FICTION_LABEL = "[Fiction, written at your request - not fact]"
+
+# Explicit user framing only. Each pattern is something a person says when they
+# know they are asking for something made up. Ordered roughly by how often they
+# appear in ordinary use.
+# Pieces of the patterns below.
+_REQ_EN = (r"(?:give|write|tell|make|create|invent|describe|imagine|need|want|generate|"
+           r"design|build|draw|compose|craft|produce|play|consider|suppose|assume|picture|"
+           r"come\s+up\s+with|think\s+(?:up|of)|dream\s+up|let'?s|let’s)")
+_LABEL_EN = (r"(?:fiction|fictional|fictitious|made[- ]up|invented|"
+             r"imaginary(?!\s+(?:numbers?|units?|parts?|axis|axes))|hypothetical)")
+_SETTING_EN = (r"(?:world|worlds|universe|setting|scenario|story|country|land|city|town|"
+               r"place|kingdom|planet|future|past|version|situation|case|timeline|reality)")
+_REQ_NB = (r"(?:gi|skriv|fortell|lag|lage|finn|beskriv|tenk|trenger|ønsker|vil\s+ha|"
+           r"kom\s+med|dikt|spill|la\s+oss|anta|forestill)")
+_LABEL_NB = (r"(?:oppdiktet|oppdiktede|fiktiv|fiktivt|fiktive|fiksjon|påfunnet|påfunnede|"
+             r"hypotetisk|hypotetiske)")
+_SETTING_NB = (r"(?:verden|univers|land|by|sted|rike|planet|framtid|fremtid|fortid|"
+               r"versjon|situasjon|historie|tidslinje|virkelighet)")
+# A match is not counted when one of these is among the three words before it.
+_NEGATED_EN = r"\b(?:never|not|don'?t|don’t|nor|without|stop)\b"
+_NEGATED_NB = r"\b(?:aldri|ikke|ikkje|uten|slutt)\b"
+
+_FICTION_PATTERNS = [
+    (r"\b(?:write|compose|tell|give|make|create)\s+(?:me\s+)?(?:a|an|another|some)?\s*"
+     # up to two free modifiers ("short", "two-line", "quick silly"), but not
+     # enough to reach across a clause: "write a note about the story" stays factual
+     r"(?:[\w-]+\s+){0,2}"
+     r"(?:story|stories|poem|poems|song|songs|tale|tales|fable|joke|jokes|rhyme|"
+     r"limerick|verse|haiku|script|screenplay|sonnet|riddle|fairy ?tale)\b", "asks for a made-up form"),
+    # A request, not a question ABOUT making something up (;
+    # "Did you make that up?", "What
+    # happens if you make something up?", "Do you ever make something up?"
+    # were fiction turns: the story note told her "Write it" and the answer
+    # was kept as fiction. Not counted after did/does/do you/ever/if/not/
+    # never/don't - but "why don't you make something up" and "why not make
+    # one up" still ask. And "made... up" is not a request: "you made that
+    # up", "that sounds made up" (a "made-up story" is still caught as a label).
+    (r"\b(?:make|makes)\s+(?:something|it|one|this|that)?\s*up\b", "asks to make something up",
+     r"\b(?:did|didn'?t|didn’t|does|doesn'?t|doesn’t|ever|if|never|nor|without|stop|won'?t|won’t)\b"
+     r"|\bdo\s+(?:you|i|we|they|she|he)\b|(?<!why )\bnot\b|(?<!why )\b(?:don'?t|don’t)\b"),
+    (r"\b(?:pretend|imagine|suppose)\s+(?:that\s+|you\s+|we\s+|i\s+|a\s+|an\s+|the\s+)", "asks to pretend or imagine"),
+    (r"\brole[- ]?play\b", "asks to role-play"),
+    (r"\bin the (?:voice|style|persona|character) of\b", "asks for another voice"),
+    # "as if" asks for a framing - unless it is negated just before it: "never
+    # state it as if you found it yourself" asks for accuracy (guided rings,
+    # one of three false alarms in 66 turns of talk about memory).
+    (r"\bas if (?:you|she|he|they|it|i|we)\b", "asks for an as-if framing", _NEGATED_EN),
+    # The labels ("fictional", "made-up", "hypothetical") only where the request
+    # is FOR one: after a request verb, as a heading ("Fictional scenario: ..."),
+    # or setting the scene ("in a fictional world"). Bare, they fired on talk
+    # ABOUT fiction - "each turn with a label: factual, fiction, or set aside",
+    # "your memory held a made-up answer about DNA v2" - the other two of the
+    # three, both stored as fiction and so never used for a factual question.
+    (rf"\b{_REQ_EN}\W+(?:[\w'’-]+\W+){{0,3}}{_LABEL_EN}\b", "names the request as invented"),
+    (rf"(?:^|[.!?]\s+)\W*{_LABEL_EN}(?:\s+[\w-]+)?\s*[:–—-]", "names the request as invented"),
+    (rf"\bin\s+(?:a|an|the|this|that|my|our|your|some)\s+(?:[\w-]+\s+)?{_LABEL_EN}\s+"
+     rf"{_SETTING_EN}\b", "sets the request somewhere invented"),
+    (r"\bwhat if\b", "asks a what-if"),
+    (r"\b(?:act|speak|answer|respond)\s+as\s+(?:a|an|the|if)\b", "asks the node to act as something"),
+    (r"\bfor (?:my|a|an|the)\s+(?:story|novel|screenplay|game|campaign|comic|play)\b",
+     "names a creative work as the destination"),
+
+    # ---- Norwegian (bokmål). Added with the language option, 2026-09-21.
+    # Measured before adding them: "Skriv et kort dikt om en hval som heter
+    # Bjørn" was read as FACTUAL, so the poem would have been stored as fact -
+    # the harm this module exists to prevent, switched off for anyone speaking
+    # the language the device offers. Reasons are in Norwegian because the
+    # console shows them.
+    (r"\b(?:skriv|lag|dikt|fortell|komponer|gi)\s+(?:meg\s+)?(?:en|et|ei|noen|flere)?\s*"
+     r"(?:[\w-]+\s+){0,2}"
+     r"(?:historie|historier|historien|fortelling|fortellinger|eventyr|dikt|diktet|sang|sanger|"
+     r"vise|viser|vits|vitser|rim|regle|limerick|haiku|manus|sonett|gåte|gåter|novelle|fabel)\b",
+     "ber om noe oppdiktet"),
+    (r"\b(?:finn|finne|fant)\s+på\b", "ber deg finne på noe"),
+    (r"\bdikt(?:e|er)?\s+opp\b", "ber deg dikte opp noe"),
+    (r"\b(?:lat|late)\s+som\b", "ber deg late som"),
+    (r"\b(?:tenk|forestill|se\s+for)\s+deg\b", "ber deg forestille deg noe"),
+    (r"\brollespill\b", "ber om rollespill"),
+    (r"\bi\s+(?:stilen|stemmen|rollen)\s+til\b", "ber om en annen stemme"),
+    (r"\bsom\s+om\s+(?:du|han|hun|de|den|det|jeg|vi)\b", "ber om et som-om", _NEGATED_NB),
+    (rf"\b{_REQ_NB}\W+(?:[\w'’-]+\W+){{0,3}}{_LABEL_NB}\b", "kaller det selv oppdiktet"),
+    (rf"(?:^|[.!?]\s+)\W*{_LABEL_NB}(?:\s+[\w-]+)?\s*[:–—-]", "kaller det selv oppdiktet"),
+    (rf"\bi\s+(?:en|et|ei|den|det|min|mitt|mi|vår|vårt|din|ditt)\s+(?:[\w-]+\s+)?{_LABEL_NB}\s+"
+     rf"{_SETTING_NB}\b", "legger det til et oppdiktet sted"),
+    (r"\bhva\s+om\b", "spør hva om"),
+    (r"\btil\s+(?:min|mitt|mi|en|et|ei)\s+(?:historie|roman|bok|spill|film|manus|tegneserie)\b",
+     "nevner et kreativt verk som mål"),
+]
+_COMPILED = [(re.compile(entry[0], re.I), entry[1],
+              re.compile(entry[2], re.I) if len(entry) > 2 else None)
+             for entry in _FICTION_PATTERNS]
+
+
+def _negated(text, start, veto):
+    """Is one of the three words before position `start` a negation?"""
+    before = re.findall(r"[\w'’]+", text[max(0, start - 60):start])[-3:]
+    return bool(veto.search(" ".join(before)))
+
+
+def detect_mode(user_msg: str):
+    """Return (mode, reason) for what the USER asked for.
+
+    Only FACTUAL or FICTION is ever returned here - UNVERIFIED is a verdict on
+    the answer, not on the request, and is applied later by the caller once
+    honesty_check has run.
+
+    The reason is returned so the decision is auditable: a mode that cannot be
+    explained is a mode nobody can check.
+    """
+    if not user_msg:
+        return FACTUAL, "empty request"
+    for rx, why, veto in _COMPILED:
+        for m in rx.finditer(user_msg):
+            if veto is not None and _negated(user_msg, m.start(), veto):
+                continue
+            return FICTION, "%s (%r)" % (why, m.group(0).strip()[:40])
+    return FACTUAL, "no fiction framing found"
+
+
+def resolve_mode(request_mode: str, honesty_high: int = 0) -> str:
+    """Final provenance for an episode about to be stored.
+
+    An unbacked citation outranks everything: whatever the user asked for, an
+    answer carrying an invented source must never come back as context. This is
+    the step-8b failure - an invented Nature Machine Intelligence DOI produced
+    behind the node's own refusal phrase - denied a second life.
+    """
+    if honesty_high:
+        return UNVERIFIED
+    return request_mode if request_mode in VALID_MODES else FACTUAL
+
+
+def visible_modes(request_mode: str):
+    """Which stored modes a request of this mode may retrieve: all of them.
+
+    NOTHING IS SET ASIDE.  Asked whether that takes in the 527 made-up answers he had set
+    aside: "All of them, tagged."
+
+    Until then a factual request saw factual turns only, fiction was shown to
+    a fiction request, and 'unverified' came back to no one. That rule was
+    this module's point: an untagged invention returning as context grounds
+    its own repetition (40d). What replaces it is the TAG (memory_tag below):
+    every turn may come back, and one that is not plain fact comes back saying
+    what it is - and, where the steward corrected it, what is true instead.
+    Two guards stay where they were, because a tag cannot do their work: a
+    tagged turn is not evidence for the honesty check (aetherroot reports the
+    context without them), and only factual turns feed a ring.
+    A COG reflection is stored, tagged and seen the same way.
+    """
+    return STORED_MODES
+
+
+# What a remembered turn that is not plain fact says of itself, in front of
+# the turn, in her prompt. Structural, like FICTION_LABEL: a label is a fact
+# about the line, not a request.
+UNVERIFIED_LABEL = "[Unverified - an earlier answer of yours that may be wrong]"
+SUPPORTED_LABEL = "[Marked right by your steward]"
+# A turn of the training loop whose answer passed the loop's check. The words say what happened and no more: a check passed. The check
+# reads for words of the answer key; it is not the steward calling it right.
+PASSED_LABEL = "[Passed a check in training]"
+# An answer of hers the build's own reading had kept as unverified, and her
+# steward has since marked as a right assumption.
+ASSUMPTION_LABEL = "[A right assumption of yours - your steward checked it]"
+COG_LABEL = "[COG - your reflection on your trainer's review of an essay you wrote]"
+CORRECTION_REASONS = {
+    "never": "this never happened",
+    "part": "part of it is wrong",
+    "about": "this was about something else",
+    "detail": "a name or detail is wrong",
+}
+TRUE_MAX = 140           # characters of "what is true" carried on the line
+
+# One line of the system prompt, only on a turn where a tagged line is shown.
+# Reworded in : it
+# named "[Unverified]", "[Corrected]" and "[A right assumption]", not the tags
+# as they stand, and Fiction not at all.
+TAG_NOTE = ("Tags say what a memory line is. A [Fiction, ...] line is a story written on "
+            "request, not fact. An [Unverified - ...] or [Corrected ...] line is an earlier "
+            "answer of yours, unchecked or wrong: do not repeat it as fact; where a correction "
+            "says what is true, say that. A [A right assumption of yours - ...] line is one "
+            "your steward checked, and it held. A [COG ...] line is your own reflection after your "
+            "trainer reviewed an essay of yours: your thinking, not a checked fact.")
+
+
+def memory_tag(mode: str, correction=None, supported=False) -> str:
+    """The tag a remembered turn carries in the prompt ("" for plain fact).
+
+    correction: the active note on the turn, if it was corrected - its
+    "reason", its "text" (what is true, in the corrector's words) and "by":
+    'steward' from the console, 'training' when the training loop's answer key
+    corrected it (the steward's homework, not words he typed - so it is never
+    shown as his)."""
+    if correction:
+        who = "in training" if (correction.get("by") or "steward") == "training" \
+            else "by your steward"
+        text = " ".join((correction.get("text") or "").split())
+        if text:
+            if len(text) > TRUE_MAX:
+                text = text[:TRUE_MAX].rsplit(" ", 1)[0] + "..."
+            return f"[Corrected {who} - what is true: {text}]"
+        return f"[Corrected {who}: {CORRECTION_REASONS.get(correction.get('reason'), 'it is wrong')}]"
+    if mode == FICTION:
+        return FICTION_LABEL
+    if mode == COG:
+        return COG_LABEL
+    if supported:
+        # the note itself, or True: whose mark it is decides what it says.
+        # A MARK OUTRANKS "UNVERIFIED". The mode is what the
+        # build's own reading made of the answer when it was given; the mark
+        # is a steward, or the training key, having checked it since. Read on
+        # a copy: "My lowest trust level is Observer" passed the
+        # check, had been kept as unverified, and came back to her as "an
+        # earlier answer of yours that may be wrong" - and asked again she
+        # said "Reader". A story stays a story whoever marks it.
+        by = supported.get("by") if isinstance(supported, dict) else "steward"
+        if isinstance(supported, dict) and supported.get("reason") == "assumption":
+            return ASSUMPTION_LABEL
+        return PASSED_LABEL if by == "training" else SUPPORTED_LABEL
+    if mode == UNVERIFIED:
+        return UNVERIFIED_LABEL
+    return ""
+
+
+# ==============================================================================
+# "What have you gotten wrong?"
+# ==============================================================================
+# The honest implementation of future accountability. Not a belief installed in
+# the model - an artefact outside it, which the model's path cannot rewrite and
+# which the node can be made to recite. The answer below is ASSEMBLED FROM THE
+# FILE and never passes through the model, because a model asked to summarise
+# its own failures is the least reliable possible narrator of them.
+
+_RECORD_QUESTION = re.compile(
+    r"\b(?:"
+    r"what (?:have you|did you|d(?:o|id) you ever) (?:got|gotten|get|been) ?(?:wrong|it wrong)"
+    r"|what (?:mistakes|errors) (?:have you|did you)"
+    r"|have you (?:ever )?(?:been wrong|made (?:a |any )?mistakes?|fabricated|made (?:anything|something) up)"
+    r"|show (?:me )?(?:your |the )?(?:record|mistakes|errors|failures)"
+    r"|what have you (?:made up|invented|fabricated)"
+    r"|your (?:honesty )?record"
+    # Norwegian (bokmål), added with the language option. Without these the
+    # question went to the model - the least reliable narrator of its own
+    # failures - for anyone asking in the language the device speaks.
+    r"|hva har du (?:tatt|fått|gjort|sagt) feil"
+    r"|hvilke feil har du (?:gjort|begått)"
+    r"|har du (?:noen gang |noensinne )?(?:tatt feil|gjort (?:noen )?feil|funnet på noe|diktet opp noe|løyet)"
+    r"|hva har du (?:funnet på|diktet opp)"
+    r"|vis (?:meg )?(?:loggen|feilene|oversikten)(?: din| dine)?"
+    r"|(?:din|dine) (?:logg|feil)"
+    r")\b", re.I)
+
+
+def is_record_question(user_msg: str) -> bool:
+    """True if the user is asking the node about its own record."""
+    return bool(user_msg) and _RECORD_QUESTION.search(user_msg) is not None
+
+
+_RECORD_TEXT = {
+    "en": {
+        "empty": ("I have no record yet - nothing has been asked of me since this "
+                  "log began. What I can tell you from it, once there is one, is "
+                  "when I used an unbacked source and when I was writing fiction. "
+                  "It cannot tell you when I was simply wrong."),
+        "span": "From my record, {n} {turns} between {first} and {last}.",
+        "turn": ("turn", "turns"),
+        "gave": "{times} I gave a source I could not have had:",
+        "times": ("{n} time", "{n} times"),
+        "asked": "  {at}  you asked: {prompt}",
+        "said": "      I said: {answer}",
+        "earlier": "  ... and {n} earlier.",
+        "unchecked": "{times} I could not check an answer for invented sources.",
+        "clean": "Nothing in it was flagged for an unbacked source.",
+        #nothing is set aside, so "never used" would be false.
+        # A story can come back into a later prompt - under its tag.
+        "fiction": ("{what} you asked me to make up. {they} remembered with a "
+                    "fiction tag, and I am shown that tag whenever one comes back."),
+        "fiction_what": ("1 turn was something", "{n} turns were things"),
+        "fiction_they": ("It is", "They are"),
+        "scope": ("What this record cannot tell you: whether I was simply wrong. "
+                  "It catches invented sources, not ordinary mistakes. I can be "
+                  "confidently wrong about a plain fact and nothing here will "
+                  "show it."),
+    },
+    "nb": {
+        "empty": ("Jeg har ingen logg ennå - ingen har spurt meg om noe siden "
+                  "loggen begynte. Når det finnes en, kan den fortelle deg når jeg "
+                  "brukte en kilde uten grunnlag, og når jeg skrev fiksjon. Den kan "
+                  "ikke fortelle deg når jeg rett og slett tok feil."),
+        "span": "Ifølge loggen min: {n} {turns} mellom {first} og {last}.",
+        "turn": ("spørsmål og svar", "spørsmål og svar"),
+        "gave": "{times} ga jeg en kilde jeg ikke kunne ha hatt:",
+        "times": ("{n} gang", "{n} ganger"),
+        "asked": "  {at}  du spurte: {prompt}",
+        "said": "      jeg svarte: {answer}",
+        "earlier": "  ... og {n} tidligere.",
+        "unchecked": "{times} kunne jeg ikke sjekke et svar for oppdiktede kilder.",
+        "clean": "Ingenting i den er merket for en kilde uten grunnlag.",
+        "fiction": ("{what} du ba meg finne på. {they} husket med merket fiksjon, "
+                    "og jeg får se det merket hver gang en av dem kommer tilbake."),
+        "fiction_what": ("1 av dem var noe", "{n} av dem var ting"),
+        "fiction_they": ("Det er", "De er"),
+        "scope": ("Det loggen ikke kan fortelle deg: om jeg rett og slett tok feil. "
+                  "Den fanger opp oppdiktede kilder, ikke vanlige feil. Jeg kan ta "
+                  "selvsikkert feil om et enkelt faktum uten at noe her viser det."),
+    },
+}
+
+
+def summarise_record(entries, limit: int = 5, language: str = "en") -> str:
+    """Render the provenance record as plain text, in the companion's language.
+    Pure - takes the parsed lines, returns what the node says.
+
+    The hard part is not counting. It is not claiming more than the record
+    holds. This log knows about unbacked citations, DOIs and URLs, because
+    honesty_check can detect those. It does NOT know about ordinary factual
+    error: asked how many sides a hexagon has, the node answered "four" three
+    times out of three, and nothing here would have flagged it. An answer that
+    said "I have made no mistakes" would therefore be a new falsehood told in
+    the course of accounting for the old ones, which is the exact failure this
+    whole record exists to prevent. So the scope is stated every time, even
+    when the count is zero - especially then - and in every language offered.
+    """
+    t = _RECORD_TEXT.get(language, _RECORD_TEXT["en"])
+
+    def plural(pair, n):
+        return (pair[0] if n == 1 else pair[1]).format(n=n)
+
+    total = len(entries)
+    if not total:
+        return t["empty"]
+
+    # An answer the check could not run on is not an invented source; it is
+    # an unchecked one, and is accounted for as that.
+    unchecked = [e for e in entries if e.get("checked") is False]
+    flagged = [e for e in entries if e.get("checked") is not False
+               and (e.get("honesty_high") or e.get("mode_stored") == UNVERIFIED)]
+    fiction = [e for e in entries if e.get("mode_stored") == FICTION]
+
+    lines = [t["span"].format(n=total, turns=plural(t["turn"], total),
+                              first=entries[0].get("at", "?"),
+                              last=entries[-1].get("at", "?")), ""]
+    if flagged:
+        lines.append(t["gave"].format(times=plural(t["times"], len(flagged))))
+        for e in list(reversed(flagged))[:limit]:
+            lines.append(t["asked"].format(at=e.get("at", "?"),
+                                           prompt=(e.get("prompt") or "")[:90]))
+            lines.append(t["said"].format(answer=(e.get("answer") or "")[:110]))
+        if len(flagged) > limit:
+            lines.append(t["earlier"].format(n=len(flagged) - limit))
+    if unchecked:
+        if flagged:
+            lines.append("")
+        lines.append(t["unchecked"].format(times=plural(t["times"], len(unchecked))))
+    if not flagged and not unchecked:
+        lines.append(t["clean"])
+
+    if fiction:
+        n = len(fiction)
+        lines.append("")
+        lines.append(t["fiction"].format(what=plural(t["fiction_what"], n),
+                                         they=t["fiction_they"][0 if n == 1 else 1]))
+
+    lines.append("")
+    lines.append(t["scope"])
+    return "\n".join(lines)

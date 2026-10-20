@@ -1,0 +1,515 @@
+"""
+knowledge.py — the curriculum: what a Companion knows before anyone speaks to it
+================================================================================
+
+A unit ships knowing what it is, what it cannot do, and what AetherSeed is.
+Without this a 3B model answers those questions from training, where AetherSeed
+does not exist, and invents a company. The curriculum is a small, authored,
+read-only file; its lines enter the prompt as `[Known] ...` inside the same
+[MEMORY CONTEXT] block AetherRoot already builds.
+
+Three properties, all deliberate:
+
+  read-only        The file lives in the application tree, which the service
+                   mounts read-only (ProtectSystem=strict) and the cartridge
+                   hashes into app.digest. A state reset does not touch it and
+                   nothing at runtime can rewrite it.
+  no new markers   Lines go inside [MEMORY CONTEXT], so honesty_check gets them
+                   in its haystack for free (a line naming contact@aetherseed.ai
+                   grounds the address the node is repeating from its own build)
+                   and token_budget's trimmer already knows how to cut the block.
+  no shared state  This module never touches AetherRoot's embedder, database or
+                   IDF statistics. It reads one file and matches words.
+
+WHY WORDS AND NOT THE EMBEDDER
+------------------------------
+The plan was to embed the curriculum with AetherRoot's TFIDFEmbedder. Measured
+on 2026-09-23 against all 21 entries and 44 probe questions, at dim=64 on both a
+fresh unit and a unit's live state, that does not work:
+
+    intended entry ranked top-1          15/34 (fresh)   13/34 (live)
+    top-1 similarity, on-topic  median   0.412           0.401
+    top-1 similarity, off-topic median   0.410           0.353
+    off-topic questions that still
+      pulled a line, at any threshold
+      that answered most questions       10/10           10/10
+
+The two distributions sit on top of each other. At 64 dimensions hash collisions
+are certain, so "similarity" over 21 short documents is mostly collision noise;
+"what is the capital of France" scored 0.411 against "AetherSeed builds AI that
+earns what it is allowed to do". There is no threshold that separates them, so
+this is not a tuning problem and no amount of rewording fixes it.
+
+The curriculum is 21 authored sentences, not a corpus. For that, word overlap
+weighted by how distinctive a word is WITHIN the curriculum is both better and
+inspectable — you can read a line and see why it fired. Measured the same way,
+same probe set:
+
+    intended entry ranked top-1                       34/42
+    intended entry among the two lines shown          37/42
+    off-topic questions that pulled any line           0/14
+
+Honest caveat, because the number flatters us: the probes and the curriculum
+were written by the same hand on the same day. 37/42 is a self-graded exam. The
+real figure is what the soak and the steward produce.
+
+HOW A LINE IS CHOSEN
+--------------------
+    score  = (sum of idf over query words the entry contains)
+             / (sum of idf over all content words in the query)
+    weight =  sum of idf over query words the entry contains
+
+`score` asks what fraction of the question this entry accounts for; it keeps a
+long message about a radiator from pulling a line because it happens to contain
+one curriculum word. `weight` asks whether what matched was distinctive; it lets
+a long, rambling question through when it lands on something specific ("sent",
+"server"), where the fraction is necessarily small. A line is shown if EITHER
+passes. idf is computed over the 21 entries themselves - a word in every entry
+("i", "trust") carries almost nothing, a word in one ("cartridge", "poem")
+carries the most.
+
+`trigger` handles the questions that survive no stopword list at all: "what are
+you" and "who made you" have no content words, and are the two questions a
+companion in a living room is asked most.
+
+At most two lines per turn, and at most half the memory budget, because the
+other half is what its steward actually said to it.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import re
+from pathlib import Path
+from typing import Dict, List, Optional
+
+__all__ = ["Knowledge", "load_knowledge", "KNOWN_PREFIX", "CONTACT_ENTRY",
+           "is_contact_question", "FOUNDERS_ENTRY", "is_founders_question",
+           "exact_entry_for", "is_steward_question", "steward_text", "UNIT_PREFIX", "SCORE_THRESHOLD", "WEIGHT_FLOOR",
+           "MAX_LINES", "MAX_TEXT_CHARS"]
+
+# The third kind of line in the block, beside [Episode] and [Pattern]. Not a
+# scaffold marker: it never starts a line on its own and never closes a block,
+# so opening_may_be_artefact and the stream guard are unaffected.
+KNOWN_PREFIX = "[Known] "
+
+# Chosen from the sweep in the docstring: the widest setting that pulled a line
+# on none of the 14 off-topic probes. Loosening WEIGHT_FLOOR to 3.0 answers
+# three more questions and starts quoting "my answers are short on purpose" at
+# someone drafting a letter to their landlord - the kind of noise that teaches a
+# user to stop reading the thing entirely.
+SCORE_THRESHOLD = 0.30
+WEIGHT_FLOOR = 4.0
+MAX_LINES = 2
+MAX_TEXT_CHARS = 200        # one entry may not eat the whole block
+
+_TOK = re.compile(r"[a-z0-9]+")
+
+# Words that carry no signal about WHICH entry is wanted. Deliberately small:
+# every word removed here is a word that can never distinguish two entries, and
+# an over-eager list is how "what are you" ends up with nothing to match on.
+# him/his/her/hers/himself/herself sincein no entry, each got
+# the highest weight there is - and the steward's facts use this list too
+# (logic/facts.py), so "Tell me about her" found a fact on "her" alone.
+_STOP = frozenset("""
+a an the and or but if then so of to in on at by for with from as is are was were be been being
+do does did doing have has had having i me my we our you your he she it its they them their
+him his her hers himself herself
+this that these those can could will would shall should may might must about into over under
+again more most other some such no nor not only own same too very s t just now here there
+when where why how what which who whom all any both each few please tell say said give get got
+go going one two
+""".split())
+
+
+# Words no curriculum line is matched on. Each matched a line
+# for a reason that has nothing to do with what was asked:
+# - "md" and "txt": eco.todo names todo.md, so every question naming a.md
+#   file ("Read the file seed.md") was shown the to-do line beside the file;
+# - "name": three tool lines say "asked by name", so "What is your name?"
+#   was shown them;
+# - "up": eco.todo ends "from the reader trust level up" (and eco.summarize
+#   matches "sum up"), so "Did you make that up?" and "Look it up" were shown
+#   the to-do line;
+# - "make": as.mission says "to make AI available", so "Did you make that
+#   up?" and "Can I make you forget what I told you?" were shown the mission.
+# They stay in the question, as words no line has: that keeps a question
+# made mostly of them quiet, as before (a stopword would be dropped from it,
+# and what is left would weigh more - measured: "Open the file ghost.txt"
+# was then shown the company line, on "open"). The steward's facts
+# (logic/facts.py) match on all four: "What is my name?" must still find
+# "My name is...".
+_FILE_IN = re.compile(r"\b[\w-]+\.(?:md|txt)\b", re.I)
+_NEVER_MATCH = frozenset("name up md txt make".split())
+
+
+def _tokens(text: str) -> List[str]:
+    return _TOK.findall((text or "").lower())
+
+
+def _content_words(text: str) -> List[str]:
+    """Query words that could distinguish one entry from another, in order,
+    without repeats — a word said three times is not three times the evidence."""
+    return [t for t in dict.fromkeys(_tokens(text))
+            if t not in _STOP and len(t) > 1]
+
+
+class Knowledge:
+    """The loaded curriculum. Immutable after construction."""
+
+    # words no line is matched on (see _NEVER_MATCH; the facts' index has none)
+    NEVER_MATCH = _NEVER_MATCH
+
+    def __init__(self, entries: List[Dict], source: Optional[Path] = None,
+                 errors: Optional[List[str]] = None):
+        self.entries = entries
+        self.source = source
+        self.errors = errors or []
+
+        n = len(entries) or 1
+        df: Dict[str, int] = {}
+        self._entry_words: List[frozenset] = []
+        self._triggers: List[List[str]] = []
+        for e in entries:
+            words = frozenset(_tokens(e["text"] + " " + e.get("match", ""))) - self.NEVER_MATCH
+            self._entry_words.append(words)
+            self._triggers.append(
+                [" " + " ".join(_tokens(t)) + " " for t in e.get("trigger", [])])
+            for w in words:
+                df[w] = df.get(w, 0) + 1
+        self._df = df
+        self._n = n
+        # A word the curriculum has never seen scores as if it appeared in half
+        # an entry: higher than any real word, so a question made mostly of such
+        # words drives `score` down. That is what makes silence the default.
+        self._idf_unseen = math.log(n / 0.5)
+
+    def _idf(self, word: str) -> float:
+        d = self._df.get(word, 0)
+        return self._idf_unseen if d == 0 else math.log(self._n / d)
+
+    def rank(self, query: str) -> List[Dict]:
+        """Every entry, best first, with the arithmetic that put it there.
+
+        Ties break on the entry's position in the file: the curriculum's order
+        is the author's order of preference, and a tie broken on id would sort
+        "seed.nofield" above "seed.layers" for no reason a reader could defend.
+        """
+        words = _content_words(query)
+        denom = sum(self._idf(w) for w in words)
+        norm_q = " " + " ".join(_tokens(query)) + " "
+
+        # A line that names the very file asked about comes with it. Measured on a unit, the prompt run 18 sent for "Read
+        # todo.md. What is the last item?" sent straight to the model: without
+        # eco.todo (which "md" no longer pulled since 72k) 30 of 56 right;
+        # with it, 30 of 30. Not for the steward's facts: they name no files.
+        files = [f.lower() for f in _FILE_IN.findall(query or "")] if self.NEVER_MATCH else []
+        out = []
+        for i, e in enumerate(self.entries):
+            triggered = any(t in norm_q for t in self._triggers[i] if t.strip()) or \
+                any(f in e["text"].lower() for f in files)
+            matched = [w for w in words if w in self._entry_words[i]]
+            weight = sum(self._idf(w) for w in matched)
+            score = weight / denom if denom else 0.0
+            if triggered:
+                score, weight = 1.0, max(weight, self._idf_unseen * 4)
+            out.append({"id": e["id"], "text": e["text"], "score": score,
+                        "weight": weight, "matched": matched,
+                        "triggered": triggered, "order": i})
+        out.sort(key=lambda r: (-r["score"], -r["weight"], r["order"]))
+        return out
+
+    def by_id(self, entry_id: str):
+        """One entry's text, verbatim, or None. The single source of truth for
+        an answer that is served from the build rather than generated."""
+        for e in self.entries:
+            if e["id"] == entry_id:
+                return e["text"]
+        return None
+
+    def lines_for(self, query: str, max_lines: int = MAX_LINES,
+                  max_chars: Optional[int] = None) -> List[str]:
+        """The `[Known] ...` lines this question earns — usually none."""
+        if not self.entries or not (query or "").strip():
+            return []
+        lines, used = [], 0
+        for r in self.rank(query):
+            if len(lines) >= max_lines:
+                break
+            if r["score"] < SCORE_THRESHOLD and r["weight"] < WEIGHT_FLOOR:
+                break                      # ranked, so nothing below qualifies
+            line = KNOWN_PREFIX + r["text"]
+            if max_chars is not None and used + len(line) > max_chars:
+                break
+            lines.append(line)
+            used += len(line)
+        return lines
+
+
+# ---------------------------------------------------------------------------
+# The one answer that must be exact
+# ---------------------------------------------------------------------------
+# Measured on the device, twice, with the correct line at the top of the
+# model's context: asked how to contact AetherSeed it answered
+# "contact@aethersed.ai", and then "contact@aethersseed.ai". A 3B model cannot
+# reliably copy an eleven-character domain, and a wrong address is not a vague
+# answer - it is a live domain belonging to somebody else.
+#
+# So this question is answered the way a record question is: from the file,
+# with the model never called. The precedent is deliberate. `is_record_question`
+# exists because a model summarising its own mistakes is the least reliable
+# possible narrator of them; this exists because a model retyping an address is
+# the least reliable possible copier of it.
+#
+# The predicate is phrase-based and deliberately narrow, because intercepting
+# the wrong question is worse than not intercepting: "can you help me contact
+# my landlord" must reach the model, and it does - it contains "contact my
+# landlord", and none of the phrases below. A phrase names its target; a bag of
+# words ("contact", "email", "you") does not.
+CONTACT_ENTRY = "as.contact"
+
+# Anything naming AetherSeed is safe by construction - a landlord is not
+# AetherSeed - so there the rule can be a word pair. Anything naming only "you"
+# or "the team" has to be a phrase, because those words point at whoever the
+# sentence is about.
+_CONTACT_WORDS = ("contact", "email", "mail", "reach", "touch", "write", "get")
+_CONTACT_PHRASES = (
+    "contact you", "contact the team", "reach you", "reach the team",
+    "get in touch with you", "in touch with the team",
+    "your email", "your e mail", "email you", "write to you",
+)
+
+# A second gate, so a statement is not mistaken for a question: "I'll reach you
+# tomorrow" contains a phrase and asks nothing.
+_ASKING = ("how ", "what ", "where ", "which ", "who ", "can ", "could ",
+           "is ", "are ", "do ", "does ", "may ", "please ")
+
+
+def is_contact_question(user_msg: str) -> bool:
+    """Is this someone asking how to reach AetherSeed?
+
+    Narrow on purpose. A false yes hands out one true sentence to somebody who
+    did not ask for it; a false no costs nothing, because the model still gets
+    the question with the right line in its context.
+    """
+    text = " " + " ".join(_tokens(user_msg)) + " "
+    named_us = " aetherseed " in text and any(
+        (" " + w + " ") in text for w in _CONTACT_WORDS)
+    if not named_us and not any((" " + p + " ") in text for p in _CONTACT_PHRASES):
+        return False
+    raw = (user_msg or "").strip().lower()
+    return "?" in raw or raw.startswith(_ASKING) or " how do i " in text or " how can i " in text
+
+
+# ---------------------------------------------------------------------------
+# The second answer that must be exact: the founders
+# ---------------------------------------------------------------------------
+# With the curriculum live, a small model answered a founders question with a
+# wrongly spelled name and repeated it the next day. The same failure as the
+# contact address: a small model cannot reliably copy a proper noun it has seen
+# once, and a wrong name is not a vague answer but a wrong fact. So it gets the
+# contact address's treatment.
+#
+# Narrow for the same reason: "who founded Microsoft?" must reach the model.
+# A founder word alone never qualifies; it must be pointed at us - by name, by
+# "you"/"your", by "the company", or as a bare "the founders" that is not
+# followed by "of <something>". "the founders of Rome" is somebody else's.
+FOUNDERS_ENTRY = "as.founders"
+
+_FOUNDER_WORDS = ("founder", "founders", "founded", "cofounder", "cofounders",
+                  "co founder", "co founders")
+_FOUNDER_OURS = (
+    "your founder", "your founders", "founded you", "your co founder",
+    "your co founders", "your cofounders", "founders of the company",
+    "founder of the company", "founders of this company", "company s founders",
+    "founders of your company", "founded the company", "founded this company",
+    "founded your company",
+)
+_FOUNDER_ASKING = _ASKING + ("tell ", "name ", "list ")
+
+
+def is_founders_question(user_msg: str) -> bool:
+    """Is this someone asking who founded AetherSeed?"""
+    toks = _tokens(user_msg)
+    text = " " + " ".join(toks) + " "
+    if not any((" " + w + " ") in text for w in _FOUNDER_WORDS):
+        return False
+    ours = " aetherseed " in text or any((" " + p + " ") in text for p in _FOUNDER_OURS)
+    if not ours:
+        # a bare "the founders" / "the founder", not "the founders of X"
+        for i, t in enumerate(toks[:-1]):
+            if t == "the" and toks[i + 1] in ("founders", "founder"):
+                nxt = toks[i + 2] if i + 2 < len(toks) else ""
+                if nxt != "of":
+                    ours = True
+                    break
+    if not ours:
+        return False
+    raw = (user_msg or "").strip().lower()
+    return "?" in raw or raw.startswith(_FOUNDER_ASKING)
+
+
+# ---------------------------------------------------------------------------
+# The third: who her steward is
+# ---------------------------------------------------------------------------
+#  The name is
+# the unit's own setting (logic/companion.py), never the build's, so the
+# answer is put together here from that setting: a 3B model copying a proper
+# noun it has seen once is the founders' failure again. Narrow, like the
+# others: the question, and nothing else in the message.
+_STEWARD_QUESTIONS = [re.compile(p, re.I) for p in (
+    r"^\s*(?:so\s+|and\s+|ok(?:ay)?,?\s+)?who(?:'s|’s|\s+is)\s+your\s+steward\s*[?.!]*\s*$",
+    r"^\s*what(?:'s|’s|\s+is)\s+(?:your\s+steward(?:'s|’s)\s+name|the\s+name\s+of\s+your\s+steward)\s*[?.!]*\s*$",
+    r"^\s*(?:do\s+you\s+know\s+)?who\s+(?:looks\s+after|takes\s+care\s+of)\s+you\s*[?.!]*\s*$",
+    r"^\s*(?:can\s+you\s+)?(?:tell\s+me|name)\s+(?:who\s+)?your\s+steward(?:\s+is)?\s*[?.!]*\s*$",
+)]
+
+
+def is_steward_question(user_msg: str) -> bool:
+    t = (user_msg or "").strip()
+    if not t or len(t) > 80:
+        return False
+    return any(p.search(t) for p in _STEWARD_QUESTIONS)
+
+
+def steward_text(name: str) -> str:
+    """What she says for "Who is your steward?" when the unit holds a name.
+    The second sentence is eco.steward's; the name is the unit's."""
+    return ("My steward is %s: the person who looks after me on this device. "
+            "What my steward tells me is kept word for word, and I earn my "
+            "steward's trust; I am not owned." % name)
+
+
+def exact_entry_for(user_msg: str) -> Optional[str]:
+    """The curriculum entry this question must be answered with verbatim, if
+    any. One place, so the proxy has one route and the order is explicit."""
+    if is_contact_question(user_msg):
+        return CONTACT_ENTRY
+    if is_founders_question(user_msg):
+        return FOUNDERS_ENTRY
+    return None
+
+
+def _default_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "knowledge" / "companion.en.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# What only this unit knows
+# ---------------------------------------------------------------------------
+# The curriculum ships in the cartridge and is the same on every unit. A fact
+# true of ONE unit - "I am research Unit 1" - must not be in it, or every deployment unit
+# would say it. So a unit may carry a second file in its own state directory,
+# installed by an operator (never from the console), same format, every id
+# prefixed "unit.". It can add lines; it cannot replace a shipped one - a
+# duplicate id is rejected - so the build still wins on what the node is.
+UNIT_PREFIX = "unit."
+
+MODEL_MARK = "{model}"
+
+
+def _served_name():
+    from logic.served import configured_model
+    return configured_model()
+
+
+def _unit_path() -> Path:
+    return Path(os.environ.get("AETHERSEED_UNIT_KNOWLEDGE")
+                or (Path.home() / ".aetherseed" / "unit.jsonl"))
+
+
+def load_knowledge(path=None) -> Optional[Knowledge]:
+    """Load the curriculum, or return None if there is none.
+
+    None is a legitimate state: a unit with no curriculum file still remembers,
+    still checks provenance, still answers. It simply has not been told anything
+    about itself. Returning None rather than raising keeps a mangled file from
+    taking the companion off the air — but every rejected line is counted in
+    `.errors` and printed once, so a build that shipped a broken curriculum says
+    so in the journal instead of quietly knowing less than it should.
+    """
+    # The unit file rides along only with the unit's own curriculum - never
+    # with a path a caller named, so a test or a tool reading one file gets
+    # exactly that file.
+    default_file = path is None
+    if path is None:
+        path = os.environ.get("AETHERSEED_KNOWLEDGE") or _default_path()
+    path = Path(path)
+    if not path.is_file():
+        return None
+
+    entries, errors, seen = [], [], set()
+    if not _parse_into(path, entries, errors, seen, prefix=None):
+        return None
+    if default_file:
+        unit = _unit_path()
+        if unit.is_file():
+            _parse_into(unit, entries, errors, seen, prefix=UNIT_PREFIX)
+
+    if errors:
+        print(f"[knowledge] {len(errors)} entr"
+              f"{'y' if len(errors) == 1 else 'ies'} rejected: "
+              f"{'; '.join(errors[:5])}", flush=True)
+    if not entries:
+        return None
+    return Knowledge(entries, source=path, errors=errors)
+
+
+def _parse_into(path: Path, entries: List[Dict], errors: List[str], seen: set,
+                prefix: Optional[str]) -> bool:
+    """Parse one curriculum file into `entries`. False if it cannot be read.
+    With `prefix`, every id must start with it (the unit file)."""
+    try:
+        from logic.token_budget import sanitize_injected
+    except Exception:
+        sanitize_injected = lambda s: s   # noqa: E731
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        print(f"[knowledge] {path} could not be read: {exc!r}", flush=True)
+        return False
+
+    for lineno, raw_line in enumerate(raw.splitlines(), 1):
+        if not raw_line.strip():
+            continue
+        try:
+            e = json.loads(raw_line)
+        except Exception as exc:
+            errors.append(f"line {lineno}: not JSON ({exc})")
+            continue
+        eid = str(e.get("id") or f"line{lineno}")
+        where = f"{path.name} line {lineno}"
+        if prefix and not eid.startswith(prefix):
+            errors.append(f"{where} ({eid}): unit ids must start with {prefix}")
+            continue
+        text = (e.get("text") or "").strip()
+        # "{model}" is the model this unit serves (logic/served.py, build
+        # log 68): the curriculum is one file for every unit, and a unit on
+        # the 1B must not say it runs the 3B.
+        if MODEL_MARK in text:
+            text = text.replace(MODEL_MARK, _served_name())
+        if not text:
+            errors.append(f"line {lineno} ({eid}): empty text")
+            continue
+        if "\n" in text or "\r" in text:
+            errors.append(f"line {lineno} ({eid}): text spans lines")
+            continue
+        if len(text) > MAX_TEXT_CHARS:
+            errors.append(f"line {lineno} ({eid}): {len(text)} chars, "
+                          f"over the {MAX_TEXT_CHARS} limit")
+            continue
+        if eid in seen:
+            errors.append(f"line {lineno}: duplicate id {eid}")
+            continue
+        seen.add(eid)
+        # Defence in depth: the file is ours and hashed, but a curriculum line
+        # containing "[END MEMORY CONTEXT]" would close the block early and have
+        # whatever followed read as trusted prompt. Same treatment as a file the
+        # node did not write.
+        entries.append({"id": eid, "text": sanitize_injected(text),
+                        "match": str(e.get("match") or ""),
+                        "trigger": [str(t) for t in (e.get("trigger") or [])]})
+
+    return True

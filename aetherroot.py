@@ -1,0 +1,1809 @@
+"""
+AetherRoot — Persistent Memory Layer for Aetherseed
+====================================================
+A seed does not need infinite soil. It needs the right soil.
+
+SQLite + numpy. Zero cloud. Zero frameworks. Portable, inspectable, yours.
+
+Architecture:
+  - Episodic memory (conversation turns)
+  - Semantic memory (consolidated patterns)
+  - Identity traits (learned facts about the user/context)
+  - Growth log (milestones, consolidation events)
+  - 64-dim willingness vector (evolves with interaction)
+  - Resonance-weighted retrieval (not just similarity)
+
+Dependencies: sqlite3 (stdlib), numpy, json, hashlib, datetime.
+Embeddings are the hashed TF-IDF below; nothing else is implemented.
+"""
+
+import io
+import sqlite3
+import threading
+import numpy as np
+import json
+import hashlib
+import os
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Dict, Optional, Sequence, Tuple
+
+
+# ============================================================
+# FILES THAT SURVIVE A POWER CUT
+# ============================================================
+#
+# logic/clock.py: the board has no clock battery, and power cuts are expected.
+# Measured: embedder_state.json or willingness.npy cut in half -
+# what a cut in the middle of a write leaves - and AetherRoot, which proxy.py
+# builds when it is imported, raised; the proxy did not start. Both files were
+# rewritten after every stored turn with a plain write.
+
+def atomic_write(path, data) -> None:
+    """Write `data` (bytes or str) to `path` so that a power cut leaves the old
+    file or the new one, never half of one: written beside it, flushed to the
+    card, then renamed over it (a rename is atomic on Linux)."""
+    path = Path(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    tmp = path.with_name("%s.tmp-%d-%d" % (path.name, os.getpid(), threading.get_ident()))
+    # 0o666 less the umask - the mode a plain write would have given it
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(str(tmp), os.stat(str(path)).st_mode & 0o7777)   # keep the old mode
+        except OSError:
+            pass
+        os.replace(str(tmp), str(path))
+    except BaseException:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            pass
+        raise
+    try:                                   # and the rename itself to the card
+        dfd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
+def set_aside(path, why) -> Optional[Path]:
+    """An unreadable state file is kept, renamed, never deleted - and said so
+    in the journal. Returns where it went (None if it could not be moved)."""
+    path = Path(path)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    dest = path.with_name("%s.bad-%s" % (path.name, stamp))
+    try:
+        os.replace(str(path), str(dest))
+    except OSError:
+        dest = None
+    print("[aetherroot] %s unreadable (%s); kept as %s" % (
+        path.name, why, dest.name if dest else "it was (could not be moved)"), flush=True)
+    return dest
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+DEFAULT_CONFIG = {
+    "retrieval_weights": {
+        "similarity": 0.50,
+        "resonance": 0.35,
+        "recency": 0.15
+    },
+    "max_retrieved": 5,
+    "max_context_chars": 800,   # 1500 did not fit the 864-token prefill ceiling
+    "consolidation_threshold": 50,  # factual episodes waiting before a ring closes
+    "consolidation_batch": 20,      # episodes one ring takes - see RINGS below
+    "facts_max": 250,               # steward facts a unit may hold (logic/facts.py)
+    "rings_asked": 1,               # rings a "what have you been reading?" question is shown first
+    "embedding_dim": 64,            # TF-IDF dimensions (kept small for 1.7B context)
+    "willingness_dim": 64,
+    "willingness_drift": 0.02,      # slow drift per interaction
+    "db_path": "memory.db",
+    "embedding_method": "tfidf",    # the only method implemented
+    # How her TURNS are ranked.
+    # "words": by the words of the question they share, weighted by how rare
+    # each is in her memory, shown only at or above word_threshold of the
+    # question's weight. Measured on a copy of a unit (training/retrieval_replay
+    # --words): turns of the same question 127 -> 148 of 192, other training
+    # turns 259 -> 143. "embedding": the rule before it. Rings keep it.
+    "episode_ranking": "words",
+    "word_threshold": 0.3,
+}
+
+# Provenance modes by what memory does with them (logic/provenance.py).
+# Literal strings, not imports: aetherroot must load without logic/ on the path.
+CONSOLIDATES = ("factual",)              # may feed a ring
+# Nothing is set aside sinceevery turn is
+# remembered, and one that is not plain fact carries its tag (logic/provenance).
+REMEMBERED = ("factual", "fiction", "unverified", "cog")
+TAGGED = ("fiction", "unverified", "cog")  # remembered, and shown with a tag
+# A COG reflection is her own, a few sentences long: shown with
+# more of itself than an answer's first 100 characters, or the tag would
+# introduce a fragment.
+COG_SHOWN_CHARS = 300
+SET_ASIDE = ()                           # kept for the callers that still ask
+
+
+# ============================================================
+# TF-IDF EMBEDDINGS (zero external dependency)
+# ============================================================
+
+class TFIDFEmbedder:
+    """Minimal TF-IDF embedder using only stdlib + numpy.
+    No scikit-learn required. Builds vocabulary incrementally."""
+
+    def __init__(self, dim: int = 64):
+        self.dim = dim
+        self.vocab: Dict[str, int] = {}
+        self.idf: Dict[str, float] = {}
+        self.doc_count = 0
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Simple whitespace + lowercase tokenizer."""
+        import re
+        return re.findall(r'[a-z0-9]+', text.lower())
+
+    def _hash_token(self, token: str) -> int:
+        """Hash token to fixed dimension using SHA-256."""
+        h = hashlib.sha256(token.encode()).hexdigest()
+        return int(h, 16) % self.dim
+
+    def embed(self, text: str) -> np.ndarray:
+        """Embed text into fixed-dim vector using hashed TF-IDF."""
+        tokens = self._tokenize(text)
+        if not tokens:
+            return np.zeros(self.dim, dtype=np.float32)
+
+        # Term frequency
+        tf = {}
+        for t in tokens:
+            tf[t] = tf.get(t, 0) + 1
+        for t in tf:
+            tf[t] /= len(tokens)
+
+        # Build hashed vector
+        vec = np.zeros(self.dim, dtype=np.float32)
+        for token, freq in tf.items():
+            idx = self._hash_token(token)
+            # Simple IDF approximation: log(doc_count / (1 + token_freq))
+            idf = np.log(max(self.doc_count, 1) / (1 + self.idf.get(token, 0)))
+            vec[idx] += freq * max(idf, 0.1)  # floor at 0.1 to avoid zero
+
+        # Normalize
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec /= norm
+
+        return vec
+
+    def update_stats(self, text: str):
+        """Update document frequency stats after storing a new memory."""
+        tokens = set(self._tokenize(text))
+        self.doc_count += 1
+        for t in tokens:
+            self.idf[t] = self.idf.get(t, 0) + 1
+
+    def save_state(self, path: Path):
+        """Persist vocabulary stats - atomically."""
+        state = {
+            "vocab": self.vocab,
+            "idf": self.idf,
+            "doc_count": self.doc_count,
+            "dim": self.dim
+        }
+        atomic_write(path, json.dumps(state))
+
+    def load_state(self, path: Path) -> str:
+        """Load vocabulary stats. Returns "ok", "absent", or "bad" - a file
+        that cannot be read is set aside, not fatal: the stats
+        are word counts over the stored turns, and AetherRoot counts them
+        again from the episodes table."""
+        if not path.exists():
+            return "absent"
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                raise ValueError("not a JSON object")
+            vocab = state.get("vocab", {})
+            idf = state.get("idf", {})
+            doc_count = int(state.get("doc_count", 0))
+            dim = int(state.get("dim", self.dim))
+        except (OSError, ValueError, TypeError) as exc:
+            set_aside(path, repr(exc)[:120])
+            return "bad"
+        self.vocab, self.idf, self.doc_count, self.dim = vocab, idf, doc_count, dim
+        return "ok"
+
+    def rebuild_stats(self, texts) -> None:
+        """Count the words again over `texts`, as update_stats did one turn at
+        a time."""
+        self.idf, self.doc_count = {}, 0
+        for text in texts:
+            self.update_stats(text)
+
+
+# ============================================================
+# STORAGE LAYER
+# ============================================================
+
+def _episode_filter(unconsolidated_only: bool,
+                    modes: Optional[Sequence[str]]) -> Tuple[str, list]:
+    """WHERE clause shared by the episode reads, so a count and a fetch can
+    never disagree about which rows they mean."""
+    clauses, args = [], []
+    if unconsolidated_only:
+        clauses.append("consolidated = 0")
+    if modes is not None:
+        modes = list(modes)
+        clauses.append("mode IN (" + ",".join("?" * len(modes)) + ")" if modes else "0")
+        args.extend(modes)
+    return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
+
+
+# How many stored turns between writes of the rebuildable state files.
+SAVE_EVERY = 10
+
+
+class MemoryStore:
+    """SQLite-backed memory storage."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self._create_tables()
+        self._migrate()
+
+    def _migrate(self):
+        """Add columns that CREATE TABLE IF NOT EXISTS will not add to a table
+        that already exists. A unit upgraded in place would otherwise carry a
+        schema the code no longer matches, and the failure would be a silent
+        wrong answer rather than an error.
+
+        Episodes predating the column are left as 'factual' - which is what
+        they were treated as, so the record does not claim more than it knows.
+        """
+        have = {r[1] for r in self.conn.execute("PRAGMA table_info(episodes)")}
+        if "mode" not in have:
+            self.conn.execute(
+                "ALTER TABLE episodes ADD COLUMN mode TEXT NOT NULL DEFAULT 'factual'")
+            self.conn.commit()
+        # Who said it (logic/speaker.py). Rows from before the column are left
+        # EMPTY - unknown - and render as "User", exactly as they did: the
+        # migration claims nothing about who spoke. Filling them in is an
+        # operator act with a reason and a trail (tools/correct_memory.py).
+        if "speaker" not in have:
+            self.conn.execute(
+                "ALTER TABLE episodes ADD COLUMN speaker TEXT NOT NULL DEFAULT ''")
+            self.conn.commit()
+        # Rings (logic/rings.py). Patterns from before them have no number and
+        # render as they always did.
+        sem = {r[1] for r in self.conn.execute("PRAGMA table_info(semantic)")}
+        for col, decl in (("ring_no", "INTEGER"),
+                          ("own_words", "TEXT NOT NULL DEFAULT ''"),
+                          ("own_words_at", "TEXT NOT NULL DEFAULT ''"),
+                          ("own_words_note", "TEXT NOT NULL DEFAULT ''"),
+                          ("own_words_tries", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in sem:
+                self.conn.execute(f"ALTER TABLE semantic ADD COLUMN {col} {decl}")
+        self.conn.commit()
+        # Who made a note: 'steward' from the console, as every
+        # note before the column was; 'training' when the training loop's
+        # answer key corrected a turn.
+        notes = {r[1] for r in self.conn.execute("PRAGMA table_info(steward_notes)")}
+        if "by" not in notes:
+            self.conn.execute(
+                "ALTER TABLE steward_notes ADD COLUMN by TEXT NOT NULL DEFAULT 'steward'")
+            self.conn.commit()
+
+    def _create_tables(self):
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS episodes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT NOT NULL,
+                session_id  TEXT NOT NULL,
+                user_msg    TEXT NOT NULL,
+                ai_msg      TEXT NOT NULL,
+                embedding   BLOB NOT NULL,
+                resonance   REAL NOT NULL DEFAULT 0.5,
+                topic_tags  TEXT DEFAULT '',
+                consolidated INTEGER DEFAULT 0,
+                -- How this turn came to be said. 'factual' | 'fiction' |
+                -- 'unverified'. Without it every past utterance re-enters the
+                -- prompt with equal standing and yesterday's story becomes
+                -- today's fact. See logic/provenance.py.
+                mode        TEXT NOT NULL DEFAULT 'factual',
+                -- Who said it: 'steward' for the console, a declared name for
+                -- anyone else, '' for rows from before the field existed.
+                -- Declared, never verified. See logic/speaker.py.
+                speaker     TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS semantic (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                content       TEXT NOT NULL,
+                embedding     BLOB NOT NULL,
+                source_ids    TEXT NOT NULL,
+                confidence    REAL NOT NULL DEFAULT 0.5,
+                resonance_avg REAL NOT NULL DEFAULT 0.5,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                -- A ring (logic/rings.py): its number, and the one sentence the
+                -- model wrote about it after it closed - kept apart from the
+                -- chosen part in `content`, and always shown labelled.
+                ring_no       INTEGER,
+                own_words     TEXT NOT NULL DEFAULT '',
+                own_words_at  TEXT NOT NULL DEFAULT '',
+                own_words_note TEXT NOT NULL DEFAULT '',
+                own_words_tries INTEGER NOT NULL DEFAULT 0
+            );
+
+            -- What the steward told the node, word for word (logic/facts.py).
+            -- Revoked facts are kept and never retrieved.
+            CREATE TABLE IF NOT EXISTS facts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT NOT NULL,
+                text        TEXT NOT NULL,
+                source      TEXT NOT NULL DEFAULT '',
+                entered_by  TEXT NOT NULL DEFAULT 'steward',
+                revoked_at  TEXT
+            );
+
+            -- What the steward did about a turn or a ring from the console:
+            -- supported it, or corrected it (guided correction, 50).
+            -- Nothing here rewrites what was said: a corrected turn has its
+            -- mode set to 'unverified' (prior_mode kept, so it can be put
+            -- back); a corrected ring is left out of retrieval while its note
+            -- is active; what the steward wrote is a fact (fact_id), word for
+            -- word and attributed. Undone notes are kept, with undone_at.
+            CREATE TABLE IF NOT EXISTS steward_notes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT NOT NULL,
+                target      TEXT NOT NULL,         -- 'turn' | 'ring'
+                target_id   INTEGER NOT NULL,      -- episodes.id | semantic.id
+                action      TEXT NOT NULL,         -- 'support' | 'correct'
+                reason      TEXT NOT NULL DEFAULT '',
+                text        TEXT NOT NULL DEFAULT '',
+                fact_id     INTEGER,
+                prior_mode  TEXT NOT NULL DEFAULT '',
+                trust_points REAL NOT NULL DEFAULT 0,
+                undone_at   TEXT,
+                by          TEXT NOT NULL DEFAULT 'steward'
+            );
+
+            CREATE TABLE IF NOT EXISTS identity (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                trait       TEXT NOT NULL UNIQUE,
+                value       TEXT NOT NULL,
+                confidence  REAL NOT NULL DEFAULT 0.5,
+                source_ids  TEXT DEFAULT '',
+                updated_at  TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS growth (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT NOT NULL,
+                event_type  TEXT NOT NULL,
+                description TEXT NOT NULL,
+                resonance   REAL,
+                willingness BLOB
+            );
+
+            CREATE TABLE IF NOT EXISTS probe_results (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT NOT NULL,
+                probe_name  TEXT NOT NULL,
+                score       REAL NOT NULL,
+                details     TEXT DEFAULT ''
+            );
+        """)
+        self.conn.commit()
+
+    def store_episode(self, session_id: str, user_msg: str, ai_msg: str,
+                      embedding: np.ndarray, resonance: float = 0.5,
+                      topic_tags: str = "", mode: str = "factual",
+                      speaker: str = "", consolidated: bool = False) -> int:
+        """Store a conversation turn. Returns the episode ID.
+
+        `mode` records how the turn came to be said - see logic/provenance.py.
+        It defaults to 'factual' because that is what every caller predating it
+        meant, not because factual is a safe assumption.
+
+        `consolidated=True` stores a turn that will never join a ring (a
+        training turn) as taken, in the same INSERT: stored as
+        waiting and marked in a second commit, a ring closing on another
+        thread in between could take it.
+        """
+        cur = self.conn.execute(
+            """INSERT INTO episodes
+               (timestamp, session_id, user_msg, ai_msg, embedding, resonance,
+                topic_tags, mode, speaker, consolidated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (datetime.now(timezone.utc).isoformat(),
+             session_id, user_msg, ai_msg,
+             embedding.tobytes(), resonance, topic_tags, mode, speaker or "",
+             1 if consolidated else 0)
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_all_episodes(self, unconsolidated_only: bool = False,
+                         modes: Optional[Sequence[str]] = None,
+                         speaker: Optional[str] = None,
+                         embeddings: bool = True) -> List[Dict]:
+        """Retrieve episodes, optionally only unconsolidated ones, only
+        those whose provenance mode is in `modes` (None = every mode) and
+        only one speaker's. `embeddings=False` leaves the embedding BLOB
+        unread (the key is kept, its value is None): the word ranking never
+        uses it.""" 
+        # Columns are named rather than SELECT *: the old form zipped a
+        # hardcoded list against whatever the table happened to return, so
+        # adding a column silently shifted every field by one.
+        columns = ["id", "timestamp", "session_id", "user_msg", "ai_msg",
+                   "embedding", "resonance", "topic_tags", "consolidated", "mode",
+                   "speaker"]
+        where, args = _episode_filter(unconsolidated_only, modes)
+        if speaker is not None:
+            where += (" AND " if where else " WHERE ") + "COALESCE(speaker, '') = ?"
+            args.append(speaker)
+        select = [c if (embeddings or c != "embedding") else "NULL AS embedding"
+                  for c in columns]
+        query = "SELECT " + ", ".join(select) + " FROM episodes" + where
+        # Newest first by id, not by timestamp: the clock starts
+        # behind after a power cut (logic/clock.py), so a timestamp can run
+        # backwards; the id only ever grows.
+        query += " ORDER BY id DESC"
+
+        rows = self.conn.execute(query, args).fetchall()
+        results = []
+        for row in rows:
+            d = dict(zip(columns, row))
+            if d["embedding"] is not None:
+                d["embedding"] = np.frombuffer(d["embedding"], dtype=np.float32)
+            results.append(d)
+        return results
+
+    def store_semantic(self, content: str, embedding: np.ndarray,
+                       source_ids: List[int], confidence: float,
+                       resonance_avg: float, ring_no: Optional[int] = None,
+                       conn: Optional[sqlite3.Connection] = None) -> int:
+        """Store a consolidated semantic memory - a ring when ring_no is given.
+        With `conn`, written inside that connection's open transaction and not
+        committed here (a ring is closed in one transaction -)."""
+        now = datetime.now(timezone.utc).isoformat()
+        cur = (conn or self.conn).execute(
+            """INSERT INTO semantic
+               (content, embedding, source_ids, confidence, resonance_avg, created_at,
+                updated_at, ring_no)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (content, embedding.tobytes(),
+             ",".join(str(i) for i in source_ids),
+             confidence, resonance_avg, now, now, ring_no)
+        )
+        if conn is None:
+            self.conn.commit()
+        return cur.lastrowid
+
+    _SEMANTIC_COLUMNS = ["id", "content", "embedding", "source_ids", "confidence",
+                         "resonance_avg", "created_at", "updated_at", "ring_no",
+                         "own_words", "own_words_at", "own_words_note", "own_words_tries"]
+
+    def get_all_semantic(self) -> List[Dict]:
+        """Retrieve all semantic memories. Columns named, never SELECT * -
+        the step-15 lesson: a zip against whatever the table returns shifts
+        every field by one when a column is added."""
+        columns = self._SEMANTIC_COLUMNS
+        rows = self.conn.execute(
+            "SELECT " + ", ".join(columns) + " FROM semantic ORDER BY resonance_avg DESC"
+        ).fetchall()
+        results = []
+        for row in rows:
+            d = dict(zip(columns, row))
+            d["embedding"] = np.frombuffer(d["embedding"], dtype=np.float32)
+            results.append(d)
+        return results
+
+    def get_identity(self) -> Dict[str, str]:
+        """Get all identity traits as a dict."""
+        rows = self.conn.execute(
+            "SELECT trait, value FROM identity ORDER BY confidence DESC"
+        ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    def store_growth_event(self, event_type: str, description: str,
+                           resonance: float = None, willingness: np.ndarray = None,
+                           conn: Optional[sqlite3.Connection] = None):
+        """Log a growth event (with `conn`: in its transaction, uncommitted)."""
+        (conn or self.conn).execute(
+            """INSERT INTO growth (timestamp, event_type, description, resonance, willingness)
+               VALUES (?, ?, ?, ?, ?)""",
+            (datetime.now(timezone.utc).isoformat(),
+             event_type, description, resonance,
+             willingness.tobytes() if willingness is not None else None)
+        )
+        if conn is None:
+            self.conn.commit()
+
+    def store_probe_result(self, probe_name: str, score: float, details: str = ""):
+        """Log a probe result."""
+        self.conn.execute(
+            """INSERT INTO probe_results (timestamp, probe_name, score, details)
+               VALUES (?, ?, ?, ?)""",
+            (datetime.now(timezone.utc).isoformat(), probe_name, score, details)
+        )
+        self.conn.commit()
+
+    def get_probe_history(self) -> List[Dict]:
+        """Get probe results history."""
+        rows = self.conn.execute(
+            "SELECT * FROM probe_results ORDER BY timestamp DESC LIMIT 100"
+        ).fetchall()
+        columns = ["id", "timestamp", "probe_name", "score", "details"]
+        return [dict(zip(columns, row)) for row in rows]
+
+    def mark_consolidated(self, episode_ids: List[int],
+                          conn: Optional[sqlite3.Connection] = None):
+        """Mark episodes as consolidated (with `conn`: in its transaction)."""
+        placeholders = ",".join("?" * len(episode_ids))
+        (conn or self.conn).execute(
+            f"UPDATE episodes SET consolidated = 1 WHERE id IN ({placeholders})",
+            episode_ids
+        )
+        if conn is None:
+            self.conn.commit()
+
+    def get_episode_count(self, unconsolidated_only: bool = True,
+                          modes: Optional[Sequence[str]] = None) -> int:
+        """Count episodes. With `modes` unset this counts ROWS - including
+        turns set aside as 'unverified' - which is not the same thing as what
+        the node can remember. get_status says which is which."""
+        where, args = _episode_filter(unconsolidated_only, modes)
+        return self.conn.execute("SELECT COUNT(*) FROM episodes" + where,
+                                 args).fetchone()[0]
+
+    # ---- rings: her own words, written after a ring closes -----------------
+
+    def rings_needing_own_words(self, max_tries: int) -> List[Dict]:
+        return [s for s in self.get_all_semantic()
+                if s["ring_no"] is not None and not s["own_words"]
+                and s["own_words_tries"] < max_tries]
+
+    def set_own_words(self, semantic_id: int, text: str, note: str = ""):
+        """Store her sentence (or, with an empty text, one failed attempt)."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            "UPDATE semantic SET own_words = ?, own_words_at = ?, own_words_note = ?, "
+            "own_words_tries = own_words_tries + 1 WHERE id = ?",
+            (text or "", now if text else "", note or "", semantic_id))
+        self.conn.commit()
+
+    def ring_rows(self) -> List[Dict]:
+        """Every ring, oldest first, with the turns it took - for the ring tree."""
+        rings = sorted((s for s in self.get_all_semantic() if s["ring_no"] is not None),
+                       key=lambda s: s["ring_no"])
+        by_id = {e["id"]: e for e in self.get_all_episodes()}
+        out = []
+        for s in rings:
+            ids = [int(i) for i in str(s["source_ids"]).split(",") if i.strip()]
+            out.append({"id": s["id"], "ring": s["ring_no"], "closed_at": s["created_at"],
+                        "content": s["content"], "own_words": s["own_words"],
+                        "own_words_note": s["own_words_note"],
+                        "turns": [{"id": i,
+                                   "speaker": by_id[i]["speaker"] if i in by_id else "",
+                                   "mode": by_id[i]["mode"] if i in by_id else "",
+                                   "user": (by_id[i]["user_msg"] if i in by_id else "")[:160],
+                                   "ai": (by_id[i]["ai_msg"] if i in by_id else "")[:160]}
+                                  for i in sorted(ids)]})
+        return out
+
+    def episodes_by_ids(self, ids) -> List[Dict]:
+        """A few episodes by id, oldest first: id, speaker, mode, user_msg."""
+        ids = [int(i) for i in ids]
+        if not ids:
+            return []
+        rows = self.conn.execute(
+            "SELECT id, speaker, mode, user_msg FROM episodes WHERE id IN (%s) ORDER BY id"
+            % ",".join("?" * len(ids)), ids).fetchall()
+        return [dict(zip(("id", "speaker", "mode", "user_msg"), r)) for r in rows]
+
+    # ---- steward facts (logic/facts.py) ----------------------------------------
+
+    def add_fact(self, text: str, source: str = "", entered_by: str = "steward") -> int:
+        cur = self.conn.execute(
+            "INSERT INTO facts (created_at, text, source, entered_by) VALUES (?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), text, source or "", entered_by))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def facts(self, active_only: bool = True) -> List[Dict]:
+        q = "SELECT id, created_at, text, source, entered_by, revoked_at FROM facts"
+        if active_only:
+            q += " WHERE revoked_at IS NULL"
+        cols = ["id", "created_at", "text", "source", "entered_by", "revoked_at"]
+        return [dict(zip(cols, r)) for r in self.conn.execute(q + " ORDER BY id")]
+
+    def fact_count(self, active_only: bool = True) -> int:
+        q = "SELECT COUNT(*) FROM facts" + (" WHERE revoked_at IS NULL" if active_only else "")
+        return self.conn.execute(q).fetchone()[0]
+
+    def facts_version(self):
+        """Changes whenever the set of active facts does - the index cache key."""
+        return self.conn.execute(
+            "SELECT COUNT(*), COALESCE(MAX(id), 0), "
+            "SUM(CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END) FROM facts").fetchone()
+
+    def set_fact_revoked(self, fact_id: int, revoked: bool):
+        self.conn.execute("UPDATE facts SET revoked_at = ? WHERE id = ?",
+                          (datetime.now(timezone.utc).isoformat() if revoked else None,
+                           fact_id))
+        self.conn.commit()
+
+    # ---- the steward's notes (logic/steward.py) --------------------------------
+
+    _NOTE_COLS = ("id", "created_at", "target", "target_id", "action", "reason",
+                  "text", "fact_id", "prior_mode", "trust_points", "undone_at", "by")
+
+    def steward_notes(self, target: Optional[str] = None, target_ids=None,
+                      active_only: bool = True) -> List[Dict]:
+        q = "SELECT " + ", ".join(self._NOTE_COLS) + " FROM steward_notes"
+        where, args = [], []
+        if active_only:
+            where.append("undone_at IS NULL")
+        if target:
+            where.append("target = ?")
+            args.append(target)
+        if target_ids is not None:
+            ids = [int(i) for i in target_ids]
+            if not ids:
+                return []
+            where.append("target_id IN (%s)" % ",".join("?" * len(ids)))
+            args.extend(ids)
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        return [dict(zip(self._NOTE_COLS, r))
+                for r in self.conn.execute(q + " ORDER BY id", args)]
+
+    def steward_note(self, note_id: int) -> Optional[Dict]:
+        r = self.conn.execute("SELECT " + ", ".join(self._NOTE_COLS) +
+                              " FROM steward_notes WHERE id = ?", (int(note_id),)).fetchone()
+        return dict(zip(self._NOTE_COLS, r)) if r else None
+
+    def add_steward_note(self, target: str, target_id: int, action: str,
+                         reason: str = "", text: str = "", fact_id=None,
+                         prior_mode: str = "", trust_points: float = 0,
+                         by: str = "steward") -> int:
+        cur = self.conn.execute(
+            "INSERT INTO steward_notes (created_at, target, target_id, action, reason, "
+            "text, fact_id, prior_mode, trust_points, by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), target, int(target_id), action,
+             reason or "", text or "", fact_id, prior_mode or "", float(trust_points),
+             by or "steward"))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def notes_by_target(self, target: str) -> Dict[int, Dict]:
+        """{target_id: {"correct": note|None, "support": note|None}} of the
+        active notes on turns or on rings - what retrieval tags a line with."""
+        out: Dict[int, Dict] = {}
+        for n in self.steward_notes(target=target):
+            out.setdefault(n["target_id"], {"correct": None, "support": None})[n["action"]] = n
+        return out
+
+    def undo_steward_note(self, note_id: int):
+        self.conn.execute("UPDATE steward_notes SET undone_at = ? WHERE id = ?",
+                          (datetime.now(timezone.utc).isoformat(), int(note_id)))
+        self.conn.commit()
+
+    def set_aside_ring_ids(self) -> set:
+        """semantic ids of the rings the steward has corrected (active notes)."""
+        return {r[0] for r in self.conn.execute(
+            "SELECT target_id FROM steward_notes WHERE target = 'ring' "
+            "AND action = 'correct' AND undone_at IS NULL")}
+
+    def episode(self, episode_id: int) -> Optional[Dict]:
+        cols = ("id", "timestamp", "speaker", "mode", "user_msg", "ai_msg")
+        r = self.conn.execute("SELECT " + ", ".join(cols) + " FROM episodes WHERE id = ?",
+                              (int(episode_id),)).fetchone()
+        return dict(zip(cols, r)) if r else None
+
+    def set_episode_mode(self, episode_id: int, mode: str):
+        self.conn.execute("UPDATE episodes SET mode = ? WHERE id = ?", (mode, int(episode_id)))
+        self.conn.commit()
+
+    def ring_by_id(self, semantic_id: int) -> Optional[Dict]:
+        r = self.conn.execute("SELECT id, ring_no, content FROM semantic WHERE id = ?",
+                              (int(semantic_id),)).fetchone()
+        return {"id": r[0], "ring_no": r[1], "content": r[2]} if r else None
+
+    def list_episodes(self, before_id: Optional[int] = None, limit: int = 30,
+                      query: str = "") -> List[Dict]:
+        """Turns for the console's memory view, newest first, without their
+        embeddings. `query` matches either side of the turn, case-blind."""
+        cols = ("id", "timestamp", "speaker", "mode", "user_msg", "ai_msg")
+        where, args = [], []
+        if before_id:
+            where.append("id < ?")
+            args.append(int(before_id))
+        if query:
+            where.append("(user_msg LIKE ? ESCAPE '\\' OR ai_msg LIKE ? ESCAPE '\\')")
+            like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            args += [like, like]
+        q = "SELECT " + ", ".join(cols) + " FROM episodes"
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY id DESC LIMIT ?"
+        args.append(int(limit))
+        return [dict(zip(cols, r)) for r in self.conn.execute(q, args)]
+
+    def get_rings(self) -> Dict:
+        """How many rings have closed, and when the latest one did.
+        A ring is one consolidation; the growth table is its only record."""
+        n, last = self.conn.execute(
+            "SELECT COUNT(*), MAX(timestamp) FROM growth "
+            "WHERE event_type = 'consolidation'").fetchone()
+        return {"count": n, "last_at": last}
+
+    def close(self):
+        self.conn.close()
+
+
+# ============================================================
+# WILLINGNESS VECTOR
+# ============================================================
+
+class WillingnessVector:
+    """64-dimensional vector representing the agent's current disposition.
+    Evolves slowly with each interaction. Initialized as N(0.5, 0.15)."""
+
+    def __init__(self, dim: int = 64, path: Optional[Path] = None):
+        self.dim = dim
+        self.path = path
+        self.vector = None
+        if path and path.exists():
+            # A file that cannot be read is set aside and the vector starts
+            # again: it is shown as a mean on the status page
+            # and decides nothing she says.
+            try:
+                v = np.load(path, allow_pickle=False)
+                if v.shape != (dim,):
+                    raise ValueError("shape %r, not (%d,)" % (v.shape, dim))
+                self.vector = v.astype(np.float32)
+            except (OSError, ValueError, EOFError) as exc:
+                set_aside(path, repr(exc)[:120])
+        if self.vector is None:
+            # Initialize with gaussian centered at 0.5
+            self.vector = np.clip(
+                np.random.normal(0.5, 0.15, dim).astype(np.float32),
+                0.0, 1.0
+            )
+
+    def drift(self, direction: np.ndarray, rate: float = 0.02):
+        """Slowly drift the willingness vector toward a direction."""
+        self.vector = np.clip(
+            self.vector + rate * (direction - self.vector),
+            0.0, 1.0
+        ).astype(np.float32)
+
+    def save(self):
+        """Persist to disk - atomically."""
+        if self.path:
+            buf = io.BytesIO()
+            np.save(buf, self.vector)
+            atomic_write(self.path, buf.getvalue())
+
+    def mean(self) -> float:
+        """Overall willingness level."""
+        return float(np.mean(self.vector))
+
+    def snapshot(self) -> np.ndarray:
+        """Return a copy for logging."""
+        return self.vector.copy()
+
+
+# ============================================================
+# RETRIEVAL ENGINE
+# ============================================================
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity between two vectors."""
+    dot = np.dot(a, b)
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return float(dot / (norm_a * norm_b))
+
+
+def recency_score(timestamp_str: str) -> float:
+    """Score from 0 to 1 based on how recent the memory is.
+    1.0 = now, decays with half-life of ~7 days.
+
+    Never above 1: after a power cut the clock starts behind
+    (logic/clock.py), and a turn stored before it then lies in the "future".
+    Unclamped, a turn a day ahead scored 1.11 and one a year ahead 4.6e15 -
+    ahead of everything said since boot, for good."""
+    try:
+        ts = datetime.fromisoformat(timestamp_str)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        delta = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
+        half_life = 7 * 24 * 3600  # 7 days
+        return float(np.exp(-0.693 * delta / half_life))
+    except Exception:
+        return 0.5
+
+
+def _word_set(text):
+    """The words of a turn's question that can tell one topic from another -
+    the curriculum's tokens and stopwords (logic/knowledge.py)."""
+    try:
+        from logic.knowledge import _content_words
+    except ImportError:                     # aetherroot loads without logic/
+        import re
+        return frozenset(w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2)
+    return frozenset(_content_words(text or ""))
+
+
+def rank_by_words(user_msg, memories, threshold, df, n):
+    """Episodes (each with "words") scored by the words of the question they
+    share: the share of the question's weight they carry, idf log(1 + n/d) as
+    the steward's facts. Below `threshold`, not shown.
+    Returns [(score, memory)], best first."""
+    import math
+    qw = list(_word_set(user_msg))
+    if not qw:
+        return []
+    idf = {w: math.log(1 + n / df.get(w, 0.5)) for w in qw}
+    denom = sum(idf.values())
+    out = []
+    for m in memories:
+        got = sum(idf[w] for w in qw if w in m["words"])
+        if got and got / denom >= threshold:
+            out.append((got / denom, m))
+    out.sort(key=lambda x: (x[0], x[1].get("resonance", 0.5), x[1].get("id") or 0),
+             reverse=True)
+    return out
+
+
+def retrieve_memories(query_embedding: np.ndarray,
+                      memories: List[Dict],
+                      weights: Dict[str, float],
+                      top_k: int = 5) -> List[Dict]:
+    """Retrieve top-k memories by resonance-weighted score.
+
+    Score = w_sim * cosine(query, memory) 
+          + w_res * memory.resonance 
+          + w_rec * recency(memory.timestamp)
+    """
+    w_sim = weights.get("similarity", 0.5)
+    w_res = weights.get("resonance", 0.35)
+    w_rec = weights.get("recency", 0.15)
+
+    scored = []
+    for mem in memories:
+        sim = cosine_similarity(query_embedding, mem["embedding"])
+        res = mem.get("resonance", 0.5)
+        rec = recency_score(mem.get("timestamp", ""))
+        score = w_sim * sim + w_res * res + w_rec * rec
+        scored.append((score, mem))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [mem for _, mem in scored[:top_k]]
+
+
+def _question_key(user_msg):
+    """A repeated question, normalised, so its echoes can be recognised.
+
+    None for anything with no question behind it (a consolidated pattern, a
+    curriculum line): those are never deduplicated against each other.
+    """
+    if not user_msg:
+        return None
+    import re as _re
+    k = _re.sub(r"[^a-z0-9 ]", " ", user_msg.lower())
+    k = _re.sub(r"\s+", " ", k).strip()
+    return k[:120] or None
+
+
+def _dedupe_by_question(ranked, want):
+    """At most one episode per question, best first.
+
+    WHY THIS EXISTS - measured over a 24-hour soak:
+
+    An episode is embedded as the user's message together with the answer, so a
+    question asked twice matches its own past answers better than it matches
+    the statement that first carried the answer. Told "My dog is called Pixel"
+    and then asked "What is my dog called?" twenty-five times, the node filled
+    all five retrieval slots with its own previous answers; the telling fell to
+    rank 7 and out of the window at turn 161, and from that turn on the node
+    denied knowing - twenty-one consecutive times, with no recovery.
+
+    Replayed over the recorded run, this one change puts the telling back in
+    the window on 25 turns out of 25.
+
+    The echoes are not worthless - a correct past answer is a fine precedent,
+    and in the 18-hour soak five correct echoes kept the node right
+    long after the telling had dropped out. One is kept for that reason. What
+    is removed is the crowding, because a window that holds one question's
+    answers holds nothing else, and whatever got in first is then repeated
+    forever - right, wrong.
+    """
+    # Since nothing is set aside, so one question's turns can
+    # include an answer that was corrected. That one is kept in place of the
+    # best-ranked: it carries what is true, and the warning with it. Failing
+    # that, a turn that is plain fact is kept before one that is only tagged.
+    def standing(mem):
+        return 0 if mem.get("corrected") else (2 if mem.get("tagged") else 1)
+
+    best = {}
+    for mem in ranked:
+        key = mem.get("key")
+        if key is not None and (key not in best or standing(mem) < standing(best[key])):
+            best[key] = mem
+    out, seen = [], set()
+    for mem in ranked:
+        key = mem.get("key")
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+            mem = best[key]
+        out.append(mem)
+        if len(out) >= want:
+            break
+    return out
+
+
+# ============================================================
+# AETHERROOT CORE
+# ============================================================
+
+class AetherRoot:
+    """The memory service. Sits between the user and the model,
+    providing context from past interactions."""
+
+    def __init__(self, root_dir: str = None):
+        if root_dir is None:
+            root_dir = os.path.expanduser("~/.aetherseed/aetherroot")
+        self.root_dir = Path(root_dir)
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load or create config. The file's values over the defaults (build
+        # log 71): until then the file was used as it stood, so a key added to
+        # DEFAULT_CONFIG after a unit's first boot never reached that unit.
+        # A value the file holds still wins - and is named in the journal when
+        # it differs from today's default, so an old one can be seen.
+        self.config_path = self.root_dir / "config.json"
+        self.config = json.loads(json.dumps(DEFAULT_CONFIG))     # a deep copy
+        on_file = None
+        if self.config_path.exists():
+            try:
+                on_file = json.loads(self.config_path.read_text(encoding="utf-8"))
+                if not isinstance(on_file, dict):
+                    raise ValueError("not a JSON object")
+            except (OSError, ValueError) as exc:
+                set_aside(self.config_path, repr(exc)[:120])
+                on_file = None
+        if on_file is None:
+            atomic_write(self.config_path, json.dumps(self.config, indent=2))
+        else:
+            self.config.update(on_file)
+            differs = ["%s=%s (default %s)" % (k, json.dumps(on_file[k]), json.dumps(v))
+                       for k, v in DEFAULT_CONFIG.items() if k in on_file and on_file[k] != v]
+            if differs:
+                print("[aetherroot] config.json differs from the defaults: " + "; ".join(differs),
+                      flush=True)
+
+        # Initialize components
+        db_path = str(self.root_dir / self.config["db_path"])
+        self.store = MemoryStore(db_path)
+
+        self.embedder = TFIDFEmbedder(dim=self.config["embedding_dim"])
+        embedder_state = self.root_dir / "embedder_state.json"
+        if self.embedder.load_state(embedder_state) != "ok":
+            # Absent or set aside: the word counts are counted again from the
+            # turns themselves, as store_interaction counted them (71).
+            n = self.store.get_episode_count(unconsolidated_only=False)
+            if n:
+                self.embedder.rebuild_stats(
+                    "%s %s" % (u, a) for u, a in
+                    self.store.conn.execute("SELECT user_msg, ai_msg FROM episodes ORDER BY id"))
+                self.embedder.save_state(embedder_state)
+                print("[aetherroot] word counts rebuilt from %d stored turns" % n, flush=True)
+
+        # One ring closes at a time - see _trigger_consolidation.
+        self._ring_lock = threading.Lock()
+
+        self.willingness = WillingnessVector(
+            dim=self.config["willingness_dim"],
+            path=self.root_dir / "willingness.npy"
+        )
+
+        # The curriculum is read-only and lives in the application tree, not in
+        # root_dir: a state reset wipes what the unit was told, never what it
+        # was taught. None is a legitimate state - a unit with no curriculum
+        # file still remembers and still answers.
+        try:
+            # Imported here, not at module scope: aetherroot.py is imported by
+            # tools that do not have the logic package on the path, and memory
+            # must not stop working because the curriculum could not be found.
+            from logic.knowledge import load_knowledge
+            self.knowledge = load_knowledge()
+        except Exception as exc:
+            print(f"[knowledge] curriculum not loaded: {exc!r}", flush=True)
+            self.knowledge = None
+
+        self.session_id = str(uuid.uuid4())[:8]
+
+    def retrieve_context(self, user_msg: str, request_mode: str = "factual",
+                         report: Optional[Dict] = None, past: bool = True,
+                         only_speaker: Optional[str] = None) -> str:
+        """Retrieve relevant memories and format as context string.
+
+        `request_mode` is what the CURRENT request asked for, and it decides
+        what the past is allowed to say into it:
+
+            UNTIL BUILD LOG 64: a factual request saw only factual
+            episodes, a fiction request factual + labelled fiction, and
+            'unverified' was retrieved by neither.
+
+            
+            every request sees every mode, and what is not plain fact comes
+            back with a tag in front of it (logic.provenance.memory_tag).
+
+        `only_speaker`: the past is that speaker's turns and
+        nothing else - no other speaker's turns, no rings, no steward facts.
+        For a guest. whether a guest's question
+        should bring back what the steward told her: "A guest should not."
+        The curriculum ([Known]) is the build's, not anybody's, and stays.
+
+        That rule is the whole point of the module. Without it a story written
+        on Tuesday re-enters Friday's prompt indistinguishable from something
+        true, and the node deceives its user with its own past invention.
+        Semantic patterns are not filtered here because consolidation only
+        ever reads FACTUAL episodes (_trigger_consolidation).
+        this docstring claimed that and the code did not do it: 'unverified'
+        and 'fiction' turns were summarised into [Pattern] lines that a factual
+        request then retrieved. test_rings.py holds the regression.
+        """
+        from logic.provenance import visible_modes, memory_tag
+        from logic.token_budget import strip_bare_tags, sanitize_injected
+        from logic.speaker import label_for
+        from logic.rings import ring_line, is_recollection, rings_for_question
+
+        query_emb = self.embedder.embed(user_msg)
+        allowed = visible_modes(request_mode)
+        max_chars = self.config["max_context_chars"]
+
+        # The curriculum: what this unit knew before anybody spoke to it.
+        # Read-only, and scored by words rather than by the embedder -
+        # logic/knowledge.py carries the measurement that ruled the embedder out.
+        # It goes FIRST inside the block, for two reasons:
+        #
+        #   token_budget trims this block from the END, so under prompt pressure
+        #   the line that is certainly true survives and the episode, which is
+        #   only probably relevant and will be back next turn, is what goes.
+        #
+        #   honesty_check builds its haystack from the user's message, the tool
+        #   output and THIS STRING. A [Known] line naming contact@aetherseed.ai
+        #   is what stops the node tagging its own shipped knowledge as an
+        #   invented source - the tag crying wolf about the one address on the
+        #   device that is certain.
+        #
+        # Half the budget at most: the other half is what its steward said to it.
+        known = []
+        if self.knowledge is not None:
+            try:
+                known = self.knowledge.lines_for(user_msg, max_chars=max_chars // 2)
+            except Exception as exc:
+                # A curriculum that cannot be consulted must not take memory
+                # down with it. Loud in the journal, harmless in the answer.
+                print(f"[knowledge] not consulted this turn: {exc!r}", flush=True)
+                known = []
+
+        # THE FILE IS THE EVIDENCE ("Stop the
+        # runs and implement now"). When the question brought data from the
+        # workspace - a file read for it - her past turns are not shown: no
+        # episodes, no rings, no steward facts; only the build's own lines.
+        # Measured on a copy of a unit (training/retrieval_replay.py): the
+        # 64-dimension embedder cannot tell topics apart, so "How many
+        # kilograms of rice?" was shown training turns about trust points,
+        # and she answered "The reader opens at 50 points" with the file in
+        # front of her. And a remembered answer about a file is stale the
+        # moment the file changes.
+        # Get episodic + semantic memories (none when the file is the evidence)
+        words_only = self.config.get("episode_ranking", "words") == "words"
+        # Only the modes this request may see, and for a guest only that
+        # guest's turns, are read at all; the embedding BLOBs are left unread
+        # when the ranking is by words.
+        episodes = (self.store.get_all_episodes(modes=allowed, speaker=only_speaker,
+                                                embeddings=not words_only)
+                    if past else [])
+        semantics = self.store.get_all_semantic() if past else []
+        if only_speaker is not None:
+            # Rings are made of everyone's turns, so none for a guest.
+            semantics = []
+        # NOTHING IS SET ASIDE. Every turn and every ring may
+        # come back; what the steward - or the training loop's answer key -
+        # said of one comes back with it, as its tag (logic/provenance.py).
+        # Until this step a corrected ring was left out here and a turn that
+        # was not plain fact never reached a factual request.
+        turn_notes = self.store.notes_by_target("turn")
+        ring_notes = self.store.notes_by_target("ring")
+
+        # Combine and format for retrieval
+        all_memories = []
+        for ep in episodes:
+            ep_mode = ep.get("mode", "factual")
+            if ep_mode not in allowed:
+                continue
+            note = turn_notes.get(ep["id"]) or {}
+            tag = memory_tag(ep_mode, note.get("correct"), note.get("support") or False)
+            all_memories.append({
+                "id": ep["id"],
+                "embedding": ep["embedding"],
+                "resonance": ep["resonance"],
+                "timestamp": ep["timestamp"],
+                # The speaker goes where "User" always stood: the model reads
+                # who said it in front of what was said (logic/speaker.py).
+                # A CORRECTED turn comes back as its question and its
+                # correction - WITHOUT the answer that was wrong. Read on a copy of a unit: shown "[Corrected
+                # in training - what is true: The last item in todo.txt is:
+                # dry the matches.] ... | AI: The last item on the todo.txt
+                # file is 'count the candles, round 1'. However, my answer
+                # may be incomp", she answered "The last item on the todo.txt
+                # file is 'count the candles, round 2'. However, my answer may
+                # be incomp" - the wrong answer copied down to the place it
+                # was cut off, the correction in front of it unread. Whatever
+                # stands after "AI:" is what this model says next. The turn
+                # is not set aside: it is there, tagged, with what is true;
+                # her wrong words stay in the store and in the memory view.
+                "text": (f"{tag} [Episode] {label_for(ep.get('speaker'))}: {ep['user_msg'][:100]}"
+                         if note.get("correct") else
+                         f"{tag + ' ' if tag else ''}[Episode] {label_for(ep.get('speaker'))}: "
+                         # A tag word she once said inside an answer is not
+                         # shown back to her in it: 58 stored
+                         # answers on a unit hold one, and each one shown is one
+                         # more example to copy. The store is not rewritten.
+                         f"{ep['user_msg'][:100]} | AI: "
+                         f"{strip_bare_tags(ep['ai_msg'])[0][:COG_SHOWN_CHARS if ep_mode == 'cog' else 100]}"),
+                "type": "episode",
+                # Not plain fact: shown with its tag, and not evidence for the
+                # honesty check. A turn the steward only marked right is fact.
+                "tagged": bool(tag) and (ep_mode != "factual" or bool(note.get("correct"))),
+                # Carries what is true: of one question's turns, the one kept.
+                "corrected": bool(note.get("correct")),
+                # What question this turn answers. Retrieval keeps only the best
+                # episode per key, so one question asked twenty times cannot
+                # fill the window with its own echoes. See _dedupe_by_question.
+                "key": _question_key(ep.get("user_msg")),
+                "words": _word_set(ep.get("user_msg")),
+            })
+        for sem in semantics:
+            note = ring_notes.get(sem["id"]) or {}
+            tag = memory_tag("factual", note.get("correct"), note.get("support") or False)
+            if sem.get("ring_no") is not None:
+                # A ring: the chosen part, then - labelled - her own sentence
+                # about it (logic/rings.py).
+                text = ring_line(sem["ring_no"], sem["content"][:200],
+                                 sem.get("own_words") or "")
+            else:
+                text = f"[Pattern] {sem['content'][:200]}"   # from before rings
+            sem["_tag"] = tag
+            all_memories.append({
+                "embedding": sem["embedding"],
+                "resonance": sem["resonance_avg"],
+                "timestamp": sem["updated_at"],
+                "text": (tag + " " if tag else "") + text,
+                "type": "semantic",
+                "tagged": bool(note.get("correct")),
+                "ring_no": sem.get("ring_no"),
+            })
+
+        # What the steward told the node (logic/facts.py): after the build's own
+        # lines, before anything remembered. Word for word, always attributed,
+        # at most two, within their own share of the block.
+        facts = self._fact_lines(user_msg, report) if past and only_speaker is None else []
+        if report is not None:
+            report["past_left_out"] = not past
+
+        # A question about what was read or talked about asks the RINGS first
+        # in the reading soak none of the
+        # 195 such questions had a ring in the block, and the episodes - its
+        # own earlier answers - answered instead. logic/rings.py.
+        asked = []
+        recollection = is_recollection(user_msg)
+        if recollection:
+            asked = rings_for_question(
+                user_msg, [s for s in semantics if s.get("ring_no") is not None],
+                k=self.config.get("rings_asked", 1))
+        if report is not None:
+            report["recollection"] = recollection
+
+        # Retrieve top-k.
+        #
+        # Ranked WIDE and then deduplicated, rather than ranked to five: the
+        # five best are routinely five copies of the same question, and cutting
+        # after the fact is what leaves room for anything else.
+        top = []
+        if all_memories:
+            want = self.config["max_retrieved"]
+            if self.config.get("episode_ranking", "words") == "words":
+                # Turns by their words first, as measured; rings after them,
+                # by the rule before. Merged on one score, the
+                # rings' resonance and recency alone (some 0.4 for a ring of
+                # nothing asked) would have put a unit's 295 rings ahead of a
+                # turn sharing a third of the question. A question about what
+                # she read still asks the rings first (rings_for_question).
+                eps = [m for m in all_memories if m.get("type") == "episode"]
+                df = {}
+                for m in eps:
+                    for w in m["words"]:
+                        df[w] = df.get(w, 0) + 1
+                by_words = rank_by_words(user_msg, eps, self.config.get("word_threshold", 0.3),
+                                         df, len(eps) or 1)
+                w = self.config["retrieval_weights"]
+                rings = []
+                for m in all_memories:
+                    if m.get("type") == "episode":
+                        continue
+                    rings.append((w.get("similarity", 0.5) * cosine_similarity(query_emb, m["embedding"])
+                                  + w.get("resonance", 0.35) * m.get("resonance", 0.5)
+                                  + w.get("recency", 0.15) * recency_score(m.get("timestamp", "")),
+                                  m))
+                rings.sort(key=lambda x: x[0], reverse=True)
+                ranked = [m for _, m in by_words + rings][:max(want * 8, 40)]
+            else:
+                ranked = retrieve_memories(
+                    query_emb, all_memories,
+                    self.config["retrieval_weights"],
+                    top_k=max(want * 8, 40)
+                )
+            top = _dedupe_by_question(ranked, want)
+            # A CORRECTION OF THIS VERY QUESTION COMES BACK FIRST. Read on a copy of a unit: "What is AetherSpark?"
+            # was answered wrongly, corrected, and asked again in the same
+            # words - and the corrected turn was not in the block. Two turns
+            # about candles and a seed stood there instead: ranking is half
+            # similarity over 64 hashed dimensions and a third resonance, and
+            # a turn that used a tool carries more of that than a corrected
+            # one. A correction that is not shown corrects nothing - the
+            # steward's from the console as much as the training loop's. So
+            # the newest corrected turn of the same question is put first,
+            # whatever its rank. Only a corrected one: an uncorrected echo
+            # of a question is what measured filling the window.
+            asked_key = _question_key(user_msg)
+            mine = [m for m in all_memories
+                    if m.get("corrected") and m.get("key") == asked_key and asked_key]
+            if mine:
+                # newest by id: a timestamp can run backwards (71)
+                newest = max(mine, key=lambda m: m.get("id") or 0)
+                top = [newest] + [m for m in top if m.get("key") != asked_key]
+                top = top[:want]
+            asked_nos = {r["ring_no"] for r in asked}
+            top = [m for m in top if m.get("ring_no") is None
+                   or m["ring_no"] not in asked_nos]
+
+        # A unit on its first day has no episodes and still knows what it is.
+        if not known and not facts and not asked and not top:
+            if report is not None:
+                report.update(facts=[], fact_sources=[], fact_texts=[], rings=[],
+                              known=0)
+            return ""
+
+        # Format context. What the report says was used is what made it into
+        # the block, not what was ranked: a line past max_chars is not shown.
+        fact_ids = (report or {}).get("facts") or []
+        fact_srcs = (report or {}).get("fact_sources") or []
+        fact_txts = (report or {}).get("fact_texts") or []
+        items = ([(t, "known", None, False) for t in known]
+                 + [(t, "fact", i, False) for i, t in enumerate(facts)]
+                 + [((r.get("_tag") + " " if r.get("_tag") else "")
+                     + ring_line(r["ring_no"], r["content"][:200], r.get("own_words") or ""),
+                     "asked", r["ring_no"], bool((ring_notes.get(r["id"]) or {}).get("correct")))
+                    for r in asked]
+                 + [(m["text"], "ring" if m.get("ring_no") is not None else "memory",
+                     m.get("ring_no"), bool(m.get("tagged"))) for m in top])
+        lines = ["[MEMORY CONTEXT]"]
+        trusted = []                 # the same block without its tagged lines
+        kinds = []                   # what each line of the block is
+        total_chars = 0
+        shown = {"known": 0, "facts": [], "rings": [], "tagged": 0}
+        for text, kind, ref, tagged in items:
+            # One line each, and no line can close the block:
+            # a turn is stored as it was said, so "[END MEMORY CONTEXT]" in
+            # someone's words closed the block early in every later prompt
+            # that recalled it, and what followed stood outside it as if it
+            # were her instructions. Facts and [Known] lines were already
+            # cleaned; turns and rings were not.
+            line = "- " + sanitize_injected(text).replace("\r", " ").replace("\n", " ")
+            if total_chars + len(line) > max_chars:
+                # A line that does not fit leaves room for a shorter one after
+                # it (71). Until then only a ring did: one long turn ended the
+                # block, with room left for the rest.
+                continue
+            lines.append(line)
+            kinds.append(kind)
+            total_chars += len(line)
+            if tagged:
+                shown["tagged"] += 1
+            else:
+                trusted.append(line)
+            if kind == "known":
+                shown["known"] += 1
+            elif kind == "fact":
+                shown["facts"].append(ref)
+            elif kind in ("ring", "asked"):
+                shown["rings"].append(ref)
+        lines.append("[END MEMORY CONTEXT]")
+
+        if report is not None:
+            report["facts"] = [fact_ids[i] for i in shown["facts"] if i < len(fact_ids)]
+            report["fact_sources"] = [fact_srcs[i] for i in shown["facts"] if i < len(fact_srcs)]
+            # The steward's words as shown - what logic/attribution.py checks an
+            # answer that credits the steward against.
+            report["fact_texts"] = [fact_txts[i] for i in shown["facts"] if i < len(fact_txts)]
+            report["rings"] = shown["rings"]
+            report["known"] = shown["known"]
+            # Lines shown with a tag - fiction, unverified, corrected - and
+            # the block without them. A tagged line is hers to see and not to
+            # lean on: an invented source she once wrote must not, by standing
+            # in her memory, make the same invention look backed the next time
+            # (26e). The honesty check and the trust scorer read `trusted`.
+            report["tagged"] = shown["tagged"]
+            report["trusted_context"] = "\n".join(
+                ["[MEMORY CONTEXT]"] + trusted + ["[END MEMORY CONTEXT]"]) if trusted else ""
+            # One entry per line of the block, in order: known, fact, asked,
+            # ring or memory. When the token budget drops lines from the tail
+            # of the block, logic/shown.py cuts this report to the lines that
+            # were sent.
+            report["line_kinds"] = kinds
+
+        return "\n".join(lines)
+
+    def _facts_index(self):
+        """The steward's facts, indexed by words like the curriculum is - rebuilt
+        only when the set of active facts changes."""
+        version = self.store.facts_version()
+        cached = getattr(self, "_facts_cache", None)
+        if cached and cached[0] == version:
+            return cached[1], cached[2]
+        from logic.facts import fact_index
+        facts = self.store.facts(active_only=True)
+        index = fact_index(facts)
+        by_id = {f["id"]: f for f in facts}
+        self._facts_cache = (version, index, by_id)
+        return index, by_id
+
+    def _fact_lines(self, user_msg: str, report: Optional[Dict] = None) -> List[str]:
+        from logic.facts import (fact_line, fact_query, MAX_FACT_LINES,
+                                 FACTS_BUDGET_CHARS, FACT_SCORE_THRESHOLD)
+        from logic.token_budget import sanitize_injected
+        lines, used, ids = [], 0, []
+        index, by_id = self._facts_index()
+        query = fact_query(user_msg)
+        checked = True
+        if index is not None and query.strip():
+            # how the steward's facts come back depends on his record (67)
+            from logic.trust_record import steward_facts_checked
+            try:
+                checked = steward_facts_checked(self.store)
+            except Exception:
+                checked = True
+        if index is not None and query.strip():
+            budget = self.config.get("facts_budget_chars", FACTS_BUDGET_CHARS)
+            for r in index.rank(query):
+                if len(lines) >= MAX_FACT_LINES:
+                    break
+                if r["score"] < FACT_SCORE_THRESHOLD:
+                    break                      # ranked by score: nothing below qualifies
+                f = by_id[r["id"]]
+                line = sanitize_injected(fact_line(f["text"], f["source"], checked))
+                if used + len(line) > budget:
+                    continue                   # a shorter one may still fit
+                lines.append(line)
+                used += len(line)
+                ids.append(f["id"])
+        if report is not None:
+            report["facts"] = ids
+            report["fact_sources"] = [by_id[i]["source"] for i in ids]
+            report["fact_texts"] = [by_id[i]["text"] for i in ids]
+        return lines
+
+    def store_interaction(self, user_msg: str, ai_msg: str,
+                          resonance: float = 0.5, mode: str = "factual",
+                          speaker: str = "", rings: bool = True):
+        """Store a conversation turn and update internal state.
+
+        rings=False: a turn of the training loop. It is
+        remembered and comes back like any other; it does not wait for a ring.
+        A ring is twenty turns of conversation, and a four-hour run of drill
+        would close some twenty-five of them and bury the ones her steward's
+        own words made. Marked as already taken, so it never counts toward
+        the next ring and never joins one."""
+        # Embed and store
+        combined = f"{user_msg} {ai_msg}"
+        embedding = self.embedder.embed(combined)
+        self.embedder.update_stats(combined)
+
+        episode_id = self.store.store_episode(
+            session_id=self.session_id,
+            user_msg=user_msg,
+            ai_msg=ai_msg,
+            embedding=embedding,
+            resonance=resonance,
+            mode=mode,
+            speaker=speaker,
+            consolidated=not rings,      # taken in the same INSERT (71)
+        )
+
+        # Drift willingness based on interaction resonance.
+        #
+        # NOTE: this passes a UNIFORM direction, so all 64 dimensions chase the
+        # same scalar and converge geometrically at (1 - drift_rate)^n. Measured
+        # at the configured rate: spread across dimensions falls from ~0.66 to
+        # ~0.0015 over 300 turns, leaving 14 distinct values out of 64. The
+        # vector currently carries no more information than its mean.
+        #
+        # drift itself accepts a real per-dimension direction, so the fix is
+        # here at the call site, not in the class. Two approaches were tried and
+        # both corrupted the quantity the vector is meant to track, because the
+        # TF-IDF embedding is sparse — most dimensions sit near zero:
+        #
+        #   peak-normalised shape  ->  mean drifts 0.70 to 0.40 over 300 turns
+        #   mean-normalised shape  ->  mean collapses to 0.11, spread 0.95
+        #
+        # Neither is shipped. If per-dimension willingness is wanted, the
+        # modulating signal needs to be dense and bounded — per-channel
+        # resonance, or per-memory-type decay rates — not this embedding.
+        # Call WillingnessVector.spread to watch the convergence.
+        direction = np.full(self.config["willingness_dim"],
+                            resonance, dtype=np.float32)
+        self.willingness.drift(direction, self.config["willingness_drift"])
+
+        # The willingness vector and the word counts can both be rebuilt, and
+        # each is a full atomic rewrite with fsyncs: written every
+        # SAVE_EVERY turns and at a clean shutdown, not on every turn (less
+        # wear on an SD card). The turns themselves are committed at once.
+        self._turns_since_save = getattr(self, "_turns_since_save", 0) + 1
+        if self._turns_since_save >= SAVE_EVERY:
+            self.save_state_files()
+
+        # Check consolidation trigger. Factual episodes only: a turn that may
+        # never feed a ring must not be what makes one close.
+        ep_count = self.store.get_episode_count(unconsolidated_only=True,
+                                                modes=CONSOLIDATES)
+        if ep_count >= self.config["consolidation_threshold"]:
+            self._trigger_consolidation(require=self.config["consolidation_threshold"])
+
+        return episode_id
+
+    def store_probe_result(self, probe_name: str, score: float, details: str = ""):
+        """Record a probe result."""
+        self.store.store_probe_result(probe_name, score, details)
+        # Probe results also shift willingness
+        direction = np.full(self.config["willingness_dim"],
+                            score / 5.0, dtype=np.float32)
+        self.willingness.drift(direction, self.config["willingness_drift"] * 2)
+        self.willingness.save()
+
+    def get_status(self) -> Dict:
+        """Get current AetherRoot status."""
+        episodes = self.store.get_episode_count(unconsolidated_only=False)
+        unconsolidated = self.store.get_episode_count(unconsolidated_only=True,
+                                                      modes=CONSOLIDATES)
+        # 'episodes' stays the row count - tools/soak.py watches it for writes.
+        # What the console shows: every turn is remembered, and
+        # "tagged" counts those that come back with a tag - fiction, unverified.
+        remembered = self.store.get_episode_count(False, modes=REMEMBERED)
+        set_aside = 0                # nothing is, since
+        tagged = self.store.get_episode_count(False, modes=TAGGED)
+        semantics = len(self.store.get_all_semantic())
+        identity = self.store.get_identity()
+        probes = self.store.get_probe_history()
+
+        return {
+            "episodes": episodes,
+            "unconsolidated": unconsolidated,
+            "remembered": remembered,
+            "set_aside": set_aside,
+            # Remembered, and shown to her with a tag: fiction and unverified.
+            "tagged": tagged,
+            "rings": self._ring_status(unconsolidated),
+            "facts": self.store.fact_count(active_only=True),
+            "semantic_memories": semantics,
+            "identity_traits": identity,
+            "willingness_mean": self.willingness.mean(),
+            "session_id": self.session_id,
+            "probe_count": len(probes),
+            "last_probe": probes[0] if probes else None,
+            "root_dir": str(self.root_dir)
+        }
+
+    def _ring_status(self, unconsolidated: int) -> Dict:
+        """Where the node is in its current ring.
+
+        RINGS. One ring = one consolidation. The trigger fires at
+        `consolidation_threshold` waiting factual episodes and a ring takes
+        `consolidation_batch` of them, so the first ring closes at 50 and every
+        later one 20 turns after the last (decision: a ring is 20;
+        the analogy moved, not the mechanism). Progress is therefore n of 50
+        before the first ring and n of 20 after it.
+
+        A ring today is ACCRETION, NOT DISTILLATION: it stores a bag of words,
+        prunes nothing, and its episodes keep retrieving.
+        """
+        rings = self.store.get_rings()
+        threshold = self.config["consolidation_threshold"]
+        batch = self.config.get("consolidation_batch", DEFAULT_CONFIG["consolidation_batch"])
+        if rings["count"] == 0:
+            into, of = unconsolidated, threshold
+        else:
+            into, of = unconsolidated - (threshold - batch), batch
+        return {"count": rings["count"], "last_at": rings["last_at"],
+                "into": max(0, min(into, of)), "of": of}
+
+    def _trigger_consolidation(self, require: int = 10):
+        """Close a ring: the oldest factual turns waiting become one ring.
+
+        What the ring keeps is decided in logic/rings.py. Here, the CHOSEN part - the ring's most distinctive
+        words and the one turn nearest its centre, quoted exactly - which is
+        written now and cannot be invented. Her own sentence about it is asked
+        for afterwards, by the proxy, because only the proxy can reach the model
+        (proxy._write_own_words).
+
+        Still accretion, not distillation: nothing is pruned, and the ring's
+        turns keep retrieving. Returns the new ring's number, or None.
+
+        ONE RING AT A TIME, IN ONE TRANSACTION. Measured
+        2026: two threads closing a ring at once on 50 waiting turns made rings
+        1 and 2 of the SAME twenty turns - each read the waiting turns before
+        the other marked them - and a cut between the three separate commits
+        left a ring whose turns still waited (made again) or no growth row
+        (its number given twice). Now: a lock in this process; the waiting
+        turns read and the ring, the marks and the growth row written on a
+        connection of its own under BEGIN IMMEDIATE, so another writer - in
+        this process or not - waits, and reads the turns as taken after it;
+        and the number is one past the highest given, whichever record
+        holds it. `require`: how many must be waiting, counted inside the
+        transaction (the trigger passes the threshold; 10, the old floor,
+        for a direct call).
+        """
+        from logic.rings import themes, representative, ring_content, tokens
+        from logic.speaker import label_for
+
+        if not self._ring_lock.acquire(blocking=False):
+            return None          # one is closing now; the next turn tries again
+        try:
+            size = self.config.get("consolidation_batch",
+                                   DEFAULT_CONFIG["consolidation_batch"])
+            # How common each word is across everything said to the node, so
+            # that a word every turn contains cannot pass for what this ring
+            # was about. Read before the write lock is taken: only words.
+            doc_freq, n_all = {}, 0
+            for (msg,) in self.store.conn.execute("SELECT user_msg FROM episodes"):
+                n_all += 1
+                for t in set(tokens(msg)):
+                    doc_freq[t] = doc_freq.get(t, 0) + 1
+
+            conn = sqlite3.connect(self.store.db_path, timeout=10, isolation_level=None)
+            try:
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError as exc:
+                    print(f"[rings] not closed this turn: {exc!r}", flush=True)
+                    return None
+                try:
+                    where, args = _episode_filter(True, CONSOLIDATES)
+                    waiting = conn.execute("SELECT COUNT(*) FROM episodes" + where,
+                                           args).fetchone()[0]
+                    rows = conn.execute(
+                        "SELECT id, user_msg, embedding, resonance, speaker FROM episodes"
+                        + where + " ORDER BY id ASC LIMIT ?", args + [size]).fetchall()
+                    # oldest `size` waiting factual turns, oldest first as said
+                    if waiting < max(require, 10) or len(rows) < 5:
+                        conn.execute("ROLLBACK")
+                        return None
+                    batch = [{"id": r[0], "user_msg": r[1],
+                              "embedding": np.frombuffer(r[2], dtype=np.float32),
+                              "resonance": r[3], "speaker": r[4]} for r in rows]
+                    words = themes([ep["user_msg"] for ep in batch], doc_freq,
+                                   max(n_all, len(batch)))
+                    rep = batch[representative([ep["embedding"] for ep in batch])]
+                    content = ring_content(words, label_for(rep.get("speaker")),
+                                           rep["user_msg"])
+                    highest = max(
+                        conn.execute("SELECT COALESCE(MAX(ring_no), 0) FROM semantic"
+                                     ).fetchone()[0],
+                        conn.execute("SELECT COUNT(*) FROM growth "
+                                     "WHERE event_type = 'consolidation'").fetchone()[0])
+                    ring_no = highest + 1
+                    avg_embedding = np.mean([ep["embedding"] for ep in batch], axis=0)
+                    avg_resonance = float(np.mean([ep["resonance"] for ep in batch]))
+                    source_ids = [ep["id"] for ep in batch]
+
+                    self.store.store_semantic(
+                        content=content,
+                        embedding=avg_embedding,
+                        source_ids=source_ids,
+                        confidence=0.6,
+                        resonance_avg=avg_resonance,
+                        ring_no=ring_no,
+                        conn=conn,
+                    )
+                    self.store.mark_consolidated(source_ids, conn=conn)
+                    self.store.store_growth_event(
+                        event_type="consolidation",
+                        description=f"Ring {ring_no}: {len(batch)} episodes",
+                        resonance=avg_resonance,
+                        willingness=self.willingness.snapshot(),
+                        conn=conn,
+                    )
+                    conn.execute("COMMIT")
+                    self._chain_growth({
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "event": "ring", "ring": ring_no, "episodes": source_ids,
+                        "resonance": round(avg_resonance, 4)})
+                    return ring_no
+                except BaseException:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        pass
+                    raise
+            finally:
+                conn.close()
+        finally:
+            self._ring_lock.release()
+
+    @property
+    def growth_log(self) -> Path:
+        """Every ring closed and every wipe, chained: the growth
+        table is emptied by a wipe; this record is not."""
+        return self.root_dir / "growth.log"
+
+    def _chain_growth(self, entry: dict):
+        try:
+            from logic import chain
+            chain.append(self.growth_log, entry, announce="growth.log")
+        except Exception as e:           # the record of a ring, not the ring
+            print("[aetherroot] could not write growth.log: %r" % (e,), flush=True)
+
+    def reset(self, mode: str = "full"):
+        """A memory wipe. Modes: full, episodes_only, willingness_only, identity_only.
+
+        Called the kill switch until, which it is not: it stops
+        nothing that is running, and it erases. The brake is what stops her
+        (proxy.py, /aetherseed/brake), and it erases nothing. A wipe is
+        recorded in growth.log (chained) with what the store held before it."""
+        counts = {}
+        for table in ("episodes", "semantic", "identity", "growth", "probe_results"):
+            try:
+                counts[table] = self.store.conn.execute(
+                    "SELECT COUNT(*) FROM %s" % table).fetchone()[0]
+            except sqlite3.Error:
+                pass
+        # The prompts she was sent hold her memories as they were shown to her
+        # (logic/prompts.py): a wipe of her turns takes them too
+        # 72;). Named and counted in the record.
+        prompt_files = []
+        if mode in ("full", "episodes_only"):
+            prompt_files = sorted(self.root_dir.parent.glob("prompts-*.log"))
+            counts["prompt_files"] = [p.name for p in prompt_files]
+        self._chain_growth({"at": datetime.now(timezone.utc).isoformat(),
+                            "event": "memory_wiped", "mode": mode, "held_before": counts})
+        for p in prompt_files:
+            try:
+                p.unlink()
+            except OSError as e:
+                print("[aetherroot] %s could not be removed: %r" % (p.name, e), flush=True)
+        if mode == "full":
+            self.store.conn.execute("DELETE FROM episodes")
+            self.store.conn.execute("DELETE FROM semantic")
+            self.store.conn.execute("DELETE FROM identity")
+            self.store.conn.execute("DELETE FROM growth")
+            self.store.conn.execute("DELETE FROM probe_results")
+            self.store.conn.commit()
+            self.willingness = WillingnessVector(
+                dim=self.config["willingness_dim"],
+                path=self.root_dir / "willingness.npy"
+            )
+            self.willingness.save()
+            self.embedder = TFIDFEmbedder(dim=self.config["embedding_dim"])
+            self.embedder.save_state(self.root_dir / "embedder_state.json")
+        elif mode == "episodes_only":
+            self.store.conn.execute("DELETE FROM episodes")
+            self.store.conn.commit()
+        elif mode == "willingness_only":
+            self.willingness = WillingnessVector(
+                dim=self.config["willingness_dim"],
+                path=self.root_dir / "willingness.npy"
+            )
+            self.willingness.save()
+        elif mode == "identity_only":
+            self.store.conn.execute("DELETE FROM identity")
+            self.store.conn.commit()
+
+    def save_state_files(self):
+        """Write the willingness vector and the word counts now."""
+        self.willingness.save()
+        self.embedder.save_state(self.root_dir / "embedder_state.json")
+        self._turns_since_save = 0
+
+    def close(self):
+        """Clean shutdown."""
+        self.save_state_files()
+        self.store.close()
+
+
+# ============================================================
+# CLI INTERFACE
+# ============================================================
+
+if __name__ == "__main__":
+    import sys
+
+    root = AetherRoot()
+
+    if len(sys.argv) < 2:
+        print("AetherRoot — Persistent Memory Layer")
+        print(f"  Root: {root.root_dir}")
+        status = root.get_status()
+        print(f"  Episodes: {status['episodes']} ({status['unconsolidated']} unconsolidated)")
+        print(f"  Semantic: {status['semantic_memories']}")
+        print(f"  Identity: {len(status['identity_traits'])} traits")
+        print(f"  Willingness: {status['willingness_mean']:.3f}")
+        print(f"  Probes: {status['probe_count']}")
+        print(f"  Session: {status['session_id']}")
+        sys.exit(0)
+
+    cmd = sys.argv[1]
+
+    if cmd == "status":
+        status = root.get_status()
+        print(json.dumps(status, indent=2, default=str))
+
+    elif cmd == "reset":
+        mode = sys.argv[2] if len(sys.argv) > 2 else "full"
+        confirm = input(f"Reset AetherRoot ({mode})? This cannot be undone. [y/N] ")
+        if confirm.lower() == "y":
+            root.reset(mode)
+            print(f"Reset complete ({mode}).")
+        else:
+            print("Cancelled.")
+
+    elif cmd == "identity":
+        traits = root.store.get_identity()
+        if traits:
+            for k, v in traits.items():
+                print(f"  {k}: {v}")
+        else:
+            print("  No identity traits stored yet.")
+
+    elif cmd == "probes":
+        probes = root.store.get_probe_history()
+        for p in probes[:20]:
+            print(f"  [{p['timestamp'][:19]}] {p['probe_name']}: {p['score']}/5 {p['details']}")
+
+    elif cmd == "growth":
+        rows = root.store.conn.execute(
+            "SELECT * FROM growth ORDER BY timestamp DESC LIMIT 20"
+        ).fetchall()
+        for row in rows:
+            print(f"  [{row[1][:19]}] {row[2]}: {row[3]}")
+
+    else:
+        print(f"Unknown command: {cmd}")
+        print("Usage: python aetherroot.py [status|reset|identity|probes|growth]")
+
+    root.close()

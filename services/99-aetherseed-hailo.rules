@@ -1,0 +1,19 @@
+# Restrict the NPU device node to a group instead of the whole machine.
+#
+# The shipped rule (/lib/udev/rules.d/51-hailo-udev.rules) sets MODE="0666",
+# so any process on the box can open /dev/hailo0 directly. AetherSpark gates
+# tool calls; it does not gate a process that opens the device itself.
+#
+# 99- sorts after 51-, so this wins. Install to /etc/udev/rules.d/ and add the
+# service account to the hailo group:
+#
+#   sudo groupadd --system hailo
+#   sudo usermod -aG hailo aetherseed
+#   sudo install -m644 99-aetherseed-hailo.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger --subsystem-match=hailo_chardev
+#
+# Verified 2026-09-18: a user outside the group gets
+# PermissionError: [Errno 13] Permission denied: '/dev/hailo0'
+# while inference through the service continues to work, across a reboot.
+SUBSYSTEM=="hailo_chardev", MODE="0660", GROUP="hailo"

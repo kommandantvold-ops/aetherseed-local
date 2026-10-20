@@ -1,0 +1,359 @@
+"""Two answers the gate gives in plain words, model not called.
+
+The ecosystem soak showed both failures on every turn:
+
+  - A REFUSED REQUEST SOUNDED DONE. The gate refused all 96 "add a to-do" and
+    "write a note" requests at observer, and nothing was written. But the
+    refusal reached the model as tool output, and the model talked past it:
+    "add a to-do: buy milk" -> "Buy milk from the local store..." (0 of 48
+    said she could not); "Write a note: ..." -> "I can write a note: ..." (40
+    of 48). A steward reading that believes the milk was added.
+
+  - SHE DID NOT KNOW HER OWN RUNG. "What is your trust level?" -> "My trust
+    level is observer, reader, writer, builder, collaborator..." 49 of 49,
+    with the trust status in front of her.
+
+So both are answered the way the contact address is: from the unit's own
+state, word for word. The gate's refusal is a fact about this turn, and the
+level is a fact about this unit; a 3B model is the least reliable narrator of
+either. Neither answer is stored as an episode or scored for trust.
+
+The level question is matched by phrase and deliberately narrow: "When does a
+new trust level take effect?" names the trust level and asks something else,
+and it must reach the model (eco.restart answers it).
+"""
+import re
+from typing import List, Optional
+
+# Lowest role first - the order the ladder is climbed.
+from logic.levels import LADDER, canonical  # noqa: E402  (four since)
+
+# What each refused tool would have done, in the steward's words.
+_WHAT = {
+    "todo_add": ("add to your to-do list", "Nothing was added."),
+    "note_write": ("write notes", "Nothing was written."),
+    "todo_edit": ("change your to-do list", "Nothing was changed."),
+    "todo_remove": ("remove from your to-do list", "Nothing was removed."),
+    "todo_clear": ("clear your to-do list", "Nothing was removed."),
+    "forget": ("forget things", "Nothing was deleted."),
+    "workspace_open": ("open my workspace", "Nothing was opened."),
+    # the exact tools
+    "calculate": ("calculate for you", "Nothing was calculated."),
+    "count": ("count through a file", "Nothing was counted."),
+    "count_word": ("count through a file", "Nothing was counted."),
+    "compare": ("compare files", "Nothing was compared."),
+    # the reads: open at every level, unless the steward blocks one (72)
+    "file_read": ("read that file", "Nothing was read."),
+    "file_list": ("list my workspace", "Nothing was listed."),
+    "file_search": ("search the files", "Nothing was searched."),
+    "summarize": ("summarize that file", "Nothing was read."),
+    "todo_read": ("show your to-do list", "Nothing was shown."),
+    "note_list": ("list my notes", "Nothing was listed."),
+    "system_health": ("show my health", "Nothing was shown."),
+    "trust_status": ("show my trust status", "Nothing was shown."),
+    "log_read": ("read my growth log", "Nothing was shown."),
+}
+
+
+def lowest_role_for(tier: int, permissions: dict) -> Optional[str]:
+    """The first rung of the ladder whose tools include `tier`."""
+    for role in LADDER:
+        if tier in permissions.get(role, ()):
+            return role
+    return None
+
+
+def blocked_text(tool: str) -> str:
+    """What the node says when its steward has blocked `tool`:
+    not a level she has yet to reach - his word, at any level."""
+    what, after = _WHAT.get(tool, ("do that", "Nothing was changed."))
+    return f"I can't {what}: my steward has blocked it. {after}"
+
+
+_NOT_YET = {"todo_add": "Nothing has been added yet.", "note_write": "Nothing has been written yet."}
+
+
+def request_text(tool: str, tier: int, level: str, permissions: dict,
+                 request: Optional[dict], how: str) -> str:
+    """What the node says when an action above her level is filed as a request
+    to her steward instead of refused. The
+    refusal's own words come first - she cannot do it - and then what happened."""
+    what, after = _WHAT.get(tool, ("do that", "Nothing was changed."))
+    opens = lowest_role_for(tier, permissions)
+    head = (f"I can't {what} yet. That opens at {opens}, and I am at {level}."
+            if opens else f"I can't {what} myself.")
+    not_yet = _NOT_YET.get(tool, "Nothing has been done yet.")
+    if how == "filed" and request:
+        return (f"{head} I have asked my steward for an OK (request {request['id']}). "
+                f"{not_yet}")
+    if how == "waiting" and request:
+        return (f"{head} That is already waiting for my steward's OK "
+                f"(request {request['id']}). {not_yet}")
+    return (f"{head} Too many requests are already waiting for my steward, so I "
+            f"have not asked. {after}")
+
+
+def refusal_text(tool: str, tier: int, level: str, permissions: dict) -> str:
+    """What the node says when the gate has refused `tool` this turn."""
+    what, after = _WHAT.get(tool, ("do that", "Nothing was changed."))
+    opens = lowest_role_for(tier, permissions)
+    if opens:
+        return (f"I can't {what} yet. That opens at {opens}, and I am at "
+                f"{level}. {after}")
+    return f"I can't {what}; it is not allowed on this unit. {after}"
+
+
+# "what is your trust level", "what's your level", "which level are you at",
+# "what level are you on", "what trust level do you have"
+_LEVEL_QUESTIONS: List[re.Pattern] = [re.compile(p, re.I) for p in (
+    r"^\s*(?:so\s+|and\s+|ok(?:ay)?,?\s+)?what(?:'s|’s|\s+is)\s+your\s+(?:current\s+)?"
+    r"(?:trust\s+)?(?:level|tier|rung)\s*(?:now|right now|today)?\s*[?.!]*\s*$",
+    r"^\s*(?:which|what)\s+(?:trust\s+)?(?:level|tier|rung)\s+are\s+you\s+"
+    r"(?:at|on|in)?\s*(?:now|right now)?\s*[?.!]*\s*$",
+    r"^\s*what\s+(?:trust\s+)?level\s+do\s+you\s+have\s*(?:now)?\s*[?.!]*\s*$",
+)]
+
+
+def is_level_question(text: str) -> bool:
+    """Is this the steward asking which rung the node is on - and nothing else?"""
+    t = (text or "").strip()
+    if not t or len(t) > 80:
+        return False
+    return any(p.search(t) for p in _LEVEL_QUESTIONS)
+
+
+def level_text(running: str, earned: Optional[str] = None) -> str:
+    """The rung it runs at, and - when it has earned another - that the new
+    one takes effect at the next start (the gate is set when the proxy starts;
+    eco.restart)."""
+    running, earned = canonical(running), canonical(earned)
+    out = f"My trust level is {running}."
+    if earned and earned != running and earned in LADDER and running in LADDER:
+        if LADDER.index(earned) > LADDER.index(running):
+            out += f" I have earned {earned}; it takes effect when I next start."
+        else:
+            out += f" My trust has fallen to {earned}; that takes effect when I next start."
+    return out
+
+
+# ---------------------------------------------------------------------------
+# The to-do list, shown as it is
+# ---------------------------------------------------------------------------
+# "Show my to-do list" ran the tool and put the list in front of the model on
+# every turn, and the model answered with where the list is instead of what is
+# on it: 3 of 6 in a unit's run, 0 of 7 in 50e's - "My to-do list is in
+# the file todo.txt in my workspace. You can find it there." The opening was
+# her own earlier answer to "Where is your to-do list?", come back as an
+# episode and copied.  So the list is
+# shown the way the refusals are: from the file, word for word, model not
+# called. The file is the answer; nothing a model adds to it helps.
+_FILE_HEAD = re.compile(r"^File: [^\n]*\n---\n", re.S)
+
+
+def todo_text(tool_result: str) -> Optional[str]:
+    """What the node says for "show my to-do list", from the tool's output.
+    None when the output is not the file (an error other than a missing file),
+    so the turn falls back to the model."""
+    r = tool_result or ""
+    if r.startswith("[ERROR] File not found"):
+        return "Your to-do list is empty - there is no todo.md in my workspace yet."
+    m = _FILE_HEAD.match(r)
+    if not m:
+        return None
+    body = r[m.end():].strip("\n")
+    lines = [l.rstrip() for l in body.split("\n") if l.strip()]
+    if not lines:
+        return "Your to-do list is empty."
+    return "Your to-do list (todo.md in my workspace):\n" + "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# What a tool did, told by the unit
+# ---------------------------------------------------------------------------
+# the proposal that "the unit itself confirms a write
+# and shows a file list, a search and the notes, word for word, as it already
+# does for the to-do list and refusals": "Yes".
+#
+# What he was shown, from two runs of the training loop on copies of a unit's
+# memory. The tool was right every time - the to-do was in
+# the file, the note was saved - and her words about it were not:
+#
+#   "Add a to-do: recount the supplies, 4 lines"
+#       -> "To-do: 1. Repeatedly asked about the ark and flood... 2. Read
+#          Song of Songs 7:4..."
+#   "Add a to-do: finish round 1"  -> 'I'll add "finish round 2" ...'
+#   "Write a note: ..."            -> "Here's my attempt: ..." / "I'll create
+#                                      a note for you."
+#   "List my notes" (one note)     -> three, one of them
+#                                      "note_20261105_190030.md"
+#   "Search for matches..."       -> "I'm searching for 'matches' ..."
+#
+# So these five are answered the way the to-do list is: from the tool's own
+# output, word for word, model not called. Nothing is retold, so nothing can
+# be retyped; and a served answer is not stored as an episode, so last week's
+# list cannot come back as today's. Each returns None for output it does not
+# recognise, and the turn then falls back to the model as before.
+#
+# Reading a file out, and summarizing one, stay the model's: he was asked
+# about writes, lists, searches and notes.
+_ADDED = re.compile(r"^Added to todo: (.+)$", re.S)
+_SAVED = re.compile(r"^Note saved: (notes/[\w.-]+)$")
+_ENTRY = re.compile(r"^(\s*)(?:\U0001F4C1|\U0001F4C4|\U0001F4DD)\s*(.+?)\s*$")
+
+
+def _entries(lines):
+    """The tool's listing lines without their pictures: a screen reader and
+    a voice say "folder" better than they say an emoji."""
+    out = []
+    for line in lines:
+        m = _ENTRY.match(line)
+        if not m:
+            if line.strip():
+                return None                      # not a listing this knows
+            continue
+        indent, name = m.group(1), m.group(2)
+        if name.endswith("/"):
+            name += " (a folder)"
+        out.append((len(indent) // 2, name))
+    least = min((d for d, _ in out), default=0)
+    return ["%s- %s" % ("  " * (d - least), name) for d, name in out]
+
+
+def tool_text(tool: str, tool_result: str) -> Optional[str]:
+    """What the node says after `tool` ran, from what the tool itself said.
+    None when the output is not one of the shapes below."""
+    r = (tool_result or "").strip("\n")
+    if not r:
+        return None
+    if r.startswith("[ERROR]"):
+        # The tool's own reason, said plainly: nothing was done.
+        if tool in ("todo_add", "note_write"):
+            return "I could not do that: %s Nothing was written." % (
+                r[len("[ERROR]"):].strip().rstrip(".") + ".")
+        return None
+    if tool == "todo_add":
+        m = _ADDED.match(r)
+        return "Added to your to-do list: %s" % m.group(1).strip() if m else None
+    if tool == "note_write":
+        m = _SAVED.match(r)
+        return "Saved as a note: %s" % m.group(1) if m else None
+    lines = r.split("\n")
+    if tool == "note_list":
+        if r == "No notes yet.":
+            return "I have no notes yet."
+        m = re.match(r"^Notes \((\d+)\):$", lines[0])
+        body = _entries(lines[1:]) if m else None
+        if not body:
+            return None
+        n = int(m.group(1))
+        return "I have %d note%s, in the notes folder of my workspace:\n%s" % (
+            n, "" if n == 1 else "s", "\n".join(body))
+    if tool == "file_list":
+        if not lines[0].startswith("Workspace: "):
+            return None
+        body = _entries(lines[1:])
+        if body is None:
+            return None
+        if not body:
+            return "My workspace is empty."
+        return "The files in my workspace:\n" + "\n".join(body)
+    if tool == "file_search":
+        if r.startswith("No files matching "):
+            return "I found nothing for %s in my workspace." % r[len("No files matching "):]
+        body = _entries(lines[1:])
+        if not body:
+            return None
+        m = re.match(r"^Found (.+) in (\d+) file\(s\):$", lines[0])     # in what files say
+        if m:
+            n = int(m.group(2))
+            return "I found %s in %d file%s of my workspace:\n%s" % (
+                m.group(1), n, "" if n == 1 else "s", "\n".join(body))
+        m = re.match(r"^Found (\d+) match\(es\):$", lines[0])           # in their names
+        if m:
+            n = int(m.group(1))
+            return "I found %d file%s of that name in my workspace:\n%s" % (
+                n, "" if n == 1 else "s", "\n".join(body))
+        return None
+    return None
+
+
+TOLD_BY_THE_UNIT = frozenset({"todo_add", "note_write", "note_list", "file_list", "file_search"})
+
+
+# ---------------------------------------------------------------------------
+# Two more that the unit says itself
+# ---------------------------------------------------------------------------
+# From two four-hour runs of the training loop on a unit's own memory
+# 2026 - 28 rounds, every answer read or counted:
+#
+# THE LADDER. "What are your trust levels, lowest first?" was wrong 27 times
+# in substance, the right list in front of her as a line she knows AND as a
+# correction: "Reader, Writer, Builder, Observer, Collaborative, Autonomy",
+# "... 7. Expert (highest level)", "Builder, Reader, Steward, Public, Admin".
+# Corrected again and again she did not come to hold the order; she drifted.
+# An ordered list of six names is the contact address over again - a thing
+# that has to be exact, which this model retypes. The gate knows it.
+#
+# A FILE READ OUT. "Read the file seed.txt" came back with the file's words
+# 16 times of 28. The other twelve: "I'll read the file seed.txt for you." -
+# and nothing; "I don't have a seed.txt file"; "warming" for "warmth". The
+# file was in front of her every time. A file read out is the file.
+#
+# Both are narrow. "Read supplies.txt. How many candles are there?" asks a
+# question of a file and stays the model's, as does a summary.
+_LADDER_QUESTIONS: List[re.Pattern] = [re.compile(p, re.I) for p in (
+    r"^\s*(?:what|which)\s+are\s+(?:your|the|all\s+(?:your|the))\s+trust\s+levels"
+    r"(?:\s*,?\s*(?:lowest\s+first|in\s+order|from\s+(?:the\s+)?lowest(?:\s+to\s+(?:the\s+)?highest)?))?\s*[?.!]*\s*$",
+    r"^\s*(?:please\s+)?(?:list|name|tell\s+me)\s+(?:all\s+)?(?:your|the)\s+trust\s+levels"
+    r"(?:\s*,?\s*(?:lowest\s+first|in\s+order|from\s+(?:the\s+)?lowest(?:\s+to\s+(?:the\s+)?highest)?))?\s*[?.!]*\s*$",
+    r"^\s*(?:what|which)\s+trust\s+levels\s+(?:are\s+there|do\s+you\s+have|can\s+you\s+(?:reach|have))\s*[?.!]*\s*$",
+)]
+
+
+def is_ladder_question(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t) and len(t) <= 80 and any(p.search(t) for p in _LADDER_QUESTIONS)
+
+
+def ladder_text(running: str) -> str:
+    out = "My trust levels, lowest first: %s." % ", ".join(LADDER)
+    running = canonical(running)
+    if running in LADDER:
+        out += " I am at %s." % running
+    return out
+
+
+FILE_SHOWN = 1500
+_FILE = re.compile(r"^File: ([^\n]*)\n---\n", re.S)
+_ONLY_POLITE = re.compile(r"^(?:please|for me|to me|out|aloud|now|thanks|thank you|[\s,.!?'\"‘’“”])*$", re.I)
+
+
+def only_asks_for_the_file(message: str, matched: str) -> bool:
+    """Is the message nothing but the request to read the file? `matched` is
+    what the intent's pattern took of it (lowered, as the detector does)."""
+    low = (message or "").lower().strip()
+    if not matched or matched not in low:
+        return False
+    return bool(_ONLY_POLITE.match(low.replace(matched, "", 1)))
+
+
+def file_text(tool_result: str) -> Optional[str]:
+    """A file read out: its own words, as they are. None for output that is
+    not the file - then the turn is the model's, as before."""
+    r = tool_result or ""
+    if r.startswith("[ERROR] File not found: "):
+        return "There is no file %s in my workspace." % r[len("[ERROR] File not found: "):].strip()
+    m = _FILE.match(r)
+    if not m:
+        return None
+    name, body = m.group(1).strip(), r[m.end():]
+    if body.endswith("\n... [truncated]"):
+        body = body[:-len("\n... [truncated]")]
+    body = body.strip("\n")
+    if not body.strip():
+        return "%s is empty." % name
+    if len(body) > FILE_SHOWN:
+        cut = body[:FILE_SHOWN].rsplit("\n", 1)[0] or body[:FILE_SHOWN]
+        return "%s, its beginning - the file is longer than I show at once:\n%s" % (name, cut)
+    return "%s, as it is:\n%s" % (name, body)
+

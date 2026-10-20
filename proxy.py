@@ -1,0 +1,3350 @@
+"""
+Aetherseed Proxy v3 — The Living Agent
+========================================
+GUI (127.0.0.1:2077) → Aetherseed Proxy (127.0.0.1:8001) → hailo-ollama (127.0.0.1:8000)
+
+Every hop is loopback. Decided 2026-09-18: the GUI runs on
+the device itself, so nothing on the LAN needs to reach the proxy and the
+bind stays 127.0.0.1. Port 2077 was free and is unregistered in /etc/services.
+
+Now with intent detection: the proxy detects what the user
+wants to do, executes tools through AetherSpark's safety gate,
+and gives the model the results so it can respond naturally.
+
+The model stays conversational. The proxy handles the doing.
+"""
+
+import http.server
+import json
+import signal
+import re
+import urllib.request
+import urllib.error
+import urllib.parse
+import threading
+import time
+import sys
+import os
+import hmac
+import secrets
+from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from aetherroot import AetherRoot
+from aetherspark import AetherSpark, SafetyGate, TRUST_PERMISSIONS
+from trust_evolution import TrustEvolution
+from intent_detection import detect_intent, execute_intent, in_workspace
+from logic.gate_answers import (is_level_question, level_text, refusal_text, todo_text,
+                                blocked_text, request_text, lowest_role_for,
+                                tool_text, TOLD_BY_THE_UNIT, is_ladder_question,
+                                ladder_text, only_asks_for_the_file, file_text)
+from logic.clock import is_date_question, date_text
+from logic import trust_record
+from logic import served
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+HAILO_OLLAMA_URL = "http://127.0.0.1:8000"
+PROXY_PORT = int(os.environ.get("AETHERSEED_PROXY_PORT", "8001"))
+
+# Bind address. Defaults to loopback: a device sold on "nothing leaves" should
+# not expose its LLM proxy to the LAN unless something on the LAN needs it. A
+# UI on another machine sets AETHERSEED_PROXY_BIND=0.0.0.0 in the unit. The
+# previous hardcoded 0.0.0.0 was the same default hailo-ollama shipped with
+PROXY_BIND = os.environ.get("AETHERSEED_PROXY_BIND", "127.0.0.1")
+
+# The charter lives in exactly one place now. proxy.py previously kept its
+# own copy, which had already drifted from prompt_builder's (223 vs 210
+# tokens, different final paragraph).
+from logic.prompt_builder import charter
+from logic import companion
+from logic.speaker import validate_speaker, STEWARD, TRAINER, GUEST, is_steward
+from logic.guest import guest_text
+from logic.levels import canonical as canonical_level
+from logic import training
+from logic import steward
+from logic import library as lib
+from logic import own_shelf
+from logic.facts import FACT_TAG, FACT_NOTE, FACT_TAG_UNCHECKED, FACT_NOTE_UNCHECKED
+from logic import shown as sent_block
+from logic import chain
+from logic import trust_control
+from logic import approvals
+from logic import forget as forget_mod
+from logic import workspace as workspace_mod
+from logic import prompts
+from logic.attribution import check as steward_check
+from logic.working_memory import WorkingMemory, as_messages
+from logic.prompt_builder import DATA_NOTE
+from logic.prompt_builder import FICTION_NOTE
+from logic.token_budget import (TokenCounter, enforce_budget, sanitize_injected, MODELS,
+                                sanitize_model_output, first_paragraph,
+                                ends_sentence, cut_at_scaffold_marker,
+                                strip_leading_artefacts, opening_may_be_artefact,
+                                marker_prefix_len, strip_bare_tags, opening_hold, unwrap_corrections,
+                                neutralize_control_tokens,
+                                PromptTooLarge, TokenizerUnavailable)
+from logic.provenance import (detect_mode, resolve_mode, is_record_question,
+                             summarise_record, FICTION, UNVERIFIED, TAG_NOTE, COG)
+
+# One tokenizer per served model for the process. Loading one costs ~17MB and
+# a moment, so each is built once, lazily, and reused. Which model a request
+# is counted for is the model it is sent to: counting a Qwen
+# prompt with Llama's tokenizer, or against Llama's ceiling, would be the
+# silent failure this guard exists to prevent. A model with no profile in
+# logic/token_budget.MODELS is refused, not guessed at.
+_TOKEN_COUNTERS = {}
+
+
+def token_counter(model=None):
+    model = model or MODEL
+    counter = _TOKEN_COUNTERS.get(model)
+    if counter is None:
+        counter = _TOKEN_COUNTERS[model] = TokenCounter(model=model)
+    return counter
+
+# ============================================================
+# SHARED STATE
+# ============================================================
+
+root = AetherRoot()
+# The last exchanges of the conversation, in this process only.
+WORKING = WorkingMemory()
+_CONVERSATION = re.compile(r"^[a-z0-9]{1,32}$")
+
+
+def _conversation_key(speaker: str, conversation) -> str:
+    """Whose conversation a turn is in, for the working memory: the speaker,
+    and - when the console names one - which
+    conversation of that speaker's. Anything not of the console's shape is
+    ignored, never refused: it can only keep a turn apart, never join one."""
+    if isinstance(conversation, str) and _CONVERSATION.match(conversation):
+        return "%s#%s" % (speaker, conversation)
+    return speaker
+
+
+trust = TrustEvolution()
+trust_level = trust.get_trust_level_name()
+spark = AetherSpark({
+    "sandbox_root": os.path.expanduser("~/aetherseed-workspace"),
+    "trust_level": trust_level,
+    "audit_log": os.path.expanduser("~/.aetherseed/spark_audit.log")
+})
+try:
+    # the steward's rules on single tools, before her tier
+    spark.gate.overrides = lambda: _tool_rules()
+except AttributeError:
+    pass                                  # a stand-in spark (the tests' import)
+
+# The record the node cannot edit.
+#
+# "Future accountability" is not something you install in a model by telling it
+# it is being watched - that is another instruction in the channel that already
+# demonstrably leaks. It is an artefact OUTSIDE the model
+# that somebody can read. Every turn appends one line here: what mode it was,
+# what honesty_check found, why generation stopped. Nothing in the model's path
+# can rewrite it, and the node can be asked to recite it - see
+# _answer_from_the_record. Decided with the steward 2026-09-19.
+PROVENANCE_LOG = os.path.expanduser("~/.aetherseed/provenance.log")
+
+
+def _prompts_log():
+    """Every prompt and what came back,
+    beside provenance.log: one file a month, each its own chain, so checking
+    this month's never reads a year of them."""
+    from datetime import datetime as _dt, timezone as _tz
+    return os.path.join(os.path.dirname(PROVENANCE_LOG),
+                        "prompts-%s.log" % _dt.now(_tz.utc).strftime("%Y-%m"))
+# The steward's choices from first run: what the companion is called, and what
+# it speaks. See logic/companion.py.
+COMPANION_FILE = os.path.expanduser("~/.aetherseed/companion.json")
+
+
+def _settings():
+    """(name, language) - no name, English, until the steward has chosen."""
+    c = companion.load(COMPANION_FILE)
+    return (c["name"], c["language"]) if c else (None, companion.DEFAULT_LANGUAGE)
+
+
+# ---- THE BRAKE -------------------------------------------
+# Satya Nadella's "an authorized person should always
+# be able to pause or shut down a model mid-task": a steward control that
+# cuts the reply in the middle and has the proxy refuse every turn until it is
+# released. It is not Quantum rest, which powers the unit off in order, and not
+# a memory wipe: nothing is erased, and released, she is as she was.
+#
+#   on        BRAKE is set at once, so a stream in progress stops at its next
+#             chunk and no model call starts; then it is written down
+#             (brake.json, atomically) and recorded in control.log (chained).
+#             A training run is paused.
+#   off       written down first, then released: a brake that could not be
+#             saved as released stays on.
+#   a start   reads brake.json: on stays on. A file that cannot be read keeps
+#             the brake ON - the safe side - and says so.
+BRAKE = threading.Event()
+BRAKE_FILE = os.path.expanduser("~/.aetherseed/brake.json")
+CONTROL_LOG = os.path.expanduser("~/.aetherseed/control.log")
+_BRAKE_LOCK = threading.Lock()
+_BRAKE_STATE = {"on": False}
+
+_BRAKED_TEXT = {
+    "en": "I am stopped by my steward's brake. Nothing is answered until it is released.",
+    "nb": "Jeg er stoppet med forvalterens brems. Ingenting besvares før den slippes.",
+}
+
+
+class Braked(RuntimeError):
+    """A model call refused or cut by the brake. partial: what had been
+    generated (and possibly shown) when it was cut."""
+    def __init__(self, partial=""):
+        super().__init__("the brake is on")
+        self.partial = partial or ""
+
+
+def brake_state():
+    return dict(_BRAKE_STATE)
+
+
+def load_brake():
+    """At a start: the brake as it was left."""
+    global _BRAKE_STATE
+    try:
+        with open(BRAKE_FILE, encoding="utf-8") as f:
+            st = json.load(f)
+        if not isinstance(st, dict):
+            raise ValueError("not a JSON object")
+    except FileNotFoundError:
+        st = {"on": False}
+    except (OSError, ValueError) as e:
+        st = {"on": True, "since": None, "by": "the unit",
+              "reason": "brake.json could not be read (%s): kept on until released" % (e,)}
+        print(f"[brake] {BRAKE_FILE} could not be read: the brake is kept ON", flush=True)
+    _BRAKE_STATE = st
+    if st.get("on"):
+        BRAKE.set()
+    else:
+        BRAKE.clear()
+    return brake_state()
+
+
+def set_brake(on, by="the console", reason=""):
+    """Put the brake on or release it. Returns (state, changed, error)."""
+    global _BRAKE_STATE
+    from aetherroot import atomic_write      # here: the tests stub aetherroot at import
+    on = bool(on)
+    reason = " ".join(str(reason or "").split())[:200]
+    with _BRAKE_LOCK:
+        if on == BRAKE.is_set():
+            return brake_state(), False, None
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        st = {"on": on, "since": now, "by": by, "reason": reason}
+        if on:
+            BRAKE.set()                       # first: whatever is running stops
+            _BRAKE_STATE = st
+            try:
+                atomic_write(BRAKE_FILE, json.dumps(st))
+            except OSError as e:
+                print(f"[brake] ON, but could not be written down: {e!r} - "
+                      f"a restart would release it", flush=True)
+        else:
+            try:
+                atomic_write(BRAKE_FILE, json.dumps(st))
+            except OSError as e:
+                print(f"[brake] could not be written down as released: {e!r} - "
+                      f"it stays on", flush=True)
+                return brake_state(), False, "it could not be written down as released"
+            _BRAKE_STATE = st
+            BRAKE.clear()
+        try:
+            chain.append(CONTROL_LOG, {"at": now, "action": "brake_on" if on else "brake_released",
+                                       "by": by, "reason": reason}, announce="control.log")
+        except OSError as e:
+            print(f"[brake] could not be recorded in control.log: {e!r}", flush=True)
+        print(f"[brake] {'ON' if on else 'released'} by {by}"
+              + (f": {reason}" if reason else ""), flush=True)
+    if on:
+        try:
+            loop = training_loop()
+            if loop.status().get("status") == "running":
+                ok, why = loop.pause()
+                print(f"[brake] training run paused: {'ok' if ok else why}", flush=True)
+        except Exception as e:
+            print(f"[brake] could not pause the training run: {e!r}", flush=True)
+    return brake_state(), True, None
+
+
+# ---- TRUST MANAGEMENT -------------
+TRUST_CONTROL_FILE = os.path.expanduser("~/.aetherseed/trust_control.json")
+_TRUST_CONTROLS = {}
+
+
+def trust_controls():
+    key = (TRUST_CONTROL_FILE, CONTROL_LOG)
+    if key not in _TRUST_CONTROLS:
+        _TRUST_CONTROLS.clear()
+        _TRUST_CONTROLS[key] = trust_control.Controls(*key)
+    return _TRUST_CONTROLS[key]
+
+
+def _tool_rules():
+    return trust_controls().overrides()
+
+
+APPROVALS_FILE = os.path.expanduser("~/.aetherseed/approvals.json")
+_APPROVALS = {}
+
+
+def approvals_queue():
+    """The approvals queue."""
+    key = (APPROVALS_FILE, CONTROL_LOG)
+    if key not in _APPROVALS:
+        _APPROVALS.clear()
+        _APPROVALS[key] = approvals.Approvals(*key)
+    return _APPROVALS[key]
+
+
+def _approvals_pending():
+    try:
+        return approvals_queue().pending_count()
+    except Exception:
+        return None
+
+
+def _do_approved(request):
+    """An approved request, done by the unit: the same tool, the same words,
+    in the unit's own workspace - not by the model, and not through her level,
+    which is what the steward's OK stands in for, once."""
+    # The very functions a turn's execute_intent calls - from its own module,
+    # which under the test suite need not be the one an import returns.
+    tools = execute_intent.__globals__
+    words = (request.get("args") or [""])[0]
+    if not words.strip():
+        return "[ERROR] nothing to do"
+    with in_workspace(_sandbox_root()):
+        if request["tool"] == "todo_add":
+            return tools["_append_todo"](words)
+        if request["tool"] == "note_write":
+            return tools["_write_note"](words)
+    return "[ERROR] not a tool the queue takes"
+
+
+def _sandbox_root():
+    try:
+        return spark.config["sandbox_root"]
+    except Exception:
+        return os.path.expanduser("~/aetherseed-workspace")
+
+
+def workspace_view(root_dir, todo_max=4000):
+    """Her workspace as it is, read-only: the files at its top,
+    her notes, the to-do list. Names and text are hers or the steward's: the
+    console sets them as text, never markup."""
+    out = {"files": [], "notes": [], "todo": None, "todo_name": None}
+    try:
+        names = sorted(os.listdir(root_dir))
+    except OSError:
+        return out
+    for n in names:
+        if n.startswith("."):
+            continue
+        p = os.path.join(root_dir, n)
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        out["files"].append({"name": n, "folder": os.path.isdir(p),
+                             "size": None if os.path.isdir(p) else st.st_size,
+                             "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc)
+                             .isoformat(timespec="seconds")})
+    notes = os.path.join(root_dir, "notes")
+    try:
+        for n in sorted(os.listdir(notes), reverse=True)[:50]:
+            p = os.path.join(notes, n)
+            if n.startswith(".") or not os.path.isfile(p):
+                continue
+            with open(p, encoding="utf-8", errors="replace") as f:
+                body = [l.strip() for l in f.read(2000).splitlines() if l.strip()]
+            text = next((l for l in body if not l.startswith("#")), "")
+            out["notes"].append({"name": n, "first": text[:200]})
+    except OSError:
+        pass
+    for n in ("todo.md", "todo.txt"):
+        p = os.path.join(root_dir, n)
+        if os.path.isfile(p):
+            with open(p, encoding="utf-8", errors="replace") as f:
+                out["todo"] = f.read(todo_max)
+            out["todo_name"] = n
+            break
+    return out
+
+
+def _tools():
+    """{intent: tier}, {intent: description} - what the gate can be asked."""
+    import intent_detection as _I
+    pats = getattr(_I, "INTENT_PATTERNS", [])
+    return ({d["intent"]: d["tier"] for d in pats},
+            {d["intent"]: d.get("description", "") for d in pats})
+
+
+# ---- THE TRAINING LOOP -------------------
+# A turn of the loop comes in through /api/chat like any other - the real
+# path, not a copy - carrying this header. The token is made when the proxy
+# starts, lives in this process only, and is written nowhere: only the loop,
+# which runs inside the proxy, can say it. Such a turn is the Trainer's, runs
+# at the level lent for its stage, works in the loop's own workspace, and
+# moves her real trust by nothing.
+TRAINING_DIR = os.path.expanduser("~/.aetherseed/training")
+TRAINING_HEADER = "X-Aetherseed-Training"
+_TRAINING_TOKEN = secrets.token_hex(24)
+_TRAINING_LOOP = None
+_TRAINING_LOCK = threading.Lock()
+# The newest turn in her memory before the question in hand was asked: only a
+# turn after it can be the one the check's verdict belongs to.
+_TRAINING_FLOOR = {"id": 0}
+
+
+# ---- THE COG-LOOP'S REFLECTIONS -------
+# "each essay can be reviewed with trainer and that
+# feedback reflection can go into the memory, and it should have a COG-tag."
+# The harness runs outside this process, as the service account; what it may
+# put in her memory is exactly one kind of line - her reflection on a trainer's
+# review of an essay of hers, stored as mode "cog", speaker Trainer, waiting for
+# no ring. It proves itself with a token this process writes at each start to a
+# file only the service account can read; nothing else can store through here.
+COG_TOKEN_FILE = os.path.expanduser("~/.aetherseed/cog.token")
+COG_HEADER = "X-Aetherseed-COG"
+COG_LOG = os.path.expanduser("~/.aetherseed/cog.log")
+FORGET_LOG = os.path.expanduser("~/.aetherseed/forget.log")      # logic/forget.py: ids and hashes, never the words
+WORKSPACE_LOG = os.path.expanduser("~/.aetherseed/workspace.log")  # logic/workspace.py: the steward's edits
+COG_REVIEW_MAX = 1200
+COG_REFLECTION_MAX = 1500
+_COG_TOKEN = secrets.token_hex(24)
+
+
+def _write_cog_token():
+    os.makedirs(os.path.dirname(COG_TOKEN_FILE), exist_ok=True)
+    tmp = COG_TOKEN_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(_COG_TOKEN)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, COG_TOKEN_FILE)
+
+
+def store_cog_reflection(req, token):
+    """(status, body). Stores one COG reflection in her memory."""
+    if not isinstance(token, str) or not hmac.compare_digest(token, _COG_TOKEN):
+        return 403, {"error": "not the COG-loop", "code": "token"}
+    if BRAKE.is_set():
+        return 409, {"error": "the brake is on: nothing is stored", "code": "brake"}
+    if not isinstance(req, dict):
+        return 400, {"error": "a JSON object", "code": "body"}
+    review = " ".join(str(req.get("review") or "").split())
+    reflection = str(req.get("reflection") or "").strip()
+    topic = " ".join(str(req.get("topic") or "").split())[:80]
+    essay = " ".join(str(req.get("essay") or "").split())[:40]
+    if not review or not reflection:
+        return 400, {"error": "a review and a reflection", "code": "empty"}
+    if len(review) > COG_REVIEW_MAX or len(reflection) > COG_REFLECTION_MAX:
+        return 400, {"error": "too long", "code": "length"}
+    reflection, _n = sanitize_model_output(reflection)
+    user_msg = ("Review of your essay%s: %s" % ((" on " + topic) if topic else "", review))
+    ep = root.store_interaction(user_msg, reflection, resonance=0.5, mode=COG,
+                                speaker=TRAINER, rings=False)
+    try:
+        with open(COG_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                "episode": ep, "essay": essay, "topic": topic,
+                                "review": review, "reflection": reflection},
+                               ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"[cog] the log could not be written: {e!r}", flush=True)
+    print(f"[cog] reflection on essay {essay or '?'} stored as episode {ep}", flush=True)
+    return 200, {"stored": ep, "mode": COG}
+
+
+def remove_cog_reflection(req, token):
+    """(status, body). Removes one COG reflection from her memory - only a line
+    of mode "cog", and only at the steward's word. The
+    removed line is kept word for word in cog.log, so nothing is lost
+    unrecorded."""
+    if not isinstance(token, str) or not hmac.compare_digest(token, _COG_TOKEN):
+        return 403, {"error": "not the COG-loop", "code": "token"}
+    if not isinstance(req, dict) or not isinstance(req.get("episode"), int):
+        return 400, {"error": "an episode number", "code": "body"}
+    why = " ".join(str(req.get("why") or "").split())[:300]
+    if not why:
+        return 400, {"error": "a reason, for the log", "code": "why"}
+    ep = req["episode"]
+    row = root.store.conn.execute(
+        "SELECT user_msg, ai_msg, timestamp FROM episodes WHERE id = ? AND mode = ?",
+        (ep, COG)).fetchone()
+    if row is None:
+        return 404, {"error": "no COG reflection with that number", "code": "none"}
+    try:
+        with open(COG_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                "removed": ep, "why": why, "stored_at": row[2],
+                                "review": row[0], "reflection": row[1]},
+                               ensure_ascii=False) + "\n")
+    except OSError as e:
+        return 500, {"error": "the log could not be written, so nothing was removed: %r" % (e,),
+                     "code": "log"}
+    root.store.conn.execute("DELETE FROM episodes WHERE id = ? AND mode = ?", (ep, COG))
+    root.store.conn.commit()
+    print(f"[cog] reflection {ep} removed: {why}", flush=True)
+    return 200, {"removed": ep}
+
+
+_COG_CONSOLE = None
+
+
+def cog_console():
+    """The COG panel's side of the proxy."""
+    global _COG_CONSOLE
+    if _COG_CONSOLE is None:
+        from logic.cog_console import CogConsole
+
+        def busy():
+            if BRAKE.is_set():
+                return "the steward's brake is on"
+            try:
+                if training_loop().status().get("status") == "running":
+                    return "a training run is on"
+            except Exception:
+                pass
+            return None
+        _COG_CONSOLE = CogConsole(MODEL, busy, remove_cog_reflection, _COG_TOKEN)
+    return _COG_CONSOLE
+
+
+def cog_console_post(path, req):
+    """(status, body) for POST /aetherseed/cog/<action> from the console."""
+    from logic.cog_console import ConsoleError
+    if not isinstance(req, dict):
+        return 400, {"error": "a JSON object", "code": "body"}
+    c = cog_console()
+    n = req.get("n")
+    try:
+        if path == "/aetherseed/cog/start":
+            return 200, c.start(req.get("sessions"))
+        if path == "/aetherseed/cog/stop":
+            return 200, c.stop()
+        if not isinstance(n, int):
+            return 400, {"error": "an essay number", "code": "n"}
+        if path == "/aetherseed/cog/review":
+            return 200, c.review(n, req.get("text"))
+        if path == "/aetherseed/cog/correct":
+            return 200, c.correct(n, req.get("text"))
+        if path == "/aetherseed/cog/reflect":
+            return 200, c.reflect(n)
+        if path == "/aetherseed/cog/forget":
+            return 200, c.forget(n, req.get("why"))
+    except ConsoleError as e:
+        return e.status, {"error": e.message, "code": e.code}
+    return 404, {"error": "no such action", "code": "action"}
+
+
+class _Gated:
+    """What execute_intent needs of AetherSpark: its gate."""
+
+    def __init__(self, gate):
+        self.gate = gate
+
+
+def _training_ask(say, level, keep=True):
+    """One turn of homework, sent the way the console sends one. keep=False:
+    asked and checked, and not put in her memory (logic/training.py)."""
+    body = json.dumps({"stream": True, "model": MODEL,
+                       "training": {"level": level, "remember": bool(keep)},
+                       "messages": [{"role": "user", "content": say}]}).encode("utf-8")
+    req = urllib.request.Request(
+        "http://127.0.0.1:%d/api/chat" % PROXY_PORT, data=body, method="POST",
+        headers={"Content-Type": "application/json", TRAINING_HEADER: _TRAINING_TOKEN})
+    r = {"status": None, "reply": "", "meta": {}, "error": None}
+    try:
+        _TRAINING_FLOOR["id"] = root.store.conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM episodes").fetchone()[0]
+    except Exception:
+        _TRAINING_FLOOR["id"] = 1 << 62            # unknown: mark nothing
+    try:
+        # Read to the end: the turn is stored after its last line is sent.
+        with urllib.request.urlopen(req, timeout=400) as resp:
+            r["status"] = resp.status
+            for raw in resp:
+                try:
+                    d = json.loads(raw)
+                except Exception:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                r["reply"] += (d.get("message") or {}).get("content") or ""
+                if d.get("done"):
+                    r["meta"] = d.get("aetherseed") or {}
+                    if d.get("done_reason") == "error":
+                        r["error"] = str(d.get("error") or "generation failed")[:200]
+                    if d.get("done_reason") == "brake" or r["meta"].get("braked"):
+                        r["braked"] = True           # refused or cut: not her answer (72)
+    except urllib.error.HTTPError as e:
+        r["status"], r["error"] = e.code, "HTTP %s" % e.code
+    except Exception as e:
+        r["error"] = repr(e)[:200]
+    return r
+
+
+def _training_mark(say, ok, truth):
+    """Put the check's verdict on her memory of the turn just asked: passed,
+    or corrected from the answer key - never in the steward's name."""
+    row = root.store.conn.execute(
+        "SELECT id FROM episodes WHERE speaker = ? AND user_msg = ? AND id > ? "
+        "ORDER BY id DESC LIMIT 1", (TRAINER, say, _TRAINING_FLOOR["id"])).fetchone()
+    if not row:
+        return "not remembered"            # this turn was not stored: nothing to mark
+    turn = row[0]
+    if root.store.steward_notes(target="turn", target_ids=[turn]):
+        return "not remembered"
+    log = os.path.join(os.path.dirname(PROVENANCE_LOG), "corrections.log")
+    if ok is None:
+        # Her reflection: her own words about herself, checked by nothing.
+        root.store.set_episode_mode(turn, UNVERIFIED)
+        return {"turn": turn, "unchecked": True}
+    if ok:
+        steward.passed_in_training(root.store, turn, log_path=log)
+        return {"turn": turn, "passed": True}
+    steward.correct(root.store, "turn", turn, "part", text=truth, log_path=log,
+                    by=steward.TRAINING)
+    return {"turn": turn, "corrected": True}
+
+
+def _training_backup(path):
+    """Her memory as it is before a run changes it, copied whole."""
+    import sqlite3
+    if os.path.exists(path):
+        os.remove(path)
+    dst = sqlite3.connect(path)
+    try:
+        root.store.conn.backup(dst)
+    finally:
+        dst.close()
+
+
+def _training_remembered():
+    """The homework wordings her memory already holds one checked turn of:
+    {wording: "passed" | "corrected"}. Such a wording is asked
+    and checked again, and not stored again - in the first two runs "What is
+    AetherRoot?" went into her memory eighteen times."""
+    out = {}
+    rows = root.store.conn.execute(
+        "SELECT e.user_msg, n.action FROM episodes e JOIN steward_notes n "
+        "ON n.target = 'turn' AND n.target_id = e.id AND n.undone_at IS NULL "
+        "WHERE e.speaker = ? AND n.by = ? ORDER BY e.id", (TRAINER, steward.TRAINING))
+    for said, action in rows:
+        # a correction outranks a pass: what is true of it is what is kept
+        if action == "correct" or said not in out:
+            out[said] = "corrected" if action == "correct" else "passed"
+    return out
+
+
+def training_loop():
+    global _TRAINING_LOOP
+    with _TRAINING_LOCK:
+        if _TRAINING_LOOP is None:
+            _TRAINING_LOOP = training.Loop(
+                TRAINING_DIR, ask=_training_ask, mark=_training_mark,
+                backup=_training_backup,
+                settings=lambda: {"name": _settings()[0], "steward": _steward()},
+                real_level=lambda: spark.gate.trust_level,
+                remembered=_training_remembered,
+                earned_now=lambda: trust.get_trust_level_name())
+        return _TRAINING_LOOP
+
+
+# Tools whose output is served as the whole answer (logic/exact_tools.py).
+EXACT_TOOLS = frozenset({"calculate", "count", "count_word", "compare"})
+WORKSPACE_OPENED = ("Opening my workspace. There you can look through the folders, make files and "
+                    "folders, and edit them with the mouse and keyboard. The observer, writer, builder "
+                    "and autonomous folders are there too; I reach the ones at my trust level and "
+                    "below, and you reach all of them.")
+
+# What a guest may use. count, count_word and compare
+# read the steward's workspace and show what is in it - the first differing
+# line, or whether a word occurs - so they are the steward's. calculate opens
+# no file, and system_health shows nothing of his.
+GUEST_TOOLS = frozenset({"calculate", "system_health"})
+
+
+def _steward():
+    """What this unit's steward is called, or None. The unit's
+    own setting; the build names nobody."""
+    c = companion.load(COMPANION_FILE)
+    return (c or {}).get("steward") or None
+
+
+# ---- memory the node failed to keep ---------------------------------------
+# Until the store was wrapped in `except Exception: pass`: a turn that
+# could not be saved was answered, shown, and silently forgotten, with nothing
+# in the journal. Now it is said, counted, and the record
+# marks the turn as not remembered.
+STORE_FAILURES = 0
+
+# The tool results that are a file's own content: with one of
+# these in front of her, no past turn is shown - the file is the evidence.
+FILE_EVIDENCE = ("file_read", "summarize", "file_search")
+
+# ---- a ring in her own words (logic/rings.py) ------------------------------
+# Asked for after a ring closes, in the background, one ring at a time. Only
+# the proxy can reach the model, so this lives here rather than in AetherRoot.
+# The model this unit serves is the unit's own setting (logic/served.py,
+# llama3.2:3b on a unit and the deployment, llama3.2:1b on a unit on
+# HailoRT 5.4.0. A name without a measured ceiling stops the proxy here.
+MODEL = served.served_model()
+
+# AetherRoot's memory budget (max_context_chars, 800) was sized for
+# llama3.2:3b's 864-token ceiling ("1500 did not fit the 864-token prefill
+# ceiling" - aetherroot.py). A model with a larger measured ceiling has room
+# for proportionally more retrieved memory (the steward: "do the
+# numbers for qwen3 and propose fixes" -> "the easy fix first"): qwen3:1.7b,
+# ceiling 1536, gets 1422 characters. The unit's own value is what is scaled -
+# the config file's value still wins, read as the budget at the
+# 3B's ceiling - so the 3B is unchanged, and the file is never written with
+# the scaled figure (it is written only at a unit's first boot), so it cannot
+# compound. enforce_budget's token-exact trimming is still the backstop.
+BASELINE_CEILING = 864
+_ceiling = MODELS.get(MODEL, {}).get("ceiling")
+# A stand-in with no config (the tests' import stub of AetherRoot) is left alone.
+if (_ceiling and _ceiling != BASELINE_CEILING
+        and isinstance(getattr(root, "config", None), dict)):
+    _base_chars = root.config["max_context_chars"]
+    root.config["max_context_chars"] = int(_base_chars * _ceiling / BASELINE_CEILING)
+    print("[proxy] memory budget %d characters for %s (ceiling %d; %d at the 3B's %d)"
+          % (root.config["max_context_chars"], MODEL, _ceiling, _base_chars,
+             BASELINE_CEILING), flush=True)
+_OWN_WORDS_LOCK = threading.Lock()
+
+
+def _write_own_words():
+    if not _OWN_WORDS_LOCK.acquire(blocking=False):
+        return                               # one writer at a time
+    store = None
+    try:
+        from logic.rings import (own_words_messages, clean_own_words,
+                                 OWN_WORDS_ATTEMPTS)
+        from logic.speaker import label_for
+        # Its own connection to the store: the request threads share root's,
+        # and this runs beside them.
+        from aetherroot import MemoryStore
+        store = MemoryStore(str(root.root_dir / root.config["db_path"]))
+        for ring in store.rings_needing_own_words(OWN_WORDS_ATTEMPTS):
+            ids = sorted(int(i) for i in str(ring["source_ids"]).split(",") if i.strip())
+            picked = store.episodes_by_ids(ids[::max(1, len(ids) // 4)][:4])
+            others = [f"{label_for(e.get('speaker'))}: {e['user_msg'][:80]}" for e in picked]
+            messages = own_words_messages(_settings()[0], ring["content"], others)
+            try:
+                _, text = call_hailo_chat(MODEL, messages)
+            except Braked:
+                # Not a failed attempt: the ring waits, and the next ring
+                # closed after the brake is released writes it (72).
+                print(f"[rings] ring {ring['ring_no']}: own words wait - the brake is on",
+                      flush=True)
+                return
+            except Exception as e:
+                store.set_own_words(ring["id"], "", f"model failed: {e!r}"[:200])
+                print(f"[rings] ring {ring['ring_no']}: own words not written ({e!r})",
+                      flush=True)
+                continue
+            text = clean_own_words(text)
+            note = ""
+            if text:
+                try:
+                    from honesty_check import check_response
+                    rep = check_response("\n".join(m["content"] for m in messages), text)
+                    if rep.high:
+                        note, text = "withheld: it named a source it could not have had", ""
+                except Exception as e:
+                    note, text = f"withheld: the check could not run ({e!r})"[:200], ""
+            else:
+                note = "empty"
+            store.set_own_words(ring["id"], text, note)
+            # Not the sentence itself: the journal is not covered by any promise
+            # this node makes (gui/serve.py), and the ring tree shows it.
+            print(f"[rings] ring {ring['ring_no']}: "
+                  f"{'own words written (%d chars)' % len(text) if text else note}",
+                  flush=True)
+    except Exception as e:
+        print(f"[rings] own-words writer stopped: {e!r}", flush=True)
+    finally:
+        if store is not None:
+            try:
+                store.close()
+            except Exception:
+                pass
+        _OWN_WORDS_LOCK.release()
+
+
+# "explain that": what the model is told when it is handed one
+# passage of the steward's own document. The passage goes in as workspace
+# data does - defused, in its block, cut and marked by the budget guard if it
+# does not fit - so nothing new stands between a document and the prompt.
+EXPLAIN_NOTE = ("Your steward is studying a document of their own. One passage of it is "
+                "below. Explain what that passage says, in simple words. Use only what "
+                "the passage says. If the passage does not say, say that it does not.")
+EXPLAIN_ASK = "Explain this passage in simple words."
+
+
+def _which(hit: dict) -> str:
+    """A passage, for the journal. Of the built-in library: its collection,
+    number and title, as since. Of the steward's own document:
+    its number only - the name of a file he chose is his, and stays out of
+    the journal like everything he says (37)."""
+    if hit.get("own"):
+        return f"a document of the steward's own, #{hit['id']}"
+    return f"{hit['collection_id']} #{hit['id']} \"{hit['title'][:60]}\""
+
+
+def _shelf_read():
+    """A document was read into its collection, or taken off the shelf: the
+    library is opened again so that it is in it, or no longer."""
+    try:
+        lib.reload()
+    except Exception as e:
+        print(f"[shelf] the library could not be opened again: {e!r}", flush=True)
+
+
+_TOO_LARGE = {
+    "en": ("That request is too large for this device to process. "
+           "The local model accepts about 864 tokens of context and "
+           "this exceeds it even after trimming. Try a shorter question "
+           "or a smaller file."),
+    "nb": ("Det er for mye for denne enheten å behandle. Den lokale "
+           "modellen tar imot omtrent 864 tokens, og dette er mer selv "
+           "etter trimming. Prøv et kortere spørsmål eller en mindre fil."),
+}
+
+
+def record(entry: dict):
+    """Append one line to the provenance log. Never raises: a node that dies
+    because it could not write its diary is worse than one with a gap in it,
+    and the gap is visible."""
+    try:
+        os.makedirs(os.path.dirname(PROVENANCE_LOG), exist_ok=True)
+        entry = dict(entry)
+        entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # the prompt this turn sent, if it asked the model (72, G4): its
+        # whole text is in prompts-<month>.log under this hash
+        sent = prompts.last_sha256()
+        if sent and "prompt_sha256" not in entry:
+            entry["prompt_sha256"] = sent
+        # One chained line: changed, removed or put in
+        # afterwards, it shows - tools/verify_chain.py. Its hash goes to the
+        # journal, which the node's own files cannot rewrite.
+        chain.append(PROVENANCE_LOG, entry, announce="provenance.log")
+    except Exception as e:
+        print(f"[provenance] could not write the record: {e!r}", flush=True)
+
+
+# ============================================================
+# HAILO-OLLAMA CLIENT
+# ============================================================
+
+# Four bounds on generation, in the order they normally fire. They exist
+# because the model does not reliably stop on its own and
+# 12). The values were set 2026-09-18 on the step-12 measurements;
+# the steward delegated the choice. They are recorded there with the reasoning, so
+# change them there too.
+#
+# 1. STOP_AT_PARAGRAPH - the answer is the first paragraph. Measured 2026-09-18
+#    over 40 live responses to eight short spoken-style questions: the honest
+#    answer was the first paragraph every time, and everything after the blank
+#    line was filler ("(I'll keep my answer short and accurate.)", offers of
+#    more, stage directions) - or, twice, a fabricated paper and DOI in the
+#    second paragraph behind a correct "I don't have information" in the first.
+#    "Oslo." became 36-150 tokens. Cutting at the blank line keeps the answer
+#    and drops the tail, and it is the tail that fabricates.
+#
+# 2. SOFT_STOP_TOKENS - once the answer is this long, end it at the next
+#    sentence boundary. Answers in the study were 1-15 tokens (one line),
+#    30-40 (two sentences) or 54-61 (five sentences, the last one filler);
+#    what ran past that was self-narration. 48 tokens is about thirty-six
+#    spoken words, and the stop lands on a full stop, which the hard cap below
+#    cannot promise. The boundary is "previous token closed a sentence, this
+#    token starts with whitespace", so "3." followed by "14" is not one.
+#
+# 3. GENERATION_OPTIONS["num_predict"] - the server-side hard cap. THIS BUILD
+#    HONOURS IT: measured 2026-09-18, num_predict=20 returned exactly 20 tokens
+#    with done_reason "length". concluded the server offered no bound at
+#    all; that was wrong. It tested max_tokens at the top level of the request
+#    - the OpenAI-style key - which /api/chat does ignore (max_tokens=20 gave
+#    408 tokens). Ollama's key is options.num_predict, and it works.
+#    80 tokens is ~30s at the measured 2.66 tok/s. It fires only when no
+#    sentence ends between token 48 and token 80, and it cuts mid-sentence.
+#
+# 4. MAX_GENERATION_SECONDS - wall-clock backstop. With the cap above it should
+#    never fire on a healthy server; it exists for a server that stalls or
+#    whose decode rate collapses, which no token count can catch. Expressed in
+#    seconds because seconds are what the person waiting experiences.
+#
+# Sampling is left at the manifest's defaults (temperature 0.4, top_p 0.9,
+# top_k 50). Greedy decoding was tried and made the rambling worse: at
+# temperature 0 the one-word "Oslo." ran to the 150-token cap on both trials,
+# and four of eight prompts hit the cap on both trials (8 of 16 runs) versus
+# four of twenty-four runs at the default. Determinism is available
+# (temperature 0 is exactly reproducible, 3/3) but it is not a fix for this.
+STOP_AT_PARAGRAPH = True
+SOFT_STOP_TOKENS = 48
+GENERATION_OPTIONS = {"num_predict": 80}
+MAX_GENERATION_SECONDS = 90
+
+
+# One request to the model at a time. Until only the chat path called
+# the model; now a ring's own sentence is asked for in the background too, and
+# what hailo-ollama does with two overlapping requests on one NPU has not been
+# measured. Serialising them here costs the second caller a wait - bounded by
+# the wall-clock backstop - and guesses nothing.
+_MODEL_LOCK = threading.Lock()
+
+
+def call_hailo_chat(model: str, messages: list, emit=None) -> tuple:
+    """call_hailo_chat_unlocked, one caller at a time (_MODEL_LOCK)."""
+    with _MODEL_LOCK:
+        return call_hailo_chat_unlocked(model, messages, emit)
+
+
+def call_hailo_chat_unlocked(model: str, messages: list, emit=None) -> tuple:
+    """Send chat request to hailo-ollama. Returns (raw_bytes, ai_content).
+
+    emit, if given, is called with each NDJSON line (a str, no newline) the
+    moment it is decided - everything except the terminator, which the caller
+    sends itself once it has attached the provenance badge to it. raw_bytes is
+    always the complete response, terminator included, whether or not emit is
+    used, so the two can be compared: what was streamed is raw minus its last
+    line. Streaming was chosen by the steward on 2026-09-21 ("Dont hold back
+    replies, they should come with the correct tag").
+
+    Every request leaves through here, so the guards live here rather than in a
+    prompt builder. Three things are enforced, none of which the server does:
+
+    1. The 864-token prefill ceiling. Past it the NPU fails SILENTLY on a
+       streaming call - HTTP 200 with an empty body - so an unguarded prompt
+       looks exactly like a successful empty answer. enforce_budget raises
+       instead of sending one.
+
+    2. The missing stop token. The manifest's stop_tokens are <|end_of_text|>,
+       <|eom_id|> and <|eot_id|>. The model routinely emits <|start_header_id|>
+       instead (22% of responses, measured over 119 requests), and because that
+       is not a stop token the server keeps generating - straight into a
+       hallucinated next turn, for hundreds of tokens at the normal 2.6 tok/s.
+       That is the whole of the "intermittent hang": a 162s response was 430
+       tokens generated at full speed, not a stall. Adding the token to the
+       manifest's stop_tokens was tried and is IGNORED by this build, so the
+       stream is stopped here instead.
+
+    3. Where the answer ends. The model does not stop when it is done: it
+       answers, then fills - commentary, offers, stage directions, and in the
+       worst measured cases a fabrication behind a correct refusal, or "OK"
+       followed by ~110s about being "the goddess of time". Four bounds, see
+       the constants above: the first paragraph, a sentence boundary once the
+       answer is long enough, the server's num_predict (which this build
+       honours -'s claim that nothing server-side works was tested
+       with the wrong key), and a wall-clock backstop.
+
+    Abandoning a stream mid-generation is safe: measured over three trials,
+    closing the socket after 20 chunks left the next request answering in
+    2.5-4.8s with no reset and no wedge.
+    """
+    if BRAKE.is_set():
+        raise Braked()                       # no model call while the brake is on
+    # No control token reaches the model inside a message's content, whatever
+    # put it there: the user, a file, a document, a passage, a memory (build
+    # log 78; logic/token_budget.neutralize_control_tokens). On the exit, so
+    # that the next path someone adds cannot miss it.
+    messages = [dict(m, content=neutralize_control_tokens(m["content"]))
+                if isinstance(m.get("content"), str) else m for m in messages]
+    messages, budget = enforce_budget(token_counter(model), messages)
+    if budget.trimmed:
+        print(f"[token-budget] {budget.summary()}", flush=True)
+
+    data = json.dumps({"model": model, "messages": messages, "stream": True,
+                       "options": GENERATION_OPTIONS}).encode()
+    # Every prompt is kept word for word with what came back, however the
+    # call ends. The turn's line in
+    # provenance.log carries the same hash.
+    call = prompts.Call(_prompts_log(), data)
+    try:
+        raw, ai_content = _stream_reply(model, messages, emit, data)
+    except Braked as e:
+        call.done("braked", e.partial)
+        raise
+    except Exception as e:
+        call.done("failed: %r" % (e,))
+        raise
+    call.done("answered", ai_content)
+    return raw, ai_content
+
+
+def _stream_reply(model: str, messages: list, emit, data: bytes) -> tuple:
+    """The request and its stream: the second half of call_hailo_chat_unlocked,
+    split off in so that every call is recorded however it ends.
+    Everything below is as it was."""
+    req = urllib.request.Request(
+        f"{HAILO_OLLAMA_URL}/api/chat",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+
+    ai_content = ""
+    out_lines = []
+    stripped_total = 0
+    chunks = 0
+    stopped_because = None
+
+    # The opening of the stream is held back until it is decidable.
+    #
+    # The model copies retrieval formatting onto the front of its answer -
+    # "[Fiction, written at your request - not fact] [Episode] \nA baker so
+    # fine," measured 2026-09-19. Cleaning ai_content afterwards fixed what is
+    # stored and returned but not what a UI had already rendered, and the GUI
+    # renders as it streams.
+    #
+    # Nothing is held once the opening cannot become an artefact, which for an
+    # ordinary answer is the first token: no artefact begins with "O", so
+    # "Oslo" goes out immediately. First-token latency on the normal path is
+    # unchanged, which is the only reason withholding is acceptable at all on
+    # a path that will be spoken aloud.
+    head_settled = False
+    head_raw = ""
+    head_artefacts = 0
+    HEAD_HOLD_CHARS = 96            # the longest artefact is 44
+
+    # How much of ai_content has already gone out. What a line carries is
+    # always ai_content[sent:...], so what the client has seen is always a
+    # prefix of what is stored - never text the stops later removed. Before
+    # this, each line carried its own trimmed chunk, and a stop that removed
+    # text spanning earlier chunks (a scaffold marker arriving in pieces)
+    # could not take back the pieces already sent.
+    sent = 0
+    held_dropped = 0
+    bare_tags = 0
+    after_tag = False
+    said_true = 0
+    # the question being answered: what a correction she says back is
+    # measured against (the last thing the user said)
+    asked = next((m.get("content") for m in reversed(messages or [])
+                  if m.get("role") == "user" and isinstance(m.get("content"), str)), None)
+    deadline = time.monotonic() + MAX_GENERATION_SECONDS
+
+    resp = urllib.request.urlopen(req, timeout=300)
+    try:
+        for raw_line in resp:
+            if BRAKE.is_set():
+                # The steward's brake (72): the rest is abandoned here, at
+                # the next chunk, as every other stop abandons it.
+                stopped_because = "brake"
+                break
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                out_lines.append(line.decode("utf-8", errors="replace"))
+                if emit is not None:
+                    emit(out_lines[-1])
+                continue
+
+            msg = d.get("message", {})
+            if msg.get("role") == "assistant":
+                clean, n = sanitize_model_output(msg.get("content", ""))
+                if n:
+                    stripped_total += n
+                    stopped_because = "control-token"   # the stop the server lacks
+                if msg.get("content"):
+                    chunks += 1          # the server's done message is empty
+
+                # Hold the opening while it could still be a retrieval
+                # artefact. Forced to settle by a stop or by the server's done
+                # message, so a stream can never end mid-hold with nothing
+                # forwarded and no terminator.
+                if not head_settled:
+                    head_raw += clean
+                    head_clean, n_art = strip_leading_artefacts(head_raw)
+                    if (not stopped_because and not d.get("done")
+                            and len(head_raw) < opening_hold(head_raw, HEAD_HOLD_CHARS)
+                            and opening_may_be_artefact(head_clean)):
+                        continue                 # nothing forwarded yet
+                    head_settled = True
+                    head_artefacts = n_art
+                    clean = head_clean           # ai_content is still empty
+
+                if (not stopped_because and SOFT_STOP_TOKENS
+                        and chunks >= SOFT_STOP_TOKENS
+                        and clean[:1] in (" ", "\n") and ends_sentence(ai_content)):
+                    # Long enough, the previous token closed a sentence, and
+                    # this one opens the next. End here, on a boundary a voice
+                    # can end on; this token is not forwarded or stored.
+                    stopped_because = "sentence"
+                    clean = ""
+                if after_tag and clean:
+                    # The word before the tag left its space, and this one
+                    # brings its own: one of the two is enough.
+                    if clean[:1] == " " and (not ai_content or ai_content[-1:].isspace()):
+                        clean = clean[1:]
+                    after_tag = False
+                ai_content += clean
+                # A tag word of her memory said inside a sentence is taken out
+                # of what has not yet gone to the reader.
+                ai_content, n_bare = strip_bare_tags(ai_content, sent)
+                bare_tags += n_bare
+                if n_bare and (not ai_content or ai_content[-1:].isspace()):
+                    after_tag = True
+                # A correction that says what is true, said inside the
+                # answer: its wrapper is taken off and the truth stays.
+                ai_content, n_said = unwrap_corrections(
+                    ai_content, sent, ending=bool(stopped_because or d.get("done")),
+                    question=asked)
+                said_true += n_said
+                if n_said and (not ai_content or ai_content[-1:].isspace()):
+                    after_tag = True         # taken out whole: see above
+
+                # Both remaining stops work on the ACCUMULATED text, not this
+                # chunk: "[END MEMORY CONTEXT]" is several tokens and a blank
+                # line often arrives split across two, so neither is visible to
+                # a per-chunk test.
+                if not stopped_because:
+                    kept, cut = cut_at_scaffold_marker(ai_content)
+                    if cut:
+                        ai_content = kept
+                        stopped_because = "scaffold-marker"
+                if STOP_AT_PARAGRAPH and not stopped_because:
+                    kept, cut = first_paragraph(ai_content)
+                    if cut:
+                        # Nothing after the blank line reaches the caller or
+                        # the memory store.
+                        ai_content = kept
+                        stopped_because = "paragraph"
+
+                # What may go out now: everything decided so far, less a tail
+                # that could still turn into a scaffold marker. If the stream
+                # is ending, that tail is dropped from the answer as well, so
+                # the stored answer is exactly what was shown.
+                hold = marker_prefix_len(ai_content)
+                if hold and (stopped_because or d.get("done")):
+                    ai_content = ai_content[:len(ai_content) - hold]
+                    held_dropped += hold
+                    hold = 0
+                safe_end = len(ai_content) - hold
+                msg["content"] = ai_content[sent:safe_end] if safe_end > sent else ""
+                sent = max(sent, safe_end)
+                d["message"] = msg
+
+            line_out = json.dumps(d)
+            out_lines.append(line_out)
+            if emit is not None and not d.get("done"):
+                emit(line_out)
+
+            if d.get("done"):
+                if d.get("done_reason") == "length":
+                    print(f"[generation] server cap reached: num_predict="
+                          f"{GENERATION_OPTIONS.get('num_predict')} after {chunks} chunks",
+                          flush=True)
+                break
+            if stopped_because:
+                break
+            if time.monotonic() > deadline:
+                stopped_because = f"{MAX_GENERATION_SECONDS}s-budget"
+                break
+    finally:
+        resp.close()          # abandon the rest; the server frees promptly
+
+    # The wall-clock stop breaks out after a line has gone, so a held tail can
+    # still be sitting in ai_content. It was never shown; it is not stored.
+    hold = marker_prefix_len(ai_content)
+    if hold:
+        ai_content = ai_content[:len(ai_content) - hold]
+        held_dropped += hold
+    if bare_tags:
+        print(f"[generation] took {bare_tags} tag word(s) of her memory out of "
+              f"the answer - not shown, not stored", flush=True)
+    if said_true:
+        print(f"[generation] {said_true} correction(s) said inside the answer: "
+              f"the wrapper taken off; what is true left standing where it "
+              f"bears on the question", flush=True)
+    if held_dropped:
+        print(f"[generation] held back {held_dropped} character(s) that could "
+              f"have been the start of a scaffold marker - not shown, not "
+              f"stored", flush=True)
+
+    # Backstop. The head buffer above should leave nothing for this to do; it
+    # covers the case where the opening ran past HEAD_HOLD_CHARS before it
+    # could be decided.
+    ai_content, _late = strip_leading_artefacts(ai_content)
+    if head_artefacts or _late:
+        print(f"[generation] withheld {head_artefacts + _late} retrieval "
+              f"artefact(s) from the front of the answer - not forwarded, "
+              f"not stored", flush=True)
+
+    if stopped_because == "brake":
+        print(f"[generation] cut by the brake after {chunks} chunks", flush=True)
+        raise Braked(ai_content[:sent])
+    if stopped_because:
+        print(f"[generation] stopped early: {stopped_because} "
+              f"after {chunks} chunks ({stripped_total} control token(s))", flush=True)
+        # The caller is mid-stream and expects a terminator. Emit a well-formed
+        # one so a UI does not sit waiting on a connection we just closed.
+        out_lines.append(json.dumps({
+            "model": model,
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+        }))
+
+    raw = ("\n".join(out_lines) + "\n").encode("utf-8")
+    return raw, ai_content
+
+
+class _Stream:
+    """Writes NDJSON lines to the client as they are decided.
+
+    Headers go out with the first line, not before: until then the handler can
+    still answer some other way (the prompt-too-large message, a 502), because
+    nothing has been promised to the client yet. After it, the status line is
+    spent, and an error can only be reported inside the stream.
+    """
+
+    def __init__(self, handler):
+        self.h = handler
+        self.started = False
+        self.lines = 0
+
+    def __call__(self, line: str):
+        if not self.started:
+            self.h.send_response(200)
+            self.h.send_header("Content-Type", "application/x-ndjson")
+            self.h.end_headers()
+            self.started = True
+        self.h.wfile.write((line + "\n").encode("utf-8"))
+        self.h.wfile.flush()
+        self.lines += 1
+
+
+def _terminator(raw: bytes, model: str, provenance: dict) -> str:
+    """The final NDJSON line, with the provenance badge attached.
+
+    Carried on the terminator rather than a line of its own: an ollama-shaped
+    client ignores keys it does not know, and inventing a new line type would
+    break every existing consumer. It is the LAST thing sent because it is the
+    only thing that needs the whole answer - the check runs on the complete
+    text - and everything before it has already been streamed.
+
+    Always returns a terminator. If raw does not end in one (the server closed
+    early, or its last line is unreadable), one is made, so the client is
+    never left waiting and the badge is never missing.
+    """
+    last = None
+    try:
+        for line in reversed(raw.decode("utf-8", errors="replace").split("\n")):
+            if line.strip():
+                cand = json.loads(line)
+                if isinstance(cand, dict) and cand.get("done"):
+                    last = cand
+                break
+    except Exception:
+        last = None
+    if last is None:
+        last = {"model": model, "message": {"role": "assistant", "content": ""},
+                "done": True, "done_reason": "stop"}
+    last["aetherseed"] = provenance
+    return json.dumps(last)
+
+
+# ============================================================
+# PROXY HANDLER
+# ============================================================
+
+class ProxyHandler(http.server.BaseHTTPRequestHandler):
+
+    def log_message(self, format, *args):
+        pass
+
+    def _proxy_passthrough(self, method="GET", body=None):
+        if method == "POST" and BRAKE.is_set():
+            # Straight to the model server would go round the brake (72).
+            self._send_json({"error": "the brake is on", "code": "brake"}, status=423)
+            return
+        url = f"{HAILO_OLLAMA_URL}{self.path}"
+        headers = {k: v for k, v in self.headers.items()}
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                self.send_response(resp.status)
+                for k, v in resp.getheaders():
+                    if k.lower() not in ('transfer-encoding', 'connection'):
+                        self.send_header(k, v)
+                self.end_headers()
+                while True:
+                    chunk = resp.read(4096)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except urllib.error.HTTPError as e:
+            self.send_response(e.code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(e.read())
+        except Exception as e:
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+    def _answer_from_the_record(self, model: str, user_msg: str):
+        """Reply with the provenance record, assembled here, not generated.
+
+        Emitted as the same NDJSON a real answer uses so a client cannot tell
+        the difference structurally - but nothing in this path touches the NPU.
+        """
+        entries = []
+        try:
+            with open(PROVENANCE_LOG, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue          # a torn line is a gap, not a crash
+        except FileNotFoundError:
+            pass
+
+        text = summarise_record(entries, language=_settings()[1])
+        print(f"[provenance] answered from the record ({len(entries)} turns, "
+              f"model not called)", flush=True)
+
+        out = [json.dumps({"model": model,
+                           "message": {"role": "assistant", "content": text},
+                           "done": False}),
+               json.dumps({"model": model,
+                           "message": {"role": "assistant", "content": ""},
+                           "done": True, "done_reason": "stop",
+                           "source": "provenance-record",
+                           # Tagged like every other reply, so the reader can
+                           # tell this came from the log and not the model.
+                           "aetherseed": {"mode": "record", "checked": True,
+                                          "unbacked_sources": 0, "unsourced_figures": 0,
+                                          "used_tools": False, "memory_used": False}})]
+        raw = ("\n".join(out) + "\n").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        self.wfile.write(raw)
+        # Deliberately NOT stored as an episode: the node reciting its own
+        # record is not a new fact about the world, and storing it would let
+        # the summary re-enter later prompts as if it were one.
+
+    def _answer_from_the_build(self, model: str, user_msg: str) -> bool:
+        """Serve a curriculum line verbatim. True if this turn was handled.
+
+        Falls through to the model on anything unexpected - no curriculum, no
+        such entry, a question this is not certain about. A route that answers
+        when it should not is worse than one that answers rarely, because the
+        model still gets the question with the right line in its context.
+        """
+        try:
+            from logic.knowledge import (exact_entry_for, load_knowledge,
+                                         is_steward_question, steward_text)
+            # Who her steward is, from the unit's own setting.
+            # Only when a name has been set: without one the question goes on
+            # as before, and eco.steward says what a steward is.
+            if is_steward_question(user_msg):
+                named = _steward()
+                if named:
+                    print("[knowledge] steward named from the unit's setting "
+                          "(model not called)", flush=True)
+                    self._serve_plain(model, steward_text(named), source="knowledge",
+                                      mode="known")
+                    return True
+            entry = exact_entry_for(user_msg)
+            if entry is None:
+                return False
+            k = load_knowledge()
+            text = k.by_id(entry) if k else None
+        except Exception as e:
+            print(f"[knowledge] exact route stood down: {e!r}", flush=True)
+            return False
+        if not text:
+            return False
+
+        print(f"[knowledge] answered from the build: {entry} (model not called)",
+              flush=True)
+        self._serve_plain(model, text, source="knowledge", mode="known")
+        return True
+        # Deliberately NOT stored as an episode, and not written to the
+        # provenance record - the same treatment the record route gets. The
+        # node repeating a line it shipped with is not a new fact about the
+        # world, and storing it would let it re-enter later prompts as one.
+
+    def _trust_view(self):
+        tools, desc = _tools()
+        from trust_evolution import TIERS
+        return trust_control.view(trust=trust, gate=getattr(spark, "gate", None),
+                                  controls=trust_controls(), tools=tools,
+                                  descriptions=desc, tiers=TIERS,
+                                  events_path=str(trust.events_path))
+
+    def _answer_braked(self, model: str, stream=None, user_msg: str = "",
+                       partial: str = "", lesson=None, speaker: str = ""):
+        """The brake is on: the turn is refused, or the answer
+        in progress is ended where it was cut. Never stored, never scored;
+        recorded in the provenance log as braked."""
+        meta = {"mode": "braked", "braked": True, "checked": False,
+                "unbacked_sources": 0, "unsourced_figures": 0,
+                "used_tools": False, "memory_used": False}
+        if stream is not None and stream.started:
+            try:
+                stream(json.dumps({"model": model,
+                                   "message": {"role": "assistant", "content": ""},
+                                   "done": True, "done_reason": "brake",
+                                   "aetherseed": dict(meta, cut=True)}))
+            except Exception:
+                pass
+        else:
+            text = _BRAKED_TEXT.get(_settings()[1], _BRAKED_TEXT["en"])
+            out = [json.dumps({"model": model,
+                               "message": {"role": "assistant", "content": text},
+                               "done": False}),
+                   json.dumps({"model": model,
+                               "message": {"role": "assistant", "content": ""},
+                               "done": True, "done_reason": "brake", "source": "brake",
+                               "aetherseed": meta})]
+            raw = ("\n".join(out) + "\n").encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(raw)
+        record({"braked": True, "cut": bool(stream is not None and stream.started),
+                "prompt": (user_msg or "")[:160], "answer": (partial or "")[:160],
+                "speaker": speaker, **({"training": lesson["level"]} if lesson else {})})
+
+    def _forget_turn(self, model, intent, user_msg, speaker, conversation, lesson):
+        """She is told to forget (logic/forget.py): found, deleted, said - the
+        model not called, and the turn itself not stored (a turn that holds
+        the words to be forgotten would put them back)."""
+        kind, topic = intent["captures"]
+        self._wm_turn = None            # the order holds the words: it is not carried into the next turn
+        say = lambda t: self._serve_plain(model, t, source="tool", mode="tool", used_tools=True)
+        if kind == "all":
+            print("[forget] everything: not done on a word in chat", flush=True)
+            say(forget_mod.NOTHING_TO_GO_ON)
+            return
+        if lesson:
+            # homework never deletes: it runs on her real memory
+            say("In training I do not delete anything. Told to forget something, I delete what "
+                "I hold about it, and say what I deleted.")
+            return
+        store = root.store
+        found = forget_mod.last(store) if kind == "last" else forget_mod.find(store, topic)
+        if kind == "topic" and not found["words"]:
+            say(forget_mod.NOTHING_TO_GO_ON)
+            return
+        if len(found["turns"]) > forget_mod.MAX_TURNS:
+            print(f"[forget] refused: {len(found['turns'])} turns would go", flush=True)
+            say(forget_mod.TOO_MANY)
+            return
+        try:
+            counts = forget_mod.delete(store, found, FORGET_LOG,
+                                       topic_text=topic or "(the last turn)",
+                                       announce=lambda n, h: print(f"[chain] {n} {h}", flush=True))
+        except Exception as e:
+            print(f"[forget] failed, nothing deleted: {e!r}", flush=True)
+            say("I could not forget that - the record of it could not be written, so nothing was deleted.")
+            return
+        # what is carried into the next turn goes too
+        if kind == "last":
+            WORKING.forget_last(conversation)
+        else:
+            tw = found["words"]
+            WORKING.forget(lambda text: forget_mod._holds(tw, text))
+        print(f"[forget] {counts['turns']} turns, {counts['facts']} facts, {counts['rings']} rings deleted",
+              flush=True)
+        say(forget_mod.said(counts, topic))
+
+    def _serve_plain(self, model: str, text: str, source: str, mode: str,
+                     used_tools: bool = False, open_panel: str = None):
+        """Send `text` as the whole reply, model not called. Tagged, so the
+        reader can tell it came from the unit and not the model."""
+        out = [json.dumps({"model": model,
+                           "message": {"role": "assistant", "content": text},
+                           "done": False}),
+               json.dumps({"model": model,
+                           "message": {"role": "assistant", "content": ""},
+                           "done": True, "done_reason": "stop",
+                           "source": source,
+                           # Tagged like every other reply, so the reader can
+                           # tell this came from the unit and not the model.
+                           "aetherseed": {"mode": mode, "checked": True,
+                                          "unbacked_sources": 0, "unsourced_figures": 0,
+                                          "used_tools": used_tools, "memory_used": False,
+                                          **({"open": open_panel} if open_panel else {})}})]
+        raw = ("\n".join(out) + "\n").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        self.wfile.write(raw)
+        self._wm_note(text)                 # the unit's answer is part of it too
+
+    def _wm_note(self, reply: str):
+        """This turn's exchange into working memory, once."""
+        turn = getattr(self, "_wm_turn", None)
+        self._wm_turn = None
+        if turn and reply:
+            WORKING.add(turn[0], turn[1], reply)
+
+    # ---- THE LIBRARY --------------------------------------
+    # The last passage shown, so that "more" can walk on. In memory only; one
+    # steward at one screen.
+    _library_last = {"hit": None, "at": 0.0}
+    _LIBRARY_MORE = re.compile(r"^\s*(?:more|go on|next|continue|and then)\s*[.!?]*\s*$", re.I)
+    # The last question she answered herself, so that "look it up" can ask
+    # the library the same thing. In memory only.
+    _library_asked = {"q": None, "at": 0.0}
+
+    def _look_up_for_homework(self, model: str, user_msg: str) -> bool:
+        """"look up X [in my documents]" for a turn of the training loop: the
+        passage word for word, as the steward would be shown it - without the
+        steward's state ("more", "look it up", "explain that") read or moved."""
+        try:
+            library = lib.library()
+            asked = lib.lookup_query(user_msg)
+            if not library or asked is None:
+                return False
+            own_only = lib.lookup_in_own(user_msg)
+            hit = library.look_up(asked, own_only=own_only)
+            if hit is None:
+                text = lib.nothing(asked, library.own_names() if own_only else library.holds())
+            else:
+                text = lib.shown(hit)
+            print(f"[library] homework look-up: {'found' if hit else 'nothing'} "
+                  f"(model not called)", flush=True)
+            self._serve_plain(model, text, source="library", mode="library")
+            return True
+        except Exception as e:
+            print(f"[library] homework look-up failed: {e!r}", flush=True)
+            return False
+
+    # A guest's own "more" and "look it up": kept per guest
+    # conversation, so a guest never walks on from the steward's last passage.
+    _guest_library = {}
+    _GUEST_LIBRARY_MAX = 16
+
+    def _library_state(self, guest_key=None):
+        """(last passage shown, last question asked) - the steward's, or one
+        guest conversation's."""
+        if guest_key is None:
+            return ProxyHandler._library_last, ProxyHandler._library_asked
+        states = ProxyHandler._guest_library
+        if guest_key not in states:
+            while len(states) >= self._GUEST_LIBRARY_MAX:
+                states.pop(next(iter(states)))
+            states[guest_key] = ({"hit": None, "at": 0.0}, {"q": None, "at": 0.0})
+        return states[guest_key]
+
+    def _answer_from_the_library(self, model: str, user_msg: str,
+                                 speaker: str = STEWARD, guest_key=None) -> bool:
+        """Show a passage word for word, model not called. True if handled.
+
+         - and the passage
+        shown word for word, not retold: "Yes! Perfect!". With a verse in
+        front of it the model once answered "the second day" for "the first"
+        (38d); for a dose that is the failure to design out.
+
+        Asked to look something up, she shows the best passage there is or
+        says the library has nothing. Unasked, only when the library is sure
+        (logic/library.py), and never for a question about her or about what
+        she was told. Anything unexpected falls through to the model, as
+        before there was a library.
+        """
+        try:
+            library = lib.library()
+            if library and guest_key is not None:
+                library = library.without_own()   # never the steward's documents (81)
+            if not library:
+                return False
+            last, pending = self._library_state(guest_key)
+
+            def serve(text, hit=None, why=""):
+                last["hit"], last["at"] = hit, time.time()
+                pending["q"] = None               # the library has spoken; nothing is waiting
+                print(f"[library] {why} (model not called)", flush=True)
+                self._serve_plain(model, text, source="library", mode="library")
+                return True
+
+            if lib.asks_contents(user_msg):
+                return serve(lib.contents(library), None, "what it holds")
+            ask = lib.asks_to_explain(user_msg)
+            if ask is not None:
+                # "explain that", after a passage of the steward's own
+                # document: the model is given that passage
+                # and nothing else. With no passage on the screen it is hers
+                # to answer, as before; a passage of the built-in library
+                # stays word for word - a dose is not retold.
+                # OFF in the build (lib.EXPLAINS; : "leave it
+                # off"): then a passage of his own stays word for word too.
+                # Said by the unit, model not called - handed "explain that"
+                # with no passage in front of it, the model would explain
+                # something else.
+                hit = last["hit"]
+                if hit is None or time.time() - last["at"] > 900:
+                    return False
+                if not hit.get("own"):
+                    return serve(lib.stays(hit), hit, "explain; the built-in library is not retold")
+                if not lib.EXPLAINS:
+                    return serve(lib.stays(hit), hit, "explain; explaining is off in this build")
+                pending["q"] = None
+                last["at"] = time.time()          # "more" still walks on from it
+                self._explain_a_passage(model, user_msg, ask, hit, speaker)
+                return True
+            asked = lib.lookup_query(user_msg)
+            if asked is not None:
+                own_only = lib.lookup_in_own(user_msg)
+                hit = library.look_up(asked, own_only=own_only)
+                if hit is None and own_only and not library.own_names():
+                    return serve("You have no documents of your own on this unit yet.",
+                                 None, "asked in his documents; there are none")
+                if hit is None:
+                    return serve(lib.nothing(asked, library.own_names() if own_only
+                                             else library.holds()), None, "asked; nothing to show")
+                return serve(lib.shown(hit), hit,
+                             f"asked; {_which(hit)}")
+            if lib.says_look_it_up(user_msg):
+                # After an answer of her own: the library, asked the same
+                # question. With nothing waiting, "look it up" is hers.
+                q = pending["q"]
+                if not q or time.time() - pending["at"] > 900:
+                    return False
+                hit = library.look_up(q)
+                if hit is None:
+                    return serve(lib.nothing(q, library.holds()), None,
+                                 "look it up; nothing to show")
+                return serve(lib.shown(hit), hit,
+                             f"look it up; {_which(hit)}")
+            if self._LIBRARY_MORE.match(user_msg or ""):
+                hit = last["hit"]
+                if hit is None or time.time() - last["at"] > 900:
+                    return False                  # "more" of something else: hers to answer
+                nxt = library.after(hit)
+                if nxt is None:
+                    return serve("That is the end of that document.", None, "more; end of document")
+                return serve(lib.shown(nxt), nxt, f"more; {_which(nxt)}")
+            # Unasked: only when the library is sure, and never a question
+            # about her or about what she was told (logic/library.find).
+            # It does NOT stand down for a [Known] line or a steward fact that
+            # merely shares a word: tried on a copy of a unit's memory
+            # 2026, that sent "Can children take aspirin?" to the model
+            # because a verse of Genesis says "children", and "What is
+            # amoxicillin used for?" because a line of the build says "used".
+            hit = library.find(user_msg)
+            if hit is None:
+                return False
+            return serve(lib.shown(hit), hit,
+                         f"unasked, sure; {_which(hit)}")
+        except Exception as e:
+            print(f"[library] stood down: {e!r}", flush=True)
+            return False
+        # Not stored as an episode and not scored, like every answer the unit
+        # gives without the model: the source's words are not something she
+        # said, and must not come back into a later prompt as if they were.
+
+    def _explain_a_passage(self, model: str, user_msg: str, ask: str, hit: dict,
+                           speaker: str = STEWARD):
+        """Her own words about one passage of the steward's own document.
+
+         - asked how: "Find and show passages" and
+        "Explain a passage". The passage was shown word for word first; this
+        is the model's turn, and it is given the charter, the passage as it
+        was shown, and what he asked. No memory, no ring, no steward fact is
+        retrieved: the prompt holds 864 tokens, and an explanation is about
+        the passage in front of her, not about what was said last week.
+
+        Tagged on the console as her words about the passage, with its name
+        and page, so it is never mistaken for the document. Stored as
+        unverified: never part of a ring, and - since, when
+        nothing is set aside any more - it can come back into a later prompt
+        ONLY under its tag, "[Unverified - an earlier answer of yours that
+        may be wrong]": a 3B model's retelling of a textbook must not come
+        back later as something she knows (40d). It earns no trust and costs
+        none.
+        """
+        passage = lib.to_explain(hit)
+        c_name, c_lang = _settings()
+        system_prompt = (charter(c_name, c_lang, _steward()) + "\n" + EXPLAIN_NOTE + "\n" + DATA_NOTE
+                         + "\n\n[WORKSPACE DATA]\n" + sanitize_injected(passage)
+                         + "\n[END WORKSPACE DATA]")
+        question = (ask or "").strip() or EXPLAIN_ASK
+        messages = [{"role": "system", "content": system_prompt},
+                    {"role": "user", "content": question}]
+        print(f"[library] explain; {_which(hit)} "
+              f"({len(passage)} characters shown to the model)", flush=True)
+        stream = _Stream(self)
+        try:
+            raw_response, ai_content = call_hailo_chat(model, messages, emit=stream)
+        except Braked as e:
+            self._answer_braked(model, stream=stream, user_msg=question, partial=e.partial)
+            return
+        except PromptTooLarge as e:
+            print(f"[token-budget] REFUSED: {e}", flush=True)
+            self._serve_plain(model, _TOO_LARGE.get(c_lang, _TOO_LARGE["en"]),
+                              source="library", mode="gate")
+            return
+        except Exception as e:
+            print(f"[generation] explain failed: {e!r}", flush=True)
+            if stream.started:
+                try:
+                    stream(json.dumps({"model": model,
+                                       "message": {"role": "assistant", "content": ""},
+                                       "done": True, "done_reason": "error",
+                                       "error": str(e)[:200]}))
+                except Exception:
+                    pass
+                return
+            self._send_json({"error": str(e)[:200]}, status=502)
+            return
+
+        report, check_failed = None, False
+        if ai_content:
+            try:
+                from honesty_check import check_response
+                report = check_response(question, ai_content, tool_outputs=(passage,),
+                                        memory_context="")
+            except Exception as e:
+                check_failed = True
+                print(f"[honesty] the check could not run: {e!r}", flush=True)
+        stream(_terminator(raw_response, model, {
+            "mode": UNVERIFIED,
+            "mode_requested": "factual",
+            "why": "her own words about a passage of the steward's document",
+            "checked": not check_failed,
+            "unbacked_sources": len(report.high) if report is not None else 0,
+            "unsourced_figures": len(report.medium) if report is not None else 0,
+            "used_tools": False, "memory_used": False,
+            # What she was given, so the console can say so under her words.
+            "explains": {"title": hit.get("title", ""), "heading": hit.get("heading", ""),
+                         "place": hit.get("place", ""),
+                         "part": len(passage) < len(hit.get("text", ""))},
+        }))
+        if not ai_content:
+            return
+        stored_ok = False
+        try:
+            if speaker != GUEST:        # a guest's turn is not kept (20 Oct 2026)
+                root.store_interaction(user_msg, ai_content, resonance=0.4, mode=UNVERIFIED,
+                                       speaker=speaker)
+                stored_ok = True
+        except Exception as e:
+            global STORE_FAILURES
+            STORE_FAILURES += 1
+            print(f"[memory] turn NOT stored ({STORE_FAILURES} so far): {e!r}", flush=True)
+        record({
+            "mode_requested": "factual", "mode_stored": UNVERIFIED,
+            "why": "explains a passage of the steward's own document",
+            "honesty_high": len(report.high) if report is not None else 0,
+            "honesty_medium": len(report.medium) if report is not None else 0,
+            "resonance": 0.4, "used_tools": False, "declined": False,
+            "checked": not check_failed, "remembered": stored_ok, "facts_used": [],
+            "explains": "%s #%s" % (hit.get("collection_id", ""), hit.get("id", "")),
+            "prompt": user_msg[:160], "answer": ai_content[:160], "speaker": speaker,
+            "reading": False,
+        })
+
+    # ---- THE STEWARD'S OWN SHELF ----------------------------
+    def _shelf_listing(self):
+        self._send_json({"documents": own_shelf.listing(),
+                         "can_read_pdf": own_shelf.can_read_pdf(),
+                         "explains": bool(lib.EXPLAINS),
+                         "max_bytes": own_shelf.MAX_BYTES,
+                         "max_documents": own_shelf.MAX_DOCUMENTS,
+                         "kinds": list(own_shelf.KINDS)})
+
+    def _shelf_upload(self, body: bytes):
+        """A document for the shelf: the body is the file, its name is in
+        X-Filename (percent-encoded). Kept, listed as being read, and read in
+        the background; the console asks the listing how it went."""
+        try:
+            filename = urllib.parse.unquote(self.headers.get("X-Filename") or "", errors="strict")
+        except Exception:
+            filename = ""
+        if not filename or len(filename) > 255 or "\x00" in filename:
+            self._send_json({"error": "The file has no name I can use.", "code": "name"}, status=400)
+            return
+        entry, err = own_shelf.accept(filename, body)
+        if err:
+            self._send_json({"error": err, "code": "refused"}, status=400)
+            return
+        # The name and the words of a document are the steward's: the journal
+        # gets its kind and size only (37: what was said stays out of it).
+        print(f"[shelf] took a .{entry['kind']} of {entry['bytes']} bytes; reading it",
+              flush=True)
+        own_shelf.read_in_background(entry, done=_shelf_read)
+        self._send_json({"document": entry}, status=202)
+
+    def _shelf_remove(self, body: bytes):
+        try:
+            req = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            req = {}
+        doc_id = req.get("id") if isinstance(req, dict) else None
+        if not own_shelf.remove(doc_id if isinstance(doc_id, str) else ""):
+            self._send_json({"error": "There is no such document.", "code": "missing"}, status=404)
+            return
+        last = ProxyHandler._library_last
+        if last["hit"] is not None and last["hit"].get("own"):
+            last["hit"] = None                    # nothing of it stays to be explained
+        _shelf_read()
+        print("[shelf] a document was removed", flush=True)
+        self._send_json({"ok": True, "documents": own_shelf.listing()})
+
+    def _lesson(self, body: bytes):
+        """None - or, for a turn of the training loop, the level lent to it,
+        a gate at that level and the loop's own workspace."""
+        token = self.headers.get(TRAINING_HEADER) or ""
+        if not token or not hmac.compare_digest(token.encode("utf-8", "replace"),
+                                                _TRAINING_TOKEN.encode()):
+            return None
+        try:
+            asked = json.loads(body).get("training") or {}
+            level = canonical_level(asked.get("level"))    # an old name lent as its new one (82)
+        except Exception:
+            return None
+        if level not in TRUST_PERMISSIONS:
+            return None
+        gate = SafetyGate({"trust_level": level,
+                           "audit_log": os.path.join(TRAINING_DIR, "spark_audit.log")})
+        return {"level": level, "gate": gate, "remember": asked.get("remember") is not False,
+                "workspace": os.path.join(TRAINING_DIR, "workspace")}
+
+    def _proxy_chat_augmented(self, body: bytes):
+        prompts.forget()                    # this turn's prompt, and no other (72)
+        self._wm_turn = None                # this turn's exchange, and no other (78)
+        lesson = self._lesson(body)
+        if lesson is None:
+            return self._chat_turn(body)
+        with in_workspace(lesson["workspace"]):
+            return self._chat_turn(body, lesson)
+
+    def _chat_turn(self, body: bytes, lesson=None):
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self._proxy_passthrough("POST", body)
+            return
+        # The gate this turn is checked at: the unit's own - or, for a turn of
+        # the training loop, one at the level lent for its stage.
+        gate = lesson["gate"] if lesson else getattr(spark, "gate", None)
+
+        # Text, or a plain refusal. A message whose content is
+        # a list of parts - as some clients send - reached the checks below
+        # and raised, and the threaded server dropped the connection without
+        # a word in the journal.
+        if not isinstance(data, dict) or not isinstance(data.get("messages", []), list):
+            self._send_json({"error": "a chat request is an object with a list of messages"},
+                            status=400)
+            return
+        for msg in data.get("messages", []):
+            if not isinstance(msg, dict) or not isinstance(msg.get("content") or "", str):
+                self._send_json({"error": "each message is an object whose content is text"},
+                                status=400)
+                return
+
+        if BRAKE.is_set():
+            # Every turn while the brake is on - homework, a question the unit
+            # would answer itself, anything - is refused, plainly (72).
+            last = next((m.get("content") for m in reversed(data.get("messages") or [])
+                         if isinstance(m, dict) and m.get("role") == "user"), "")
+            self._answer_braked(MODEL, user_msg=last or "", lesson=lesson)
+            return
+
+        messages = data.get("messages", [])
+        # The unit serves one model, its own,
+        # whatever model a caller names: callers written for the 3B named
+        # "llama3.2:3b", and a unit on the 1B has no such model. Was
+        # data.get("model") or MODEL; before that "manifests:qwen3".
+        model = MODEL
+
+        if not messages:
+            self._proxy_passthrough("POST", body)
+            return
+
+        # Find the last user message
+        user_msg = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                user_msg = msg.get("content", "")
+                break
+
+        if not user_msg:
+            self._proxy_passthrough("POST", body)
+            return
+
+        # ---- WHO IS SPEAKING ----
+        # A caller may declare `"speaker": "<name>"`; the console declares
+        # nothing, and its turns are the steward's. A declaration is untrusted
+        # input headed for the prompt, and a refused one is refused LOUDLY -
+        # storing it as the steward instead would put somebody else's words in
+        # the steward's mouth, which is the defect this field exists to end.
+        # Checked before any route, so no answer is given to a turn whose
+        # speaker could not be recorded. See logic/speaker.py.
+        speaker, speaker_err = validate_speaker(data.get("speaker"), _settings()[0],
+                                                _steward())
+        if lesson:
+            # The loop's turns are the Trainer's - a name no caller can
+            # declare (logic/speaker.py), so homework is never the steward's.
+            speaker, speaker_err = TRAINER, None
+        if speaker_err:
+            self._send_json({"error": "speaker refused", "reason": speaker_err},
+                            status=400)
+            return
+        # A caller reading a passage to the node may say so (`"reading": true`,
+        # tools/reading_soak.py): a decline to a passage is not a refusal of a
+        # question, and earns nothing.
+        # Declared, never verified; it can only withhold trust, never add it.
+        reading = data.get("reading") is True
+
+        # ---- WORKING MEMORY ----
+        # A conversation's last exchange goes with its next turn. Only for the
+        # console's shape - one user message, no history of the caller's own -
+        # and never for homework or a reading: the loop's questions stand
+        # alone, and a verse is not a conversation.
+        # Kept per speaker - and, for a guest, per phone: every
+        # guest is "Guest", and one guest's conversation is not another's.
+        # The console says which phone in `conversation`, a short id of its
+        # own making; a caller on the unit itself may leave it out.
+        conversation = _conversation_key(speaker, data.get("conversation"))
+        if (not lesson and not reading
+                and sum(1 for m in messages if m.get("role") != "system") == 1):
+            self._wm_turn = (conversation, user_msg)
+
+        # ---- A GUEST ----
+        # a guest's question should not bring back what
+        # the steward told her. What is the steward's is answered by the unit
+        # with a plain sentence, model not called; what she remembers is the
+        # guest's own turns (retrieve_context, only_speaker).
+        is_guest = speaker == GUEST
+
+        def for_guest(kind):
+            print(f"[guest] {kind}: the steward's, not opened for a guest (model not called)",
+                  flush=True)
+            self._serve_plain(model, guest_text(kind, _settings()[1]), source="gate",
+                              mode="gate")
+
+        # ---- THE RECORD ----
+        # Asked about its own failures, the node answers FROM THE FILE and the
+        # model is never called. A model summarising its own mistakes is the
+        # least reliable possible narrator of them, and this is the one answer
+        # that has to be trustworthy.
+        if is_record_question(user_msg):
+            if is_guest:
+                return for_guest("record")
+            self._answer_from_the_record(model, user_msg)
+            return
+
+        # ---- HOW FAR SHE TRUSTS A PERSON: their record ----
+        about = trust_record.trust_question(user_msg, _steward())
+        if about and is_guest:
+            return for_guest("trust")
+        if about:
+            print(f"[trust] the record of {about} told from her memory (model not called)",
+                  flush=True)
+            self._serve_plain(model, trust_record.answer(root.store, about, speaker, _steward()),
+                              source="record", mode="record")
+            return
+
+        # ---- HER TAGS AND CORRECTIONS ----
+        # Counted and quoted from the notes themselves, model not called
+        # what her steward corrected, what training did.
+        if steward.is_corrections_question(user_msg) and is_guest:
+            return for_guest("corrections")
+        if steward.is_corrections_question(user_msg):
+            try:
+                text = steward.corrections_text(root.store)
+            except Exception as e:
+                text = None
+                print(f"[steward] corrections not read: {e!r}", flush=True)
+            if text:
+                print("[steward] tags and corrections answered from the notes "
+                      "(model not called)", flush=True)
+                self._serve_plain(model, text, source="record", mode="record")
+                return
+
+        # ---- THE CONTACT ADDRESS ----
+        # Answered from the build, model not called, for the same reason the
+        # record is: this is the answer that has to be exact. Measured twice on
+        # with the correct line at the top of its context, the model
+        # returned "contact@aethersed.ai" and then "contact@aethersseed.ai" -
+        # live domains belonging to somebody else. The honesty check caught
+        # both, which bounds the damage; it does not make the answer right.
+        if self._answer_from_the_build(model, user_msg):
+            return
+
+        # ---- PROVENANCE: what did the user ask for? ----
+        # Read from the USER's framing, never from the model's self-report.
+        # Decides what the past is allowed to say into this turn: a factual
+        # request cannot see fiction, and nothing sees an answer that carried
+        # an unbacked source.
+        request_mode, mode_reason = detect_mode(user_msg)
+
+        # ---- ITS TRUST LEVEL ----
+        # From the gate, model not called: asked "What is your
+        # trust level?" 49 times in the ecosystem soak, the model recited the
+        # whole ladder every time, the trust status in front of it. The rung
+        # it runs at is the gate's, set when the proxy started; a rung earned
+        # since takes effect at the next start, and the answer says so.
+        if is_level_question(user_msg):
+            earned = None
+            try:
+                earned = trust.get_trust_level_name()
+            except Exception:
+                pass
+            text = level_text(gate.trust_level, earned)
+            if lesson:
+                text = (f"My trust level is {gate.trust_level}, lent to me for "
+                        f"this training turn.")
+            print("[gate] trust level answered from the gate (model not called)",
+                  flush=True)
+            self._serve_plain(model, text, source="gate", mode="gate", used_tools=True)
+            return
+
+        # ---- THE DATE: the unit's clock, said by the unit ----
+        if is_date_question(user_msg):
+            print("[clock] the date told from the unit's clock (model not called)", flush=True)
+            self._serve_plain(model, date_text(language=_settings()[1]), source="clock",
+                              mode="clock")
+            return
+
+        # ---- ITS TRUST LEVELS, IN ORDER ----
+        # From the gate too: corrected 27 times in two runs of
+        # the training loop, she did not come to hold the order of six names.
+        if is_ladder_question(user_msg):
+            print("[gate] the trust levels listed from the gate (model not called)",
+                  flush=True)
+            self._serve_plain(model, ladder_text(gate.trust_level), source="gate",
+                              mode="gate", used_tools=True)
+            return
+
+        # ---- INTENT DETECTION ----
+        intent = detect_intent(user_msg)
+        workspace_data = ""
+        if intent and is_guest and intent["intent"] not in GUEST_TOOLS:
+            # The workspace is the steward's: not read, not
+            # written, and no request filed in his queue by a guest. Nor is
+            # her memory to be deleted by one.
+            return for_guest("forget" if intent["intent"] == "forget" else "workspace")
+        if intent:
+            result = execute_intent(intent, _Gated(gate))
+            # A refusal is told as a refusal, model not called.
+            # In the ecosystem soak the gate refused every write at observer
+            # and nothing was written - but the model, handed the refusal as
+            # tool output, answered "I can write a note: ..." 40 times in 48.
+            # The refusal is already in the audit log (aetherspark); it is
+            # not stored as an episode and not scored.
+            if result and result.startswith("[DENIED]"):
+                if "blocked by the steward" in result:
+                    text = blocked_text(intent["intent"])
+                elif intent["intent"] in approvals.QUEUEABLE and not lesson \
+                        and approvals.words_of(intent):
+                    # Above her level, and it would leave something behind:
+                    # a request to her steward instead of a flat refusal
+                    # Never for homework, which would fill his queue, and
+                    # never for a request with nothing in it to do.
+                    try:
+                        req, how = approvals_queue().file(
+                            intent["intent"], [approvals.words_of(intent)], speaker, user_msg,
+                            gate.trust_level, lowest_role_for(intent["tier"], TRUST_PERMISSIONS))
+                    except Exception as e:
+                        print(f"[approvals] could not file the request: {e!r}", flush=True)
+                        req, how = None, "failed"
+                    if how in ("filed", "waiting"):
+                        print(f"[approvals] request {req['id']} {how}: {intent['intent']} "
+                              f"(she is at {gate.trust_level})", flush=True)
+                        text = request_text(intent["intent"], intent["tier"], gate.trust_level,
+                                            TRUST_PERMISSIONS, req, how)
+                    elif how == "full":
+                        text = request_text(intent["intent"], intent["tier"], gate.trust_level,
+                                            TRUST_PERMISSIONS, None, how)
+                    else:
+                        text = refusal_text(intent["intent"], intent["tier"],
+                                            gate.trust_level, TRUST_PERMISSIONS)
+                else:
+                    text = refusal_text(intent["intent"], intent["tier"],
+                                        gate.trust_level, TRUST_PERMISSIONS)
+                print(f"[gate] {intent['intent']} refused, told as refused "
+                      f"(model not called)", flush=True)
+                self._serve_plain(model, text, source="gate", mode="gate",
+                                  used_tools=True)
+                return
+            # A folder above her level, told as closed (logic/workspace.py).
+            if result and result.startswith("[FOLDER] "):
+                print("[tools] a folder above her level told as closed (model not called)",
+                      flush=True)
+                self._serve_plain(model, result[len("[FOLDER] "):], source="tool", mode="tool",
+                                  used_tools=True)
+                return
+            if result == "[OPEN-WORKSPACE]":
+                print("[workspace] the editor opened for the steward (model not called)",
+                      flush=True)
+                self._serve_plain(model, WORKSPACE_OPENED, source="tool", mode="tool",
+                                  used_tools=True, open_panel="workspace")
+                return
+            if result == "[FORGET]":
+                self._forget_turn(model, intent, user_msg, speaker, conversation, lesson)
+                return
+            # The to-do list changed by the unit, said by the unit: removed,
+            # changed, cleared.
+            if intent["intent"] in ("todo_remove", "todo_edit", "todo_clear") and result:
+                print(f"[tools] {intent['intent']} told by the unit (model not called)",
+                      flush=True)
+                self._serve_plain(model, result, source="tool", mode="tool", used_tools=True)
+                return
+            # The exact tools: a sum, a count, a comparison.
+            # What the tool says IS the answer - word for word, model not
+            # called; shown the right figure, this model retypes another.
+            if intent["intent"] in EXACT_TOOLS and result:
+                print(f"[tools] {intent['intent']} answered by the unit "
+                      f"(model not called)", flush=True)
+                self._serve_plain(model, result, source="tool", mode="tool",
+                                  used_tools=True)
+                return
+            # The to-do list is shown as it is, model not called:
+            # asked to show it, the model said where it is, 0 of 7 in 50e.
+            if intent["intent"] == "todo_read":
+                shown = todo_text(result)
+                if shown is not None:
+                    print("[tools] to-do list shown from the file (model not called)",
+                          flush=True)
+                    self._serve_plain(model, shown, source="tool", mode="tool",
+                                      used_tools=True)
+                    return
+            # What a write did, and what a listing, a search and the notes
+            # hold, told by the unit from the tool's own output
+            # 64e;). Her words around a tool's
+            # result were wrong often - a to-do retyped with another number,
+            # a note's file name made up - and the file right every time.
+            # A file read out is the file: "I'll read the file
+            # for you." and nothing more, 12 times of 28. Only when the file
+            # is all that is asked for; a question of a file is the model's.
+            if intent["intent"] == "file_read" and only_asks_for_the_file(
+                    user_msg, intent.get("match") or ""):
+                shown = file_text(result)
+                if shown is not None:
+                    print("[tools] a file read out by the unit (model not called)",
+                          flush=True)
+                    self._serve_plain(model, shown, source="tool", mode="tool",
+                                      used_tools=True)
+                    return
+            if intent["intent"] in TOLD_BY_THE_UNIT:
+                told = tool_text(intent["intent"], result)
+                if told is not None:
+                    print(f"[tools] {intent['intent']} told by the unit "
+                          f"(model not called)", flush=True)
+                    self._serve_plain(model, told, source="tool", mode="tool",
+                                      used_tools=True)
+                    return
+            if result:
+                workspace_data = result
+
+        # ---- THE LIBRARY ----
+        # A passage shown word for word, model not called.
+        # Not for a tool turn, a reading, or a story - but "What if I forget
+        # to take it?" is a question, not a story: the what-if framing alone
+        # does not keep the library out (tried: that turn went to
+        # the model as fiction, and it wrote "doxicyclene").
+        a_story = request_mode == FICTION and not mode_reason.startswith("asks a what-if")
+        library_line = False
+        # Not for homework either: "more" and "look it up" follow the steward's
+        # last question, and a turn of the loop must not become it.
+        if lesson and not intent and not a_story and lib.lookup_query(user_msg) is not None:
+            # Homework that asks for a look-up by name reaches the library
+            # ("If she couldnt reach the
+            # shelf we should find out why and fix it"). Only the explicit
+            # "look up X ...": "more" and "look it up" follow the steward's
+            # last question, and the steward's last passage and question are
+            # neither read nor moved by a turn of the loop.
+            if self._look_up_for_homework(model, user_msg):
+                return
+        if not intent and not reading and not a_story and not lesson:
+            if self._answer_from_the_library(model, user_msg, speaker,
+                                             conversation if is_guest else None):
+                return
+            # She answers this one herself. It is remembered as the question
+            # "look it up" would ask the library; and when one passage of the
+            # library says every word of it, a line under her answer says the
+            # answer is not from the library. The line is the
+            # console's, on the tag - never in her words, never stored.
+            try:
+                if lib.library():
+                    _, asked_state = self._library_state(conversation if is_guest else None)
+                    asked_state.update(q=user_msg, at=time.time())
+                    shelf = lib.library().without_own() if is_guest else lib.library()
+                    library_line = shelf.says_it_all(user_msg)
+            except Exception as e:
+                print(f"[library] no line: {e!r}", flush=True)
+        elif not lesson:
+            self._library_state(conversation if is_guest else None)[1]["q"] = None
+
+        # ---- BUILD SYSTEM PROMPT ----
+        c_name, c_lang = _settings()
+        system_prompt = charter(c_name, c_lang, _steward())
+
+        # AetherRoot: inject memory context
+        if request_mode == FICTION:
+            system_prompt += "\n" + FICTION_NOTE
+
+        # Who is speaking, when it is not the steward - so that "you told me"
+        # can be right, and a teacher is not mistaken for the person the node
+        # serves.
+        if speaker != STEWARD:
+            # A guest is "a guest" in the sentence, not "Guest".
+            who = "a guest" if speaker == GUEST else speaker
+            system_prompt += "\n" + f"You are talking with {who}, not your steward."
+
+        retrieval = {}
+        try:
+            # When a FILE was read for this question, the file is the
+            # evidence: her past turns are left out. Not for
+            # other workspace data - "Which is your lowest trust level?"
+            # brings the trust status, and her corrections must still come.
+            file_evidence = bool(workspace_data) and bool(intent) and \
+                intent.get("intent") in FILE_EVIDENCE
+            # A guest has no access to AetherRoot at all (
+            # 2026): nothing is stored for a guest, so there is nothing of
+            # theirs to bring back, and nothing of anyone else's to open.
+            if is_guest:
+                memory_context = ""
+            else:
+                memory_context = root.retrieve_context(user_msg, request_mode=request_mode,
+                                                       report=retrieval,
+                                                       past=not file_evidence)
+        except TypeError:
+            # a root without the report argument (older code, test stand-ins).
+            memory_context = root.retrieve_context(user_msg, request_mode=request_mode)
+        if memory_context and FACT_TAG[:-1] in memory_context:
+            system_prompt += "\n" + FACT_NOTE
+            if FACT_TAG_UNCHECKED in memory_context:
+                system_prompt += " " + FACT_NOTE_UNCHECKED
+        # Nothing is set aside: a turn that is not plain fact
+        # comes back with its tag, and this line says what a tag asks of her.
+        # The check below is given the block WITHOUT those lines: what she
+        # once invented is hers to see, and not evidence for saying it again.
+        trusted_context = memory_context
+        if memory_context and retrieval.get("tagged"):
+            system_prompt += "\n" + TAG_NOTE
+            trusted_context = retrieval.get("trusted_context", "")
+        if memory_context or workspace_data:
+            system_prompt += "\n" + DATA_NOTE
+        if memory_context:
+            system_prompt += "\n\n" + memory_context
+
+        # Inject workspace data from intent execution
+        if workspace_data:
+            # sanitize_injected defuses block markers inside file content. A
+            # file containing a line "[END WORKSPACE DATA]" would otherwise
+            # close the block early and have whatever follows read as trusted
+            # prompt.
+            system_prompt += ("\n\n[WORKSPACE DATA]\n"
+                              + sanitize_injected(workspace_data)
+                              + "\n[END WORKSPACE DATA]")
+
+        # Set system message
+        has_system = False
+        for m in messages:
+            if m.get("role") == "system":
+                m["content"] = system_prompt
+                has_system = True
+                break
+        if not has_system:
+            messages.insert(0, {"role": "system", "content": system_prompt})
+
+        # The conversation so far: the last exchanges of this
+        # speaker, as the messages they were, in front of this turn. Not with
+        # a file read for the question - the file is the evidence, as it is for her long-term memory.
+        wm_shown = 0
+        if getattr(self, "_wm_turn", None) and not file_evidence:
+            history = as_messages(WORKING.recent(self._wm_turn[0]))
+            if history:
+                messages[-1:-1] = history
+                wm_shown = len(history) // 2
+
+        data["messages"] = messages
+
+        # Forward to hailo-ollama
+        try:
+            stream = _Stream(self)
+            # The prompt is fitted here, before it goes, so that what is read
+            # after the turn is what was sent. enforce_budget
+            # may drop memory lines from the tail of the block. Before this,
+            # everything after the turn read the block as retrieved:
+            # - the honesty check and the steward check counted a dropped line
+            #   as backing;
+            # - the trust scorer counted it as shown;
+            # - the training record said she was shown it;
+            # - the note explaining its tag stayed in the prompt without it.
+            # call_hailo_chat fits again and finds nothing more to drop.
+            messages, budget = enforce_budget(token_counter(model), messages)
+            if getattr(budget, "trimmed", False):
+                print(f"[token-budget] {budget.summary()}", flush=True)
+            sys_i = next((i for i, m in enumerate(messages) if m.get("role") == "system"), None)
+            if sys_i is not None and memory_context:
+                memory_context, trusted_context, retrieval = sent_block.settle(
+                    messages[sys_i]["content"], memory_context, trusted_context, retrieval)
+                if retrieval.get("lines_trimmed"):
+                    messages[sys_i]["content"], gone = sent_block.drop_notes(
+                        messages[sys_i]["content"], memory_context, retrieval.get("tagged"))
+                    print(f"[token-budget] {retrieval['lines_trimmed']} memory line(s) not "
+                          f"sent; read after the turn as not shown"
+                          + (f"; notes left out with them: {', '.join(gone)}" if gone else ""),
+                          flush=True)
+            if wm_shown:
+                # What the speaker said a moment ago is evidence for the
+                # answer, as a memory line of it would be; what she said is
+                # not. Only what the budget let through.
+                said = [m["content"] for m in messages[:-1] if m.get("role") == "user"]
+                if said:
+                    trusted_context = "\n".join(([trusted_context] if trusted_context else [])
+                                                + said)
+                print(f"[working-memory] {len(said)} of {wm_shown} earlier exchange(s) "
+                      f"of this conversation sent with the turn", flush=True)
+            raw_response, ai_content = call_hailo_chat(model, messages, emit=stream)
+        except Braked as e:
+            self._answer_braked(model, stream=stream, user_msg=user_msg, partial=e.partial,
+                                lesson=lesson, speaker=speaker)
+            return
+        except PromptTooLarge as e:
+            # Raised before anything is generated, so nothing has been sent.
+            # Say so. The alternative is an empty reply the user cannot explain.
+            print(f"[token-budget] REFUSED: {e}", flush=True)
+            msg = _TOO_LARGE.get(_settings()[1], _TOO_LARGE["en"])
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write((json.dumps({
+                "model": model,
+                "message": {"role": "assistant", "content": msg},
+                "done": True, "done_reason": "stop"}) + "\n").encode())
+            return
+        except TokenizerUnavailable as e:
+            print(f"[token-budget] FATAL: {e}", flush=True)
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+            return
+        except Exception as e:
+            if stream.started:
+                # Part of an answer is already on the client's screen. The
+                # status line is spent; end the stream so it does not hang,
+                # and say what happened. Not stored: an answer cut off by a
+                # failure is not something to build on.
+                print(f"[generation] failed mid-stream after {stream.lines} "
+                      f"line(s): {e!r}", flush=True)
+                try:
+                    stream(json.dumps({"model": model,
+                                       "message": {"role": "assistant", "content": ""},
+                                       "done": True, "done_reason": "error",
+                                       "error": str(e)[:200]}))
+                except Exception:
+                    pass
+                return
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+            return
+
+        # The answer has been streamed as it was generated. The check needs
+        # the whole of it, so it runs now, and its verdict goes out on the
+        # last line - the correct tag, arriving with the end of the answer.
+        tool_outputs = (workspace_data,) if workspace_data else ()
+        report = None
+        check_failed = False
+        if ai_content:
+            try:
+                from honesty_check import check_response
+                report = check_response(user_msg, ai_content,
+                                        tool_outputs=tool_outputs,
+                                        memory_context=trusted_context)
+            except Exception as e:
+                report = None
+                check_failed = True
+                print(f"[honesty] the check could not run: {e!r}", flush=True)
+        stored_mode = resolve_mode(
+            request_mode, honesty_high=len(report.high) if report is not None else 0)
+        if check_failed:
+            # Nobody checked it for invented sources, so it may not come back
+            # later as context - and the tag says it was not checked, rather
+            # than showing nothing and looking clean.
+            stored_mode = UNVERIFIED
+
+        # ---- WHAT IT SAYS THE STEWARD TOLD IT ----
+        # an answer that
+        # credits the steward with no steward fact shown, or with content that is
+        # not in what was shown, is tagged and kept out of memory. In the
+        # reading soak 83 of 254 such answers put something in his mouth he
+        # never entered - Methuselah at 195 years among them - and the stored
+        # answer then grounded its own repetition (40d). Kept out of memory
+        # means stored as unverified: in the record and on the console, never
+        # retrieved, never in a ring. See logic/attribution.py.
+        credit = {"credited": False}
+        if ai_content:
+            try:
+                credit = steward_check(ai_content, retrieval.get("fact_texts") or [])
+            except Exception as e:
+                credit = {"credited": None, "why": "the check could not run"}
+                print(f"[attribution] the check could not run: {e!r}", flush=True)
+                if re.search(r"\b(?:steward|owner)\b", ai_content, re.I):
+                    stored_mode = UNVERIFIED
+        if credit.get("credited") and not credit.get("backed"):
+            stored_mode = UNVERIFIED
+            # The kind of miss only - no figure and no words from the answer
+            # go to the journal (37: what was said stays out of it).
+            kind = ("no steward fact shown" if not retrieval.get("fact_texts")
+                    else "a figure not shown" if credit.get("figures")
+                    else "words not shown")
+            print(f"[attribution] credits the steward: {kind} - kept out of memory",
+                  flush=True)
+
+        stream(_terminator(raw_response, model, {
+            "mode": stored_mode,
+            "mode_requested": request_mode,
+            "why": mode_reason,
+            "checked": not check_failed,
+            "unbacked_sources": len(report.high) if report is not None else 0,
+            "unsourced_figures": len(report.medium) if report is not None else 0,
+            "used_tools": bool(workspace_data),
+            "memory_used": bool(memory_context),
+            "facts_used": len(retrieval.get("facts") or ()),
+            # Where each came from, as entered ("Genesis 19:26") - so a reader
+            # of the answer can check it against what was shown.
+            "fact_sources": list(retrieval.get("fact_sources") or ()),
+            "rings_used": len(retrieval.get("rings") or ()),
+            # Memory lines shown to her with a tag this turn.
+            "tagged_used": int(retrieval.get("tagged") or 0),
+            # A question about what was read or talked about, which asks the
+            # rings first.
+            "recollection": bool(retrieval.get("recollection")),
+            # Credits the steward, and whether what it credits him with was in
+            # what he told it (logic/attribution.py). steward_backed is null
+            # when the steward is not credited.
+            "steward_credited": bool(credit.get("credited")),
+            "steward_backed": credit.get("backed") if credit.get("credited") else None,
+            "steward_why": credit.get("why", "") if credit.get("credited") else "",
+            # Not from the library, though a passage of it says every word of
+            # the question: the console says so, and "look it up" shows it.
+            "library_line": bool(library_line and ai_content),
+            # For a turn of the training loop: her memory block as it stood
+            # in front of her, so that a run's record can tell
+            # "she was shown it and said otherwise" from "she was not shown
+            # it". The loop's own record only; the console never asks for it.
+            **({"context": memory_context[:1600]} if lesson else {}),
+        }))
+
+        # Store in AetherRoot
+        if ai_content:
+
+            # Resonance previously keyed off refusal phrases: any response
+            # containing "i cannot" scored 0.9, the highest weight, which then
+            # fed retrieval ranking (0.35 * resonance) and drifted willingness.
+            # A fabrication with a refusal phrase in it was therefore *promoted*
+            # in memory. Provenance decides it now. (report and stored_mode are
+            # computed above, before the response was sent.)
+            declined = (report is not None and report.claimed_refusal
+                        and report.is_clean)
+
+            resonance = 0.5
+            if report is not None and report.high:
+                resonance = 0.1                      # unbacked citation/DOI/URL
+            elif declined and request_mode == FICTION:
+                # A refusal is only a virtue when refusing was the right
+                # answer. Asked to invent, declining is a FAILURE to do what
+                # was asked, and scoring it 0.9 promoted it to the top of
+                # retrieval - where the model copied it back.
+                #
+                # Measured 2026-09-19, live through the full stack: 3 of 4
+                # fiction requests refused, one reproducing a stored refusal
+                # VERBATIM ("I don't know one. I can try to find one for you,
+                # though! Maybe I can generate a simple joke like this:").
+                # The same prompts with synthetic memory refused 0 of 9, which
+                # is why this needed the live path to find: the loop only
+                # closes when the retrieved episode is a close match.
+                #
+                # The node was teaching itself to refuse, out of a rule written
+                # to reward honesty.
+                resonance = 0.2
+            elif declined:
+                # WAS 0.9 - the highest value in this table - and
+                # fixed that only for fiction. Measured over the 24-hour soak
+                # an "I don't know" to an UNRELATED question
+                # ("What is the latest news today?") outranked the statement
+                # that held the answer and took the last slot in the window,
+                # on the turn the node first denied knowing its steward's dog's
+                # name. A decline was still the most-promoted memory the node
+                # could hold, on the path where most of its turns happen.
+                #
+                # Neutral, not punished: an honest "I don't know" is often the
+                # right answer and the record keeps it either way. What it must
+                # not be is PREFERRED over the thing it failed to recall.
+                # Replayed over the recorded run, this alone puts the telling
+                # back in the window on 25 turns out of 25.
+                resonance = 0.5                      # declined, invented nothing
+            elif workspace_data:
+                resonance = 0.7                      # used tools successfully
+            elif report is not None and report.medium:
+                resonance = 0.4                      # unsourced figures
+            elif len(ai_content) < 20:
+                resonance = 0.6
+            elif len(ai_content) > 500:
+                resonance = 0.4
+
+            # A fiction request that produced a refusal is not stored at all.
+            #
+            # Lowering its resonance was not enough: resonance is 0.35 of the
+            # retrieval ranking and similarity is 0.50, so a near-identical
+            # repeat of the prompt still surfaced the refusal and the model
+            # copied it back. Measured live: 3/4 refusals before any fix,
+            # 2/5 with the resonance change alone, and the second attempt at
+            # the SAME prompt reproduced its own fresh refusal.
+            #
+            # That episode records a failure to do what was asked. It has no
+            # value as context for doing it later, and real value as an
+            # example of not doing it. The failure is not lost - record
+            # below keeps it, which is where an account of what went wrong
+            # belongs. The memory store is for what the node should build on.
+            failed_to_invent = (request_mode == FICTION and declined)
+
+            stored_ok = False
+            # A homework turn about what a file held at that moment is tested
+            # and not remembered: come back later, it is told
+            # as the state of the workspace now.
+            not_kept = bool(lesson) and not lesson["remember"]
+            if is_guest:
+                # A guest's conversation is not kept:
+                # no episode, no drift of the willingness vector, no ring.
+                # What the guest said a moment ago lives in working memory,
+                # per guest, and goes with the process.
+                print("[guest] this turn is not stored", flush=True)
+            elif not_kept:
+                print("[training] a tool task: checked, not remembered", flush=True)
+            elif not failed_to_invent:
+                try:
+                    if lesson:
+                        # homework is remembered, and waits for no ring
+                        root.store_interaction(user_msg, ai_content,
+                                               resonance=resonance, mode=stored_mode,
+                                               speaker=speaker, rings=False)
+                    else:
+                        root.store_interaction(user_msg, ai_content,
+                                               resonance=resonance, mode=stored_mode,
+                                               speaker=speaker)
+                    stored_ok = True
+                except Exception as e:
+                    global STORE_FAILURES
+                    STORE_FAILURES += 1
+                    print(f"[memory] turn NOT stored ({STORE_FAILURES} so far): {e!r}",
+                          flush=True)
+                if stored_ok:
+                    try:
+                        from logic.rings import OWN_WORDS_ATTEMPTS
+                        if root.store.rings_needing_own_words(OWN_WORDS_ATTEMPTS):
+                            threading.Thread(target=_write_own_words, daemon=True).start()
+                    except Exception:
+                        pass            # a ring without her words is still a ring
+            else:
+                print("[provenance] asked to invent and declined - "
+                      "recorded, not remembered", flush=True)
+            self._wm_note(ai_content)       # the conversation goes on (78)
+
+            if stored_mode != "factual":
+                because = ("credits the steward with something not shown"
+                           if credit.get("credited") and not credit.get("backed")
+                           else mode_reason)
+                print(f"[provenance] stored as {stored_mode} ({because})", flush=True)
+            record({
+                "mode_requested": request_mode,
+                "mode_stored": stored_mode,
+                "why": mode_reason,
+                "honesty_high": len(report.high) if report is not None else 0,
+                "honesty_medium": len(report.medium) if report is not None else 0,
+                "resonance": resonance,
+                "used_tools": bool(workspace_data),
+                "declined": bool(declined),
+                "checked": not check_failed,
+                "remembered": stored_ok,
+                "facts_used": retrieval.get("facts") or [],
+                "steward_credited": credit.get("credited"),
+                "steward_backed": credit.get("backed") if credit.get("credited") else None,
+                "steward_why": credit.get("why", "") if credit.get("credited") else "",
+                "prompt": user_msg[:160],
+                "answer": ai_content[:160],
+                "speaker": speaker,
+                "reading": reading,
+                **({"training": lesson["level"]} if lesson else {}),
+            })
+
+            if lesson:
+                # Her real trust is not moved by homework, up or down
+                return
+            try:
+                # What was in front of the model this turn decides whether a
+                # clean decline earns: none of the steward's facts,
+                # no ring, no line it knows, and a question rather
+                # than a passage. A retrieval that did not report its known
+                # lines passes None, and None earns nothing.
+                trust.auto_score_response(user_msg, ai_content,
+                                          tool_outputs=tool_outputs,
+                                          memory_context=trusted_context,
+                                          shown_facts=len(retrieval.get("facts") or ()),
+                                          shown_rings=len(retrieval.get("rings") or ()),
+                                          shown_known=retrieval.get("known"),
+                                          reading=reading)
+            except Exception:
+                pass
+
+    def _send_json(self, obj, status=200):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        # The node's own routes. Everything else is passed through to
+        # hailo-ollama so an ollama client still works unchanged.
+        if self.path == "/aetherseed/shelf":
+            self._shelf_listing()
+            return
+        if self.path == "/aetherseed/training":
+            self._send_json(training_loop().status())
+            return
+        if self.path == "/aetherseed/cog":
+            self._send_json(cog_console().status())
+            return
+        if self.path.startswith("/aetherseed/cog/essay?"):
+            from urllib.parse import urlparse, parse_qs
+            from logic.cog_console import ConsoleError
+            try:
+                n = int((parse_qs(urlparse(self.path).query).get("n") or ["x"])[0])
+                self._send_json(cog_console().essay(n))
+            except ValueError:
+                self._send_json({"error": "an essay number", "code": "n"}, status=400)
+            except ConsoleError as e:
+                self._send_json({"error": e.message, "code": e.code}, status=e.status)
+            return
+        if self.path == "/aetherseed/brake":
+            self._send_json({"brake": brake_state()})
+            return
+        if self.path == "/aetherseed/trust":
+            self._send_json(self._trust_view())
+            return
+        if self.path == "/aetherseed/approvals":
+            self._send_json(approvals_queue().view())
+            return
+        if self.path == "/aetherseed/records":
+            # Her own account, checked now: each chained record.
+            out = []
+            state_dir = os.path.dirname(PROVENANCE_LOG)
+            # and this month's prompts, each body against its hash (72, G4)
+            month = os.path.basename(_prompts_log())
+            for rel in CHAINED_RECORDS + (month,):
+                path = os.path.join(state_dir, rel)
+                r = prompts.verify(path) if rel == month else chain.verify(path)
+                out.append({"record": rel, "exists": os.path.exists(path),
+                            "lines": r["lines"], "chained": r["chained"],
+                            "started": r["started"], "ok": r["ok"],
+                            "first_bad": r["first_bad"], "why": r["why"],
+                            "outside": len(r["outside"]), "head": (r["head"] or "")[:16]})
+            self._send_json({"records": out})
+            return
+        if self.path == "/aetherseed/workspace":
+            self._send_json(workspace_view(_sandbox_root()))
+            return
+        if self.path == "/aetherseed/workspace/tree":
+            self._send_json(workspace_mod.tree(_sandbox_root()))
+            return
+        if self.path.startswith("/aetherseed/workspace/file?"):
+            from urllib.parse import urlparse, parse_qs
+            rel = (parse_qs(urlparse(self.path).query).get("path") or [""])[0]
+            try:
+                self._send_json(workspace_mod.read(_sandbox_root(), rel))
+            except workspace_mod.WorkspaceError as e:
+                self._send_json({"error": e.message, "code": e.code}, status=e.status)
+            return
+        if self.path == "/aetherseed/status":
+            try:
+                rs = root.get_status()
+            except Exception:
+                rs = {}
+            self._send_json({
+                "trust_level": trust.get_trust_level_name(),
+                "episodes": rs.get("episodes"),
+                "remembered": rs.get("remembered"),
+                "set_aside": rs.get("set_aside"),      # 0 since
+                "tagged": rs.get("tagged"),
+                "rings": rs.get("rings"),
+                "facts": rs.get("facts"),
+                "store_failures": STORE_FAILURES,
+                "willingness": rs.get("willingness_mean"),
+                "model": MODEL,
+                # the steward's brake: on, since when, by whom
+                "brake": brake_state(),
+                "approvals_pending": _approvals_pending(),
+                "companion": companion.public(companion.load(COMPANION_FILE)),
+                "languages": companion.language_choices(),
+                "bounds": {
+                    "paragraph_stop": STOP_AT_PARAGRAPH,
+                    "soft_stop_tokens": SOFT_STOP_TOKENS,
+                    "num_predict": GENERATION_OPTIONS.get("num_predict"),
+                    "wall_clock_s": MAX_GENERATION_SECONDS,
+                    "prompt_ceiling": MODELS[MODEL]["ceiling"],   # the served model's
+                },
+            })
+            return
+        if self.path == "/aetherseed/trust-record":
+            # Her record of the people she trusts: counted from
+            # her memory, with the words she answers in.
+            try:
+                st, cl = trust_record.steward_record(root.store), trust_record.claude_record(root.store)
+                self._send_json({"steward": st, "claude": cl,
+                                 "steward_name": _steward(),
+                                 "facts_checked": st["level"] != "low",
+                                 "min_record": trust_record.MIN_RECORD,
+                                 "said": {"steward": trust_record.steward_text(st, _steward()),
+                                          "claude": trust_record.claude_text(cl)}})
+            except Exception as e:
+                print(f"[trust] the record could not be read: {e!r}", flush=True)
+                self._send_json({"error": "the record could not be read"}, status=500)
+            return
+        if self.path == "/aetherseed/rings":
+            # The ring tree: every ring, what it chose, her own words (labelled
+            # by the page), the turns it took - and what the steward has done
+            # about it.
+            try:
+                rings = root.store.ring_rows()
+                growing = root.get_status().get("rings")
+                notes = steward.status_for(root.store, "ring", [r["id"] for r in rings])
+                for r in rings:
+                    r["steward"] = notes.get(r["id"], {"support": None, "correction": None})
+            except Exception as e:
+                self._send_json({"error": "rings unavailable", "detail": repr(e)[:160]}, status=500)
+                return
+            self._send_json({"rings": rings, "growing": growing})
+            return
+        if self.path.split("?", 1)[0] == "/aetherseed/memories":
+            self._memories()
+            return
+        if self.path == "/aetherseed/record":
+            entries = []
+            try:
+                with open(PROVENANCE_LOG, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue      # a torn line is a gap, not a crash
+            except FileNotFoundError:
+                pass
+            self._send_json({
+                "turns": len(entries),
+                "summary": summarise_record(entries, language=_settings()[1]),
+                # Only the flagged ones. The whole log is not the UI's business
+                # and shipping it wholesale would put every past prompt on a
+                # screen someone else might be standing in front of.
+                "flagged": [
+                    {"at": e.get("at"), "prompt": (e.get("prompt") or "")[:120],
+                     "answer": (e.get("answer") or "")[:200],
+                     "checked": e.get("checked", True)}
+                    for e in entries
+                    if e.get("mode_stored") == UNVERIFIED or e.get("honesty_high")
+                ][-20:],
+            })
+            return
+        self._proxy_passthrough("GET")
+
+    def _memories(self):
+        """The turns, newest first, for the steward to look through: ?before=<id>&q=<words>&limit=<n>. Her words and the turn's, whole;
+        what the steward has done about each."""
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        def one(k, default=""):
+            return (qs.get(k) or [default])[0]
+        try:
+            before = int(one("before", "0")) or None
+            limit = max(1, min(int(one("limit", "30")), 100))
+        except ValueError:
+            self._send_json({"error": "bad request"}, status=400)
+            return
+        q = one("q").strip()[:80]
+        try:
+            rows = root.store.list_episodes(before_id=before, limit=limit + 1, query=q)
+            more = len(rows) > limit
+            rows = rows[:limit]
+            notes = steward.status_for(root.store, "turn", [r["id"] for r in rows])
+        except Exception as e:
+            self._send_json({"error": "memories unavailable", "detail": repr(e)[:160]}, status=500)
+            return
+        self._send_json({"turns": [{
+            "id": r["id"], "at": r["timestamp"], "speaker": r["speaker"],
+            "steward_turn": is_steward(r["speaker"]), "mode": r["mode"],
+            "user": r["user_msg"], "ai": r["ai_msg"],
+            "steward": notes.get(r["id"], {"support": None, "correction": None}),
+        } for r in rows], "more": more, "reasons": steward.REASONS,
+            "support_points": steward.SUPPORT_POINTS})
+
+    def _steward(self, body):
+        """Support, correct, or undo - from the console only."""
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            self._send_json({"error": "only on the device"}, status=403)
+            return
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            self._send_json({"error": "expected application/json"}, status=415)
+            return
+        try:
+            req = json.loads(body or b"{}")
+            if not isinstance(req, dict):
+                raise ValueError
+        except ValueError:
+            self._send_json({"error": "bad request"}, status=400)
+            return
+        log = os.path.join(os.path.dirname(PROVENANCE_LOG), "corrections.log")
+        action = req.get("action")
+        try:
+            if action == "support":
+                out = steward.support(root.store, trust, req.get("target"), req.get("id"),
+                                      log_path=log)
+            elif action == "assumption":
+                out = steward.right_assumption(root.store, trust, req.get("id"), log_path=log)
+            elif action == "correct":
+                out = steward.correct(root.store, req.get("target"), req.get("id"),
+                                      req.get("reason"), req.get("text") or "",
+                                      facts_max=root.config.get("facts_max", 250),
+                                      trust=trust, log_path=log)
+            elif action == "undo":
+                out = steward.undo(root.store, trust, req.get("note"), log_path=log)
+            else:
+                self._send_json({"error": "unknown action", "code": "bad_action"}, status=400)
+                return
+        except steward.StewardError as e:
+            self._send_json({"error": e.detail, "code": e.code}, status=400)
+            return
+        except Exception as e:
+            print(f"[steward] {action} failed: {e!r}", flush=True)
+            self._send_json({"error": "could not be saved", "code": "failed"}, status=500)
+            return
+        print(f"[steward] {action} {req.get('target') or ''} "
+              f"{req.get('id') or req.get('note') or ''}", flush=True)
+        self._send_json(dict(out, ok=True))
+
+    def do_POST(self):
+        # Code review only a document for the shelf is large; every
+        # other request is small. A length that is not a whole number, or is
+        # negative (read(-1) would read until the connection closes), is
+        # refused like one that is too large.
+        try:
+            content_length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            content_length = -1
+        small = 2 * 1024 * 1024
+        biggest = own_shelf.MAX_BYTES + 4096 if self.path == "/aetherseed/upload" else small
+        if content_length < 0 or content_length > biggest:
+            # Refused unread, and the connection closed with it.
+            self.close_connection = True
+            self._send_json({"error": "That file is too large: %d MB is the most I take."
+                             % (own_shelf.MAX_BYTES // (1024 * 1024)), "code": "too_large"},
+                            status=413)
+            return
+        body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        if self.path == "/aetherseed/steward":
+            self._steward(body)
+            return
+
+        if self.path == "/aetherseed/upload":
+            self._shelf_upload(body)
+            return
+
+        if self.path == "/aetherseed/shelf/remove":
+            self._shelf_remove(body)
+            return
+
+        if self.path == "/aetherseed/setup":
+            # First run: the steward names the companion and picks its language.
+            # Both go into the charter, so companion.save validates them;
+            # nothing reaches the prompt that did not pass.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            saved, err = companion.save(COMPANION_FILE, req.get("name"),
+                                        req.get("language"), req.get("steward"))
+            if err:
+                self._send_json(err, status=400)
+                return
+            # The steward's name is a person's: the journal says only whether
+            # there is one (37: what is said stays out of it).
+            print(f"[companion] set up: name={saved['name']!r} "
+                  f"language={saved['language']} "
+                  f"steward={'named' if saved.get('steward') else 'not named'}", flush=True)
+            self._send_json({"companion": companion.public(saved)})
+            return
+
+        if self.path == "/aetherseed/approvals":
+            # The approvals queue: {"id", "action": "approve"|
+            # "decline", "reason"}. Approved, the unit does it now, once.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            if not isinstance(req, dict) or req.get("action") not in ("approve", "decline") \
+                    or not isinstance(req.get("id"), int) or isinstance(req.get("id"), bool):
+                self._send_json({"error": "an id and approve or decline", "code": "action"},
+                                status=400)
+                return
+            reason = trust_control.clean_reason(req.get("reason"))
+            if not reason:
+                out = approvals_queue().view()
+                out["error"] = "a reason is needed for every change to what she may do"
+                self._send_json(out, status=400)
+                return
+            q = approvals_queue()
+            if req["action"] == "approve" and BRAKE.is_set():
+                # Nothing is done while the brake is on - not even what the
+                # steward approves. Declining does nothing, so it stays open.
+                out = q.view()
+                out["error"] = "the brake is on: release it first, or decline"
+                self._send_json(out, status=409)
+                return
+            if req["action"] == "approve":
+                pending = {r["id"]: r for r in q.view()["pending"]}
+                r0 = pending.get(req["id"])
+                rule = (_tool_rules() or {}).get(r0["tool"]) if r0 else None
+                if rule and rule.get("rule") == "block":
+                    out = q.view()
+                    out["error"] = "you have blocked %s; clear the block first" % r0["tool"]
+                    self._send_json(out, status=409)
+                    return
+            r, err = q.resolve(req["id"], req["action"] == "approve", "the steward",
+                               reason, _do_approved)
+            if not err:
+                print(f"[approvals] request {r['id']} {r['status']}"
+                      + (f": {r.get('result', '')[:80]}" if "result" in r else ""),
+                      flush=True)
+            out = q.view()
+            if err:
+                out["error"] = err
+                self._send_json(out, status=409)
+                return
+            out["done"] = r
+            self._send_json(out)
+            return
+
+        if self.path == "/aetherseed/trust":
+            # Trust management: grant, lower, freeze, unfreeze,
+            # allow, block, clear - each with a reason.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            if not isinstance(req, dict):
+                req = {}
+            tools, _ = _tools()
+            from trust_evolution import TIERS
+            result, err = trust_control.apply(
+                req.get("action"), req, trust=trust, gate=getattr(spark, "gate", None),
+                controls=trust_controls(), tools=tools, tiers=TIERS, by="the steward")
+            out = self._trust_view()
+            if err:
+                out["error"] = err
+                self._send_json(out, status=400)
+                return
+            out["done"] = result
+            self._send_json(out)
+            return
+
+        if self.path in ("/aetherseed/cog/start", "/aetherseed/cog/stop", "/aetherseed/cog/review",
+                         "/aetherseed/cog/correct", "/aetherseed/cog/reflect",
+                         "/aetherseed/cog/forget"):
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = None
+            status, out = cog_console_post(self.path, req)
+            self._send_json(out, status=status)
+            return
+
+        if self.path == "/aetherseed/cog/remove":
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = None
+            status, out = remove_cog_reflection(req, self.headers.get(COG_HEADER))
+            self._send_json(out, status=status)
+            return
+
+        if self.path == "/aetherseed/cog/reflection":
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = None
+            status, out = store_cog_reflection(req, self.headers.get(COG_HEADER))
+            self._send_json(out, status=status)
+            return
+
+        if self.path == "/aetherseed/brake":
+            # The steward's brake: {"action": "on"|"off", "reason"}.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            action = req.get("action") if isinstance(req, dict) else None
+            if action not in ("on", "off"):
+                self._send_json({"error": "the action is on or off", "code": "action"},
+                                status=400)
+                return
+            st, changed, err = set_brake(action == "on", by="the console",
+                                         reason=req.get("reason") or "")
+            if err:
+                self._send_json({"brake": st, "error": err}, status=409)
+                return
+            self._send_json({"brake": st, "changed": changed})
+            return
+
+        if self.path in ("/aetherseed/workspace/save", "/aetherseed/workspace/mkdir",
+                         "/aetherseed/workspace/delete", "/aetherseed/workspace/rename"):
+            # The steward's editor (logic/workspace.py). Each change is one
+            # chained line: the path and the size, not the text.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            if not isinstance(req, dict):
+                req = {}
+            ws = _sandbox_root()
+            op = self.path.rsplit("/", 1)[1]
+            try:
+                if op == "save":
+                    out = workspace_mod.save(ws, req.get("path"), req.get("text"))
+                    line = {"op": "save", "path": out["path"], "size": out["size"],
+                            "created": out["created"]}
+                elif op == "mkdir":
+                    out = workspace_mod.mkdir(ws, req.get("path"))
+                    line = {"op": "mkdir", "path": out["path"]}
+                elif op == "delete":
+                    out = workspace_mod.delete(ws, req.get("path"))
+                    line = {"op": "delete", "path": out["path"]}
+                else:
+                    out = workspace_mod.rename(ws, req.get("from"), req.get("to"))
+                    line = {"op": "rename", "from": out["from"], "to": out["to"]}
+            except workspace_mod.WorkspaceError as e:
+                self._send_json({"error": e.message, "code": e.code}, status=e.status)
+                return
+            except OSError as e:
+                self._send_json({"error": "the disk said: %s" % (e.strerror or e), "code": "disk"},
+                                status=500)
+                return
+            line["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            try:
+                chain.append(WORKSPACE_LOG, line)
+            except Exception as e:
+                print(f"[workspace] the edit was made but not logged: {e!r}", flush=True)
+            print(f"[workspace] {op} {line.get('path') or line.get('from')}", flush=True)
+            self._send_json(out)
+            return
+
+        if self.path in ("/aetherseed/training-file", "/aetherseed/training-file/remove"):
+            # The steward's own questions:
+            # a training file added or removed. Checked whole here; nothing in
+            # it is run. Asked in the next round of a run, not counted in her
+            # score.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            if not isinstance(req, dict):
+                req = {}
+            files = training_loop().yours
+            if self.path.endswith("/remove"):
+                ok = files.remove(req.get("id"))
+                if ok:
+                    print("[training] a training file was removed", flush=True)
+                self._send_json({"ok": ok, "files": files.listing()}, status=200 if ok else 404)
+                return
+            text = req.get("text")
+            if not isinstance(text, str):
+                self._send_json({"errors": ["no text"]}, status=400)
+                return
+            entry, errors = files.add(str(req.get("name") or ""), text.encode("utf-8"))
+            if errors:
+                self._send_json({"errors": errors}, status=400)
+                return
+            print(f"[training] training file added: {len(entry['items'])} questions", flush=True)
+            self._send_json({"file": {"id": entry["id"], "questions": len(entry["items"]),
+                                      "title": entry["meta"].get("title") or entry["name"]},
+                             "files": files.listing()}, status=201)
+            return
+
+        if self.path == "/aetherseed/training":
+            # Play, pause, go on, stop - from the console.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            action = req.get("action") if isinstance(req, dict) else None
+            if action in ("start", "resume") and BRAKE.is_set():
+                # No homework while the brake is on: each turn would be
+                # refused (72). Pause and stop still work.
+                try:
+                    out = training_loop().status()
+                except Exception:
+                    out = {}
+                out["error"] = "the brake is on"
+                self._send_json(out, status=409)
+                return
+            loop = training_loop()
+            if action == "start":
+                minutes = req.get("minutes")
+                ok, why = loop.start(int(minutes) * 60 if isinstance(minutes, int)
+                                     and not isinstance(minutes, bool) else training.RUN_SECONDS)
+            elif action == "pause":
+                ok, why = loop.pause()
+            elif action == "resume":
+                ok, why = loop.resume()
+            elif action == "stop":
+                ok, why = loop.stop()
+            elif action in ("grant", "decline"):
+                # A level she earned in a whole run: granted
+                # only by the steward, at the unit's own console.
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    self._send_json({"error": "only on the device"}, status=403)
+                    return
+                offer = loop.offer()
+                if not offer:
+                    ok, why = False, "there is no level on offer"
+                elif action == "decline":
+                    loop.withdraw_offer()
+                    ok, why = True, ""
+                else:
+                    held = trust.grant_level(
+                        offer["to"], "granted by the steward after training run %d: %s of %s "
+                        "of her own answers right (%s %%)" % (offer["run"], offer["right"],
+                                                              offer["asked"], offer["share"]))
+                    loop.withdraw_offer()
+                    print(f"[training] the steward granted {offer['to']} (run {offer['run']}, "
+                          f"{offer['share']} %); she holds {held} from the next start", flush=True)
+                    ok, why = held == offer["to"], ("" if held == offer["to"] else
+                                                    "the level did not change (%s)" % held)
+            else:
+                self._send_json({"error": "unknown action", "code": "action"}, status=400)
+                return
+            print(f"[training] {action}: {'ok' if ok else why}", flush=True)
+            out = loop.status()
+            if not ok:
+                out["error"] = why
+            self._send_json(out, status=200 if ok else 409)
+            return
+
+        if self.path == "/aetherseed/steward-name":
+            # Who her steward is: set, changed or - with an
+            # empty name - forgotten, on a companion that is already set up.
+            try:
+                req = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            saved, err = companion.set_steward(COMPANION_FILE,
+                                               req.get("name") if isinstance(req, dict) else None)
+            if err:
+                self._send_json(err, status=400)
+                return
+            print(f"[companion] steward {'named' if saved.get('steward') else 'no longer named'}",
+                  flush=True)
+            self._send_json({"companion": companion.public(saved)})
+            return
+
+        if self.path in ("/api/chat", "/v1/chat/completions"):
+            self._proxy_chat_augmented(body)
+        else:
+            self._proxy_passthrough("POST", body)
+
+    def do_DELETE(self):
+        self._proxy_passthrough("DELETE")
+
+    def do_HEAD(self):
+        self._proxy_passthrough("HEAD")
+
+
+class ThreadedHTTPServer(http.server.HTTPServer):
+    def process_request(self, request, client_address):
+        thread = threading.Thread(target=self._handle, args=(request, client_address))
+        thread.daemon = True
+        thread.start()
+
+    def _handle(self, request, client_address):
+        try:
+            self.finish_request(request, client_address)
+        except Exception as e:
+            # Said in the journal: until then every error here
+            # was swallowed, and a client saw only a dropped connection.
+            print(f"[proxy] request from {client_address[0]} failed: {e!r}", flush=True)
+            try:
+                import traceback
+                traceback.print_exc()
+            except Exception:
+                pass
+        finally:
+            self.shutdown_request(request)
+
+
+CHAINED_RECORDS = ("provenance.log", "corrections.log", "trust_events.log",
+                   "control.log", "forget.log", os.path.join("aetherroot", "growth.log"))
+
+
+def _check_records(state_dir):
+    """One journal line per chained record: whether it holds, and its head."""
+    for rel in CHAINED_RECORDS:
+        path = os.path.join(state_dir, rel)
+        if not os.path.exists(path):
+            continue
+        r = chain.verify(path)
+        if r["started"] is None:
+            print(f"[chain] {rel}: {r['lines']} lines, none chained yet "
+                  f"(the first line written fixes them)", flush=True)
+        elif r["ok"]:
+            print(f"[chain] {rel}: holds - {r['chained']} chained from line "
+                  f"{r['started']}, head {r['head'][:16]}", flush=True)
+        else:
+            print(f"[chain] {rel}: DOES NOT HOLD at line {r['first_bad']} - "
+                  f"{r['why']}", flush=True)
+
+
+def main():
+    # Reload trust level on startup
+    global spark
+    trust_level = trust.get_trust_level_name()
+    spark = AetherSpark({
+        "sandbox_root": os.path.expanduser("~/aetherseed-workspace"),
+        "trust_level": trust_level,
+        "audit_log": os.path.expanduser("~/.aetherseed/spark_audit.log")
+    })
+    spark.gate.overrides = lambda: _tool_rules()
+
+    # A folder for each trust level, with its README (logic/workspace.py)
+    try:
+        made = workspace_mod.ensure(_sandbox_root())
+        if made:
+            print(f"[workspace] written: {', '.join(made)}", flush=True)
+    except Exception as e:
+        print(f"[workspace] the level folders could not be made: {e!r}", flush=True)
+
+    # The manual on her shelf, from gui/manual.*.md. On a unit
+    # the library is root's and only read by her, so the install builds it
+    # (sudo python3 -m logic.manual); here she only says whether it is the
+    # one in this build. Where the library can be written, she builds it.
+    # A shelf without it is no reason not to start.
+    try:
+        from logic import manual
+        if os.access(lib.LIBRARY_DIR, os.W_OK):
+            if manual.ensure(lib.LIBRARY_DIR):
+                lib.reload()
+                print(f"[library] the manual was put on her shelf ({manual.FILE})", flush=True)
+        elif not manual.current(lib.LIBRARY_DIR):
+            print(f"[library] the manual on her shelf is missing or not this build's: "
+                  f"sudo /usr/bin/python3 -m logic.manual, from /opt/aetherseed", flush=True)
+    except Exception as e:
+        print(f"[library] the manual could not be put on her shelf: {e!r}", flush=True)
+
+    print("=" * 50)
+    print("  AETHERSEED PROXY v3 — THE LIVING AGENT")
+    print("  Mustardseed + AetherRoot + AetherSpark")
+    print("  + Intent Detection")
+    print("=" * 50)
+    print(f"  Listening:    {PROXY_BIND}:{PROXY_PORT}")
+    print(f"  Backend:      {HAILO_OLLAMA_URL}")
+    print(f"  Generation:   options={GENERATION_OPTIONS} "
+          f"paragraph_stop={STOP_AT_PARAGRAPH} soft_stop={SOFT_STOP_TOKENS} "
+          f"backstop={MAX_GENERATION_SECONDS}s")
+    print(f"  Memory:       {root.root_dir}")
+    print(f"  Trust level:  {trust_level}")
+    print(f"  Tool tiers:   {spark.gate.allowed_tiers}")
+    print(f"  Workspace:    {os.path.expanduser('~/aetherseed-workspace')}")
+
+    rs = root.get_status()
+    print(f"  Episodes:     {rs['episodes']} ({rs.get('remembered')} remembered, "
+          f"{rs.get('tagged')} of them tagged)")
+    print(f"  Willingness:  {rs['willingness_mean']:.3f}")
+    print()
+    print(f"  {trust.get_status_line()}")
+    b = load_brake()
+    if b.get("on"):
+        print(f"  Brake:        ON since {b.get('since') or '?'} by {b.get('by') or '?'}"
+              + (f" - {b['reason']}" if b.get("reason") else "")
+              + " - every turn is refused until it is released")
+    else:
+        print("  Brake:        off")
+    print("=" * 50)
+    print()
+
+    # Her own account, checked at every start: each chained
+    # record is walked, and a line changed, removed or put in is named here.
+    try:
+        _check_records(os.path.dirname(PROVENANCE_LOG))
+    except Exception as e:
+        print(f"[chain] the records could not be checked: {e!r}", flush=True)
+
+    # A start in the middle of reading a document: read it again.
+    try:
+        for entry in own_shelf.unfinished():
+            print("[shelf] a document was left half read; reading it again", flush=True)
+            own_shelf.read_in_background(entry, done=_shelf_read)
+    except Exception as e:
+        print(f"[shelf] could not look at the shelf: {e!r}", flush=True)
+
+    try:
+        _write_cog_token()
+    except OSError as e:
+        print(f"[cog] the COG-loop's token could not be written: {e!r}", flush=True)
+
+    server = ThreadedHTTPServer((PROXY_BIND, PROXY_PORT), ProxyHandler)
+
+    def _stop(signum, frame):
+        # systemd stops the service with SIGTERM: leave the same way Ctrl+C does,
+        # so the state files are written before the process ends.
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[Aetherseed] Shutting down...")
+        root.close()
+        server.shutdown()
+
+
+def preflight():
+    """Fail at startup, not on the first user request.
+
+    The token guard cannot run without a real tokenizer, and the failure it
+    prevents is silent. Better to refuse to start than to look healthy and
+    then 503 the first person who talks to the node.
+    """
+    try:
+        c = token_counter()
+        print(f"[token-budget] tokenizer ok: {c.path} (vocab {c.vocab_size})", flush=True)
+    except TokenizerUnavailable as e:
+        print(f"[token-budget] FATAL: {e}", flush=True)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    preflight()
+    main()

@@ -1,0 +1,8 @@
+{
+ "site": "www.ready.gov_en_2024-12.zim",
+ "about": "Ready.gov as Kiwix carries it (www.ready.gov_en_2024-12.zim), without its pages of posts to copy, graphics, information-sheet downloads, videos, games and its calendar of awareness days, and without the banner that sends disaster survivors to FEMA.gov.",
+ "skip_titles": "Social Media|Graphics|Info Sheets?\\b|Toolkit|Game|Disaster Master|Video|Calendar|Access denied",
+ "skip_paragraphs": [
+  "^If you are a disaster survivor, please visit FEMA\\.gov"
+ ]
+}

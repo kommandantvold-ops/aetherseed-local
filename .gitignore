@@ -1,0 +1,22 @@
+.state/
+__pycache__/
+*.pyc
+*.pyo
+models/
+*.db
+*.npy
+*.db-shm
+*.db-wal
+*.log
+*.onnx
+*.onnx.json
+.DS_Store
+aetherseed-workspace/
+
+# Timestamped backups left beside a file while editing it in place.
+*.bak-*
+
+# Local scratch space and helper output
+.scratch/
+Claude outputs/
+*.bundle

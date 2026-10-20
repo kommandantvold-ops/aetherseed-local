@@ -1,0 +1,162 @@
+# AetherSeed Companion - the console on the attached screen.
+#
+# labwc (a single-app Wayland compositor, ALREADY in the package set so it adds
+# nothing to the cartridge) running one fullscreen Chromium, pointed at the
+# console on 127.0.0.1:2077. No desktop, no launcher, no second window.
+#
+# WHY NOT CHROMIUM STRAIGHT ONTO DRM/KMS, which was the first choice: Debian's
+# Chromium is not built with the drm or gbm ozone backends. Measured
+# 2026-09-20 - "FATAL: Invalid ozone platform: drm" - after an earlier check
+# that appeared to say they existed and was wrong, because --headless
+# overrides the platform and hides the error. Only wayland and x11 are built
+# in, so a compositor is required and labwc is the one already here.
+#
+# PAMName=login with TTYPath is what makes this work at all. A Wayland
+# compositor needs a logind session on seat0 to open the VT and become DRM
+# master; started from an SSH shell it fails with "Could not open target tty:
+# Permission denied", which is the whole diagnosis of the first attempt.
+#
+# ITS OWN ACCOUNT. The build must not depend on an operator's username. It
+# runs as aetherseed-kiosk, not as the operator's login with sudo: an ordinary account
+# with no password, no shell and no sudo, created at install. Nothing below
+# names a user or a UID: systemd sets HOME from User=, pam_systemd sets
+# XDG_RUNTIME_DIR for the login session, and the browser's profile lives in
+# this unit's own RuntimeDirectory. (%u, %U and %h would not do: in a system
+# unit they name the service manager's user, root, whatever User= says -
+# systemd.unit(5), read on a unit's systemd 257.)
+#
+# getty@tty2 is enabled alongside this. Ctrl+Alt+F2 always reaches a shell,
+# whatever the kiosk is doing - a device you cannot get into when the screen
+# misbehaves is not an appliance, it is a brick.
+#
+# NO MODAL THIS DEVICE CANNOT ANSWER. Measured 2026-09-21: the screen had been
+# sitting on a gnome-keyring prompt - "Choose password for new keyring" - since
+# the kiosk first started, with Chromium blank behind it and the page never
+# loading. Nobody was there to type a password, and on an appliance nobody ever
+# will be. A dialog waiting for a human is a hang with a face on it.
+# --password-store=basic is the fix for that one; the two flags beside it close
+# the same class (a crash-restore bubble after an unclean shutdown, an error
+# dialog) and are prevention rather than something observed.
+
+[Unit]
+Description=AetherSeed Companion - kiosk console on tty1
+Documentation=https://github.com/kommandantvold-ops/aetherseed-local
+After=aetherseed-gui.service systemd-user-sessions.service
+Wants=aetherseed-gui.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=aetherseed-kiosk
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-force
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+
+Environment=XDG_SESSION_TYPE=wayland
+# XDG_RUNTIME_DIR comes from PAM (pam_systemd), and PAM's value wins over
+# anything set here (systemd.exec(5)); HOME comes from User=.
+# drm ALONE MEANS NO KEYBOARD AND NO MOUSE. wlroots builds only the
+# backends named here; without libinput the compositor has a screen and
+# no input devices at all - it opens none, and logs nothing. Found on
+# 2026-09-23, after the unit had shipped with it.
+Environment=WLR_BACKENDS=drm,libinput
+# The browser's profile: tmpfs, owned by the kiosk account, created when the
+# unit starts and removed when it stops or restarts.
+RuntimeDirectory=aetherseed-kiosk
+RuntimeDirectoryMode=0700
+
+# --kiosk and --app together: no tab strip, no omnibox, fullscreen that the
+# browser enforces itself rather than requests. --start-fullscreen alone is a
+# request, and was measured losing to a window size the browser had saved
+# from an earlier run - see below.
+#
+# THE BROWSER KEEPS NOTHING. --user-data-dir is in /run/aetherseed-kiosk, which
+# is tmpfs: every start begins from an empty profile, and nothing the browser
+# writes ever reaches the SD card. Three defects in one night came from state
+# a previous run had left behind in the old on-disk profile:
+#   - a keyring the profile had asked to create, prompting for a password
+#   - the page itself, heuristically cached with no Cache-Control
+#   - an app window placement saved at scale 1 (1905x2140) and restored at
+#     scale 3 as three times the size of the screen, content off the right
+#     edge and the composer off the bottom
+# A kiosk that can be broken by its own yesterday is not a cartridge. And the
+# record endpoint carries excerpts of prompts: in an on-disk profile, anything
+# the browser kept would be a second copy of what people typed, outside every
+# promise this node makes.
+#
+# --force-device-scale-factor=3 because the attached screen is a television,
+# not a monitor: 3840x2160 across 1600x900 mm, which is about 72 inches, read
+# from across a room rather than from arm's length. At 1:1 the console renders
+# as a 317 mm ribbon down the middle of a 1600 mm screen. The right number
+# depends on where the viewer actually stands and is a judgement to be made in
+# front of it, not from here.
+#
+# THE SCALE IS THE UNIT'S OWN. The deployment units stand in front
+# of monitors, not that television: asked what a unit's screen
+# needs, the steward said 1.5. So 3 is what a unit runs at that has been told
+# nothing, and /etc/aetherseed/kiosk.env - one line, AETHERSEED_SCALE=1.5 -
+# says otherwise for that unit. This file stays the same on every unit; the
+# cartridge records the scale a unit runs at beside it (kiosk.scale).
+Environment=AETHERSEED_SCALE=3
+EnvironmentFile=-/etc/aetherseed/kiosk.env
+
+# WAIT FOR THE CONSOLE BEFORE OPENING THE BROWSER. After=
+# aetherseed-gui.service only means "after that unit was started" - its server
+# may not be listening yet, and a kiosk browser that gets no page does not ask
+# again. So the browser is not started until the page itself answers; if it
+# never does, this fails and Restart= tries again.
+# THE BLANK WHITE PAGE. A deployment unit came up on a
+# blank page on 3 of 3 boots, the console answering all the
+# while. The browser was starting as the Ethernet address arrived - 16:40:44
+# and 16:40:46.48 - and Chromium cuts off a page load when the network changes
+# under it ("Network service crashed or was terminated" in its log); a kiosk
+# browser does not try again. With the browser held back until NetworkManager
+# has finished bringing its devices up: 2 of 2 boots straight to the console,
+# no such line. `nm-online -s` waits for that start-up, not for a connection:
+# a unit with no cable is not held up for long, and the leading "-" means a
+# unit where it fails or times out starts its screen anyway. This is the
+# cause as far as five boots show; aetherseed-kiosk-watch.service is there
+# for whatever else leaves the console off the screen.
+ExecStartPre=-/usr/bin/nm-online -s -q -t 30
+ExecStartPre=/usr/bin/curl --silent --fail --output /dev/null \
+    --retry 60 --retry-delay 1 --retry-connrefused --max-time 5 \
+    http://127.0.0.1:2077/
+# --host-resolver-rules: the browser can look up no name at all.
+# On this browser, with background networking, sync and component
+# updates switched off above, held a connection to Google (port 5228). The
+# firewall's output chain is what stops such a packet; this flag and the
+# managed policy (kiosk/chromium-policy.json) are what stop the browser trying.
+# -C: the kiosk's own config (kiosk/labwc/rc.xml says why). Without it labwc
+# read /etc/xdg/labwc and started the Pi desktop behind the console.
+ExecStart=/usr/bin/labwc -C /opt/aetherseed/kiosk/labwc -s "/usr/bin/chromium \
+    --ozone-platform=wayland \
+    --kiosk \
+    --app=http://127.0.0.1:2077/ \
+    --force-device-scale-factor=${AETHERSEED_SCALE} \
+    --no-first-run --no-default-browser-check \
+    --disable-features=Translate,AutofillServerCommunication \
+    --disable-background-networking \
+    --host-resolver-rules='MAP * ~NOTFOUND , EXCLUDE 127.0.0.1' \
+    --disable-component-update \
+    --check-for-update-interval=31536000 \
+    --disable-sync \
+    --disable-breakpad \
+    --password-store=basic \
+    --disable-session-crashed-bubble \
+    --noerrdialogs \
+    --user-data-dir=/run/aetherseed-kiosk/chromium"
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

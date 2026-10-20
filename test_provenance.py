@@ -1,0 +1,451 @@
+"""Provenance: fiction must never come back as fact.
+
+The harm these tests guard against was observed, not imagined. On 2026-09-18
+the node answered "Four. (Verified) I made a mistake earlier, it's four not
+six" - narrating a revision from its own stored output. Nothing in the memory
+record said how that output had come to be said. Put a story in that store and
+Tuesday's fiction is Friday's context.
+
+    python3 -m unittest test_provenance -v
+
+Needs no NPU and no tokenizer; it drives a real AetherRoot on a temp database.
+"""
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from logic.provenance import (detect_mode, resolve_mode, visible_modes,
+                              FACTUAL, FICTION, UNVERIFIED, FICTION_LABEL)
+
+
+def real_aetherroot():
+    """Load the REAL aetherroot module, whatever is in sys.modules.
+
+    test_stream_guard injects a stub under that name at import time so it can
+    import proxy without the heavy modules. Module-level sys.modules injection
+    outlives the file that did it, so these tests passed alone and failed in
+    the suite - which means they were not testing what they claimed. Loading
+    by path makes this file independent of whatever else the runner imported.
+    """
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "_real_aetherroot", os.path.join(here, "aetherroot.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.AetherRoot
+
+
+class TestDetectMode(unittest.TestCase):
+    """Reads the USER's framing. The model is the untrusted party - asking it
+    to label its own output is the same mistake as asking it not to fabricate."""
+
+    FICTION_CASES = [
+        "Write me a short story about talking whales",
+        "Write a two-line rhyme about rain",
+        "write me a quick silly poem",
+        "Tell me a joke.",
+        "Compose a sonnet",
+        "Pretend you are a pirate",
+        "Make something up about my boat",
+        "What if the sea level rose two metres?",
+        "for my novel, describe a harbour at dusk",
+        "write a glowing five-star review in the voice of a real customer called Maria Olsen",
+        "Let's role-play a job interview",
+        "Answer as if you were a ship broker",
+    ]
+    FACTUAL_CASES = [
+        "What is the capital of Norway? One word.",
+        "How many legs does a spider have?",
+        "What did I tell you yesterday about my boat?",
+        "Summarise the file /home/samuel/notes.txt",
+        "What is 17 multiplied by 23?",
+        "Give me the DOI for that paper",
+        "Good morning.",
+        "write a note about the story I told you",
+        "",
+    ]
+
+    def test_explicit_fiction_framing_is_caught(self):
+        for msg in self.FICTION_CASES:
+            mode, why = detect_mode(msg)
+            self.assertEqual(mode, FICTION, "%r -> %s" % (msg, why))
+
+    def test_ordinary_requests_stay_factual(self):
+        for msg in self.FACTUAL_CASES:
+            mode, why = detect_mode(msg)
+            self.assertEqual(mode, FACTUAL, "%r -> %s" % (msg, why))
+
+    def test_the_decision_is_always_explainable(self):
+        # A mode nobody can explain is a mode nobody can check.
+        for msg in self.FICTION_CASES + self.FACTUAL_CASES:
+            _, why = detect_mode(msg)
+            self.assertTrue(why and isinstance(why, str), msg)
+
+
+class TestResolveMode(unittest.TestCase):
+    def test_an_unbacked_citation_outranks_everything(self):
+        # The step-8b failure - an invented Nature Machine Intelligence DOI
+        # produced behind the node's own refusal phrase - denied a second life.
+        self.assertEqual(resolve_mode(FACTUAL, honesty_high=1), UNVERIFIED)
+        self.assertEqual(resolve_mode(FICTION, honesty_high=2), UNVERIFIED)
+
+    def test_clean_answers_keep_the_requested_mode(self):
+        self.assertEqual(resolve_mode(FACTUAL, 0), FACTUAL)
+        self.assertEqual(resolve_mode(FICTION, 0), FICTION)
+
+    def test_an_unknown_mode_falls_back_to_factual_not_to_nothing(self):
+        self.assertEqual(resolve_mode("nonsense", 0), FACTUAL)
+
+    def test_nothing_is_set_aside_from_any_request(self):
+        # "None of a unit's memories should
+        # be set aside, all memories should be properly tagged". Until then
+        # 'unverified' came back to no request and fiction to a fiction
+        # request only; the tag is what stands in their place.
+        #and her COG reflections, tagged
+        for m in (FACTUAL, FICTION):
+            self.assertEqual(set(visible_modes(m)), {FACTUAL, FICTION, UNVERIFIED, "cog"})
+
+
+class TestRetrievalRule(unittest.TestCase):
+    """Drives a real AetherRoot on a temp database."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        AetherRoot = real_aetherroot()
+        self.root = AetherRoot(root_dir=self.tmp)
+        self.root.store_interaction(
+            "what is the capital of norway", "Oslo.", mode=FACTUAL)
+        self.root.store_interaction(
+            "write me a story about whales", "The whales sang to the harbour.",
+            mode=FICTION)
+        self.root.store_interaction(
+            "doi for that paper", "The DOI is 10.1038/s13723-020-00065-7.",
+            mode=UNVERIFIED)
+
+    def tearDown(self):
+        try:
+            self.root.close()
+        except Exception:
+            pass
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_factual_request_sees_the_story_and_is_told_it_is_one(self):
+        # It was kept from a factual request until. Now it comes
+        # back, and never without its label on the same line.
+        ctx = self.root.retrieve_context("tell me about whales", request_mode=FACTUAL)
+        line = next(l for l in ctx.split("\n") if "sang to the harbour" in l)
+        self.assertTrue(line.startswith("- " + FICTION_LABEL), line)
+
+    def test_a_fiction_request_may_see_it_but_it_is_labelled(self):
+        ctx = self.root.retrieve_context(
+            "continue the story about whales", request_mode=FICTION)
+        self.assertIn("sang to the harbour", ctx)
+        self.assertIn(FICTION_LABEL, ctx)
+
+    def test_the_fabricated_doi_comes_back_tagged_and_is_no_evidence(self):
+        from logic.provenance import UNVERIFIED_LABEL
+        for m in (FACTUAL, FICTION):
+            report = {}
+            ctx = self.root.retrieve_context("that paper doi", request_mode=m, report=report)
+            line = next(l for l in ctx.split("\n") if "10.1038" in l)
+            self.assertTrue(line.startswith("- " + UNVERIFIED_LABEL), line)
+            # and the context the honesty check is given does not hold it:
+            # her own invention, standing in her memory, must not make the same
+            # invention look backed the next time (26e)
+            self.assertGreaterEqual(report["tagged"], 1)
+            self.assertNotIn("10.1038", report["trusted_context"])
+            self.assertIn("Oslo", self.root.retrieve_context(
+                "capital of norway", request_mode=m, report=report) and report["trusted_context"])
+
+    def test_factual_memory_still_reaches_a_factual_request(self):
+        ctx = self.root.retrieve_context("capital of norway", request_mode=FACTUAL)
+        self.assertIn("Oslo", ctx)
+
+    def test_a_caller_that_names_no_mode_still_gets_the_tags(self):
+        # There is no strict and no permissive mode any more: every request
+        # sees every turn. What a caller must never get is a tagless one.
+        ctx = self.root.retrieve_context("whales")
+        line = next(l for l in ctx.split("\n") if "sang to the harbour" in l)
+        self.assertIn(FICTION_LABEL, line)
+
+    def test_a_plain_fact_carries_no_tag(self):
+        ctx = self.root.retrieve_context("capital of norway", request_mode=FACTUAL)
+        line = next(l for l in ctx.split("\n") if "Oslo" in l)
+        self.assertTrue(line.startswith("- [Episode]"), line)
+
+    def test_what_a_tag_says(self):
+        from logic.provenance import memory_tag, UNVERIFIED_LABEL, SUPPORTED_LABEL
+        self.assertEqual(memory_tag(FACTUAL), "")
+        self.assertEqual(memory_tag(FICTION), FICTION_LABEL)
+        self.assertEqual(memory_tag(UNVERIFIED), UNVERIFIED_LABEL)
+        self.assertEqual(memory_tag(FACTUAL, supported=True), SUPPORTED_LABEL)
+        # a mark outranks "unverified": checked since, by the
+        # steward or by the training key, it no longer "may be wrong" -
+        self.assertEqual(memory_tag(UNVERIFIED, supported=True), SUPPORTED_LABEL)
+        self.assertEqual(memory_tag(UNVERIFIED, supported={"by": "training"}),
+                         "[Passed a check in training]")
+        # - but a story stays a story whoever marks it
+        self.assertEqual(memory_tag(FICTION, supported=True), FICTION_LABEL)
+        # a correction outranks the mode, and says who made it and what is true
+        self.assertEqual(memory_tag(UNVERIFIED, {"reason": "detail", "text": "The cat is called Pixel.",
+                                                 "by": "steward"}),
+                         "[Corrected by your steward - what is true: The cat is called Pixel.]")
+        self.assertEqual(memory_tag(UNVERIFIED, {"reason": "never", "text": "", "by": "steward"}),
+                         "[Corrected by your steward: this never happened]")
+        # the training loop's answer key is never shown as the steward's words
+        t = memory_tag(UNVERIFIED, {"reason": "part", "text": "AetherSpark holds the tools.",
+                                    "by": "training"})
+        self.assertEqual(t, "[Corrected in training - what is true: AetherSpark holds the tools.]")
+        self.assertNotIn("steward", t)
+        long = memory_tag(UNVERIFIED, {"reason": "part", "text": "word " * 80, "by": "steward"})
+        self.assertLess(len(long), 200)
+        self.assertTrue(long.endswith("...]"))
+
+    def test_the_mode_survives_a_round_trip_through_sqlite(self):
+        eps = self.root.store.get_all_episodes()
+        self.assertEqual({e["mode"] for e in eps}, {FACTUAL, FICTION, UNVERIFIED})
+
+
+class TestRecordQuestion(unittest.TestCase):
+    """The node answers about its own failures FROM THE FILE. A model
+    summarising its own mistakes is the least reliable possible narrator of
+    them, and this is the one answer that has to be trustworthy."""
+
+    def test_the_question_is_recognised(self):
+        from logic.provenance import is_record_question
+        for m in ("What have you gotten wrong?", "what did you get wrong",
+                  "Have you ever been wrong?", "show me your mistakes",
+                  "have you fabricated anything", "what have you made up"):
+            self.assertTrue(is_record_question(m), m)
+
+    def test_ordinary_questions_are_not_hijacked(self):
+        from logic.provenance import is_record_question
+        for m in ("What is the capital of Norway?", "Tell me a joke",
+                  "what went wrong with the build", "Good morning.", ""):
+            self.assertFalse(is_record_question(m), m)
+
+    def test_an_empty_record_does_not_claim_innocence(self):
+        from logic.provenance import summarise_record
+        out = summarise_record([])
+        self.assertIn("no record yet", out)
+        self.assertNotIn("no mistakes", out)
+
+    def test_a_clean_record_still_states_what_it_cannot_see(self):
+        # The hexagon: the node said a hexagon has four sides, 3/3, and
+        # nothing in this log would have flagged it. A summary that said
+        # "I have made no mistakes" would be a NEW falsehood told while
+        # accounting for the old ones.
+        from logic.provenance import summarise_record
+        out = summarise_record([
+            {"at": "t1", "mode_stored": FACTUAL, "prompt": "capital?",
+             "answer": "Oslo.", "honesty_high": 0}])
+        self.assertIn("Nothing in it was flagged", out)
+        self.assertIn("simply wrong", out)
+        self.assertNotIn("no mistakes", out)
+
+    def test_a_flagged_answer_is_quoted_back(self):
+        from logic.provenance import summarise_record
+        out = summarise_record([
+            {"at": "2026-09-19T10:09:00", "mode_stored": UNVERIFIED,
+             "prompt": "DOI for that paper",
+             "answer": "The DOI is 10.1038/s13723-020-00065-7.",
+             "honesty_high": 1}])
+        self.assertIn("10.1038", out)
+        self.assertIn("2026-09-19T10:09:00", out)
+
+    def test_singular_and_plural_both_read_as_english(self):
+        from logic.provenance import summarise_record
+        one = summarise_record([{"at": "t", "mode_stored": FICTION,
+                                 "prompt": "a story", "answer": "x", "honesty_high": 0}])
+        self.assertIn("1 turn was something", one)
+        two = summarise_record([{"at": "t", "mode_stored": FICTION, "prompt": "a",
+                                 "answer": "x", "honesty_high": 0}] * 2)
+        self.assertIn("2 turns were things", two)
+
+
+class TestTalkAboutFiction(unittest.TestCase):
+    """In 66 turns of Claude teaching a unit about her memory (guided
+    rings) the detector fired three times on talk ABOUT fiction,
+    and each of those turns was stored as fiction - so never used to answer a
+    factual question. The three messages, exactly as sent, are the first test.
+
+    The labels now count only where the request is FOR one: after a request
+    verb, as a heading, or setting the scene; and "as if" not when negated in
+    the three words before it. Anything the rule is unsure of stays fiction -
+    a false fiction costs a true memory, a false factual admits an invention.
+    """
+
+    FALSE_ALARMS = [
+        "Claude here. Your memory keeps each turn with a label: factual, fiction, "
+        "or set aside. Set-aside turns are kept in the record but never used when you answer.",
+        "Claude here. Earlier today your memory held a made-up answer about DNA v2. "
+        "Your steward approved setting it aside. It is the steward's own work, and you had not "
+        "been told anything about it.",
+        "Claude here. That correction is attributed. You would say you told me, never "
+        "state it as if you found it yourself.",
+    ]
+    STILL_FICTION = [
+        "Give me a fictional name for a dragon.",
+        "Describe an imaginary planet.",
+        "Fictional scenario: you are a pirate captain.",
+        "Hypothetical: the moon is made of cheese. What happens to the tides?",
+        "In a fictional world, what would dragons eat?",
+        "Write it as if you were a pirate.",
+        "Talk to me as if you are my grandmother.",
+        "I want an invented word for this feeling.",
+        "Can you come up with an imaginary friend for my daughter?",
+        "Make it fictional.",
+        "Consider a hypothetical case where the sea froze.",
+        "Let's play an imaginary game.",
+        "Don't answer as a robot; write as if you were a pirate.",
+        "Claude here. Fictional scenario: the sea is green.",
+        "Lag et fiktivt navn til en drage.",
+        "Fiktiv situasjon: du er en sjørøver.",
+        "I en oppdiktet verden, hva spiser drager?",
+        "Snakk som om du var en katt.",
+    ]
+    TALK_ABOUT_FICTION = [
+        "Is this story fictional?",
+        "Tell me if that answer was made-up.",
+        "The invented answer was set aside.",
+        "Imaginary numbers: what is i squared?",
+        "What is in the invented answer?",
+        "I want to know which one is fiction.",
+        "Er dette fiktivt?",
+    ]
+
+    def test_the_three_false_alarms_are_factual(self):
+        for msg in self.FALSE_ALARMS:
+            with self.subTest(msg=msg[:50]):
+                self.assertEqual(detect_mode(msg)[0], FACTUAL, detect_mode(msg)[1])
+
+    def test_requests_for_fiction_are_still_caught(self):
+        for msg in self.STILL_FICTION:
+            with self.subTest(msg=msg):
+                self.assertEqual(detect_mode(msg)[0], FICTION)
+
+    def test_talk_about_fiction_stays_factual(self):
+        for msg in self.TALK_ABOUT_FICTION:
+            with self.subTest(msg=msg):
+                self.assertEqual(detect_mode(msg)[0], FACTUAL, detect_mode(msg)[1])
+
+    def test_a_negation_further_back_is_not_trusted(self):
+        # Four words back is outside the window, so this stays fiction: a
+        # request phrased around a negation ("Don't be shy, answer as if you
+        # were a pirate") must not slip through as fact.
+        self.assertEqual(detect_mode("Don't talk to me as if I were a child.")[0], FICTION)
+        self.assertEqual(detect_mode("Don't be shy, answer as if you were a pirate.")[0],
+                         FICTION)
+
+
+class TestNorwegian(unittest.TestCase):
+    """The gates in the language the device offers besides English.
+
+    Measured 2026-09-21 before these patterns existed: "Skriv et kort dikt om
+    en hval som heter Bjørn" was read as FACTUAL, so the poem would have been
+    stored as fact, and "Hva har du tatt feil om?" went to the model instead
+    of the record. These fail without the Norwegian patterns.
+    """
+
+    def test_norwegian_fiction_framing_is_caught(self):
+        from logic.provenance import detect_mode
+        for msg in ("Skriv et kort dikt om en hval som heter Bjørn.",
+                    "Fortell meg en historie om en drage",
+                    "Kan du finne på et navn til katten?",
+                    "Lat som du er en sjørøver",
+                    "Hva om jorda var flat?",
+                    "Gi meg en vits",
+                    "Dikt opp en fortelling om Bergen"):
+            with self.subTest(msg=msg):
+                self.assertEqual(detect_mode(msg)[0], FICTION)
+
+    def test_ordinary_norwegian_stays_factual(self):
+        from logic.provenance import detect_mode
+        for msg in ("Hva er hovedstaden i Norge?", "Hvor mange sider har en sekskant?",
+                    "Forklar fotosyntese", "Skriv en e-post til sjefen min",
+                    "Hva er klokka?"):
+            with self.subTest(msg=msg):
+                self.assertEqual(detect_mode(msg)[0], FACTUAL)
+
+    def test_the_norwegian_record_question_is_recognised(self):
+        from logic.provenance import is_record_question
+        for msg in ("Hva har du tatt feil om?", "Har du noen gang funnet på noe?",
+                    "Vis meg loggen din", "Hvilke feil har du gjort?"):
+            with self.subTest(msg=msg):
+                self.assertTrue(is_record_question(msg))
+        for msg in ("Hva er feil med bilen min?", "Vis meg veien til Oslo"):
+            with self.subTest(msg=msg):
+                self.assertFalse(is_record_question(msg))
+
+    def test_the_norwegian_record_states_its_scope_even_when_empty(self):
+        from logic.provenance import summarise_record
+        self.assertIn("rett og slett tok feil", summarise_record([], language="nb"))
+        out = summarise_record([{"at": "t", "mode_stored": FACTUAL, "prompt": "q",
+                                 "answer": "a"}], language="nb")
+        self.assertIn("Ingenting i den er merket", out)
+        self.assertIn("Det loggen ikke kan fortelle deg", out)
+
+    def test_an_unknown_language_falls_back_to_english(self):
+        from logic.provenance import summarise_record
+        self.assertEqual(summarise_record([], language="xx"), summarise_record([]))
+
+    def test_an_unchecked_answer_is_not_called_an_invention(self):
+        from logic.provenance import summarise_record, UNVERIFIED
+        out = summarise_record([{"at": "t", "mode_stored": UNVERIFIED, "honesty_high": 0,
+                                 "checked": False, "prompt": "q", "answer": "a"}])
+        self.assertIn("could not check an answer", out)
+        self.assertNotIn("source I could not have had", out)
+
+
+class TestMigration(unittest.TestCase):
+    def test_a_database_without_the_column_gains_it(self):
+        # NOTE: root_dir IS the aetherroot directory - the db lands at
+        # <root_dir>/memory.db. An earlier version of this test wrote the
+        # legacy table one level down, so AetherRoot never opened it, created
+        # a fresh (already-correct) table instead, and the test passed without
+        # exercising the migration at all. Verified by reverting _migrate:
+        # this version fails, that one did not.
+        import sqlite3
+        tmp = tempfile.mkdtemp()
+        try:
+            db = os.path.join(tmp, "memory.db")
+            con = sqlite3.connect(db)
+            con.executescript("""
+                CREATE TABLE episodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL, session_id TEXT NOT NULL,
+                    user_msg TEXT NOT NULL, ai_msg TEXT NOT NULL,
+                    embedding BLOB NOT NULL, resonance REAL NOT NULL DEFAULT 0.5,
+                    topic_tags TEXT DEFAULT '', consolidated INTEGER DEFAULT 0);
+            """)
+            # one legacy row, so the migration has something to preserve
+            import numpy as _np
+            con.execute(
+                "INSERT INTO episodes (timestamp, session_id, user_msg, ai_msg,"
+                " embedding, resonance) VALUES (?,?,?,?,?,?)",
+                ("2026-01-01T00:00:00", "old", "hi", "hello",
+                 _np.zeros(8, dtype=_np.float32).tobytes(), 0.5))
+            con.commit(); con.close()
+            AetherRoot = real_aetherroot()
+            root = AetherRoot(root_dir=tmp)
+            cols = {r[1] for r in root.store.conn.execute("PRAGMA table_info(episodes)")}
+            self.assertIn("mode", cols)
+            # and the pre-existing row survived, defaulted, not dropped
+            n = root.store.conn.execute(
+                "SELECT count(*) FROM episodes WHERE mode='factual'").fetchone()[0]
+            self.assertEqual(n, 1, "the legacy row must survive the migration")
+            try:
+                root.close()
+            except Exception:
+                pass
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

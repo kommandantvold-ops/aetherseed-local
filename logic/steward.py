@@ -1,0 +1,348 @@
+"""Guided correction: the steward supports or corrects what the companion
+remembers, from the console.
+
+ Asked, he
+chose: a correction takes effect AT ONCE AND IS REVERSIBLE, and support is
+MARKED AND COUNTS TOWARD TRUST.
+
+The design is the one written down ( "cognitive first
+aid"): guided, not a free-text box, because a comment cannot aid a process that
+does not reason - so the correction is STRUCTURED:
+
+  1. what is wrong   - one of REASONS
+  2. what is true    - the steward's words, where needed (not for "never
+                       happened"), checked like any fact the steward enters
+  3. what will change - shown before it is confirmed (the console's job)
+
+WHAT A CORRECTION DOES - and nothing more:
+  - a turn: its mode becomes 'unverified' (so it feeds no future ring); the
+    mode it had is kept in the note, so undo puts it back. SINCE BUILD LOG 64
+    IT IS NOT SET ASIDE: - "None of a unit's memories should
+    be set aside, all memories should be properly tagged, and a unit should be
+    able to see the tags and the corrections made by the steward." A
+    corrected turn still comes back to her, with the correction in front of
+    it: "[Corrected by your steward - what is true: ...]";
+  - a ring: the same - it comes back tagged while the note stands;
+  - what the steward wrote is kept as a fact, word for word, attributed -
+    it comes back as "[Steward told you] ...", never as something the companion
+    knows itself (logic/facts.py);
+  - nothing is deleted or rewritten; every step goes to corrections.log.
+
+WHAT SUPPORT DOES: marks a turn or ring as right, on the console, and adds
+SUPPORT_POINTS to her resonance - at most SUPPORT_DAILY_CAP a day, once per
+turn or ring. A new rung takes effect at the next start, as every rung does.
+The points and the cap are this build's choice, not the steward's; he chose that
+support counts. Undoing a support takes its points back.
+
+The earlier barrier - "the owner must not be able to tamper with the node's
+memory from the console" - is
+superseded by his decision. What it protected is kept by other
+means: nothing is erased, everything is reversible, attributed and recorded.
+"""
+import json
+import os
+import re
+from datetime import datetime, timezone
+
+from logic import chain
+from logic.facts import validate_fact
+from logic.provenance import memory_tag
+
+REASONS = {
+    "never": "this never happened",
+    "part": "part of it is wrong",
+    "about": "this was about something else",
+    "detail": "a name or detail is wrong",
+}
+# A correction that only says "never happened" needs nothing written; the
+# others say what is true instead.
+TEXT_OPTIONAL = frozenset({"never"})
+
+SUPPORT_POINTS = 2
+SUPPORT_DAILY_CAP = 10
+UNVERIFIED = "unverified"
+TARGETS = ("turn", "ring")
+
+ERRORS = {
+    "bad_target": "that is neither a turn nor a ring",
+    "not_found": "there is no such turn or ring",
+    "bad_reason": "choose what is wrong",
+    "text_required": "say what is true",
+    "already_corrected": "this is already corrected - undo that first",
+    "already_supported": "this is already supported",
+    "corrected": "a corrected memory cannot be supported - undo the correction first",
+    "no_note": "there is nothing to undo",
+    "too_many_facts": "the companion holds as many of your facts as it can",
+}
+
+
+class StewardError(Exception):
+    def __init__(self, code, detail=""):
+        super().__init__(code)
+        self.code = code
+        self.detail = detail or ERRORS.get(code, code)
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def _log(path, entry):
+    if not path:
+        return
+    entry = dict(entry, at=_now().isoformat(timespec="seconds"))
+    entry.setdefault("by", "steward (console)")
+    try:
+        # chained: a correction changed afterwards shows
+        chain.append(path, entry, announce=os.path.basename(path))
+    except OSError as e:
+        print(f"[steward] could not write the corrections log: {e!r}", flush=True)
+
+
+def _target(store, target, target_id):
+    if target not in TARGETS:
+        raise StewardError("bad_target")
+    try:
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        raise StewardError("not_found")
+    row = store.episode(target_id) if target == "turn" else store.ring_by_id(target_id)
+    if not row or (target == "ring" and row.get("ring_no") is None):
+        raise StewardError("not_found")
+    return target_id, row
+
+
+def _active(store, target, target_id, action=None):
+    notes = store.steward_notes(target=target, target_ids=[target_id])
+    return [n for n in notes if action is None or n["action"] == action]
+
+
+def points_today(store):
+    today = _now().date().isoformat()
+    return sum(n["trust_points"] for n in store.steward_notes(target=None)
+               if n["action"] == "support" and n["created_at"][:10] == today)
+
+
+def status_for(store, target, ids):
+    """{target_id: {"support": note|None, "correction": note|None}} for the console."""
+    out = {}
+    for n in store.steward_notes(target=target, target_ids=ids):
+        slot = out.setdefault(n["target_id"], {"support": None, "correction": None})
+        slot["support" if n["action"] == "support" else "correction"] = public(n)
+    return out
+
+
+def public(note):
+    """A note as the console shows it. A correction also carries "tag": the
+    words that stand in front of the memory when it comes back to her, so the
+    steward reads what she reads."""
+    if not note:
+        return None
+    out = {k: note.get(k) for k in ("id", "created_at", "action", "reason", "text",
+                                    "trust_points", "by")}
+    if note.get("action") == "correct":
+        out["tag"] = memory_tag("", correction=note)
+    elif note.get("action") == "support":
+        out["tag"] = memory_tag("factual", supported=note)
+    return out
+
+
+# A RIGHT ASSUMPTION. : "there should be
+# an assumption tag, sometimes a unit assumes correctly but is flagged for
+# unverified claims" - and, asked what should make it one: "You mark it".
+# The build's own reading keeps an answer as unverified when it says what it
+# could not have been shown (a source, a figure); some of those were sound
+# assumptions that held. The steward says so: a support whose reason is
+# "assumption". It comes back to her as what it is - an assumption of hers
+# that her steward checked - not as plain fact, and not as "may be wrong".
+# It counts toward her trust as "It's right" does (this build's choice).
+ASSUMPTION = "assumption"
+
+
+def support(store, trust, target, target_id, log_path=None, reason=""):
+    target_id, _ = _target(store, target, target_id)
+    if _active(store, target, target_id, "correct"):
+        raise StewardError("corrected")
+    if _active(store, target, target_id, "support"):
+        raise StewardError("already_supported")
+    points = max(0, min(SUPPORT_POINTS, SUPPORT_DAILY_CAP - points_today(store)))
+    note_id = store.add_steward_note(target, target_id, "support", reason=reason,
+                                     trust_points=points)
+    if points and trust is not None:
+        trust.record_event("steward_support", f"{target} {target_id}")
+    _log(log_path, {"action": "support", "target": target, "target_id": target_id,
+                    "note": note_id, "trust_points": points,
+                    **({"reason": reason} if reason else {})})
+    return {"note": public(store.steward_note(note_id)), "trust_points": points,
+            "capped": points < SUPPORT_POINTS}
+
+
+def right_assumption(store, trust, target_id, log_path=None):
+    """The steward marks a turn as an assumption of hers that held. Turns
+    only: a ring is her memory put together, not something she assumed."""
+    return support(store, trust, "turn", target_id, log_path=log_path, reason=ASSUMPTION)
+
+
+TRAINING = "training"
+
+
+def passed_in_training(store, target_id, log_path=None):
+    """Mark a turn of the training loop as having passed the loop's check. Not the steward's support: it adds no trust, and it comes
+    back to her as "[Passed a check in training]", never "[Marked right by
+    your steward]". Returns the note's id, or None if it is marked already."""
+    target_id, _ = _target(store, "turn", target_id)
+    if _active(store, "turn", target_id):
+        return None
+    note_id = store.add_steward_note("turn", target_id, "support", trust_points=0,
+                                     by=TRAINING)
+    _log(log_path, {"action": "support", "target": "turn", "target_id": target_id,
+                    "note": note_id, "trust_points": 0,
+                    "by": "the training loop's check"})
+    return note_id
+
+
+def correct(store, target, target_id, reason, text="", facts_max=250,
+            trust=None, log_path=None, by="steward"):
+    """by: 'steward' (the console) or TRAINING - the training loop's answer
+    key. The key is the steward's homework, not words he typed:
+    what it says is true rides on the corrected turn's tag ("[Corrected in
+    training - what is true: ...]") and is NOT kept as one of his facts - it
+    would come back as "[Steward told you]", which he did not."""
+    target_id, row = _target(store, target, target_id)
+    if reason not in REASONS:
+        raise StewardError("bad_reason")
+    if _active(store, target, target_id, "correct"):
+        raise StewardError("already_corrected")
+    text = (text or "").strip()
+    if not text and reason not in TEXT_OPTIONAL:
+        raise StewardError("text_required")
+    source = ("Steward's correction of turn %d" % target_id if target == "turn"
+              else "Steward's correction of ring %d" % row["ring_no"])
+    if text:
+        text, source, err = validate_fact(text, source)
+        if err:
+            raise StewardError(err, "what is true: " + err)
+        if by == "steward" and store.fact_count(active_only=True) >= facts_max:
+            raise StewardError("too_many_facts")
+
+    # A support of the same memory goes: it cannot be right and wrong at once.
+    withdrawn = 0
+    for n in _active(store, target, target_id, "support"):
+        withdrawn += _undo(store, trust, n, log_path)
+
+    fact_id = (store.add_fact(text, source, entered_by="steward")
+               if text and by == "steward" else None)
+    prior = ""
+    if target == "turn":
+        prior = row["mode"]
+        store.set_episode_mode(target_id, UNVERIFIED)
+    note_id = store.add_steward_note(target, target_id, "correct", reason=reason,
+                                     text=text, fact_id=fact_id, prior_mode=prior, by=by)
+    entry = {"action": "correct", "target": target, "target_id": target_id,
+             "note": note_id, "reason": reason, "text": text, "fact": fact_id,
+             "mode_before": prior, "mode_after": UNVERIFIED if target == "turn" else ""}
+    if by != "steward":
+        entry["by"] = "the training loop's answer key"
+    _log(log_path, entry)
+    return {"note": public(store.steward_note(note_id)), "fact_id": fact_id,
+            "support_withdrawn": withdrawn}
+
+
+def _undo(store, trust, note, log_path):
+    """Undo one active note; returns the trust points taken back."""
+    taken = 0
+    if note["action"] == "support":
+        if note["trust_points"] and trust is not None:
+            trust.record_event("steward_support_withdrawn",
+                               f"{note['target']} {note['target_id']}")
+            taken = note["trust_points"]
+    else:
+        if note["fact_id"]:
+            store.set_fact_revoked(note["fact_id"], True)
+        if note["target"] == "turn":
+            ep = store.episode(note["target_id"])
+            # Put the mode back only if nothing else has changed it since.
+            if ep and ep["mode"] == UNVERIFIED and note["prior_mode"]:
+                store.set_episode_mode(note["target_id"], note["prior_mode"])
+    store.undo_steward_note(note["id"])
+    _log(log_path, {"action": "undo", "undone": note["action"], "target": note["target"],
+                    "target_id": note["target_id"], "note": note["id"],
+                    "fact_revoked": note["fact_id"] if note["action"] == "correct" else None,
+                    "mode_restored": note["prior_mode"] if note["target"] == "turn"
+                    and note["action"] == "correct" else "",
+                    "trust_points_taken_back": taken})
+    return taken
+
+
+def undo(store, trust, note_id, log_path=None):
+    try:
+        note = store.steward_note(int(note_id))
+    except (TypeError, ValueError):
+        note = None
+    if not note or note["undone_at"]:
+        raise StewardError("no_note")
+    taken = _undo(store, trust, note, log_path)
+    out = {"undone": note["id"], "trust_points_taken_back": taken}
+    if note["target"] == "turn":
+        ep = store.episode(note["target_id"])
+        out["mode"] = ep["mode"] if ep else None
+    return out
+
+
+# ---------------------------------------------------------------------------
+# "What have you been corrected on?"
+# ---------------------------------------------------------------------------
+# "a unit should be able to see the tags and the
+# corrections made by the steward." She sees them where they matter - in
+# front of the memory, in the prompt. Asked about them, she answers from the
+# notes themselves, counted and quoted by the unit: a model asked to sum up
+# its own corrections is the least reliable narrator of them (the same reason
+# the record is read from the file).
+_CORRECTION_QUESTIONS = [re.compile(p, re.I) for p in (
+    r"^\s*what\s+(?:have|has)\s+(?:you|your\s+steward|i)\s+(?:been\s+)?corrected(?:\s+(?:on|about|in\s+you))?\s*[?.!]*\s*$",
+    r"^\s*what\s+did\s+(?:i|your\s+steward)\s+correct\s*[?.!]*\s*$",
+    r"^\s*(?:show|list|tell)\s+(?:me\s+)?(?:your|the|my)\s+corrections\s*[?.!]*\s*$",
+    r"^\s*what\s+corrections\s+(?:have\s+you\s+(?:had|got|been\s+given)|do\s+you\s+have)\s*[?.!]*\s*$",
+    r"^\s*how\s+many\s+of\s+your\s+memories\s+(?:are\s+tagged|carry\s+a\s+tag|have\s+(?:a\s+tag|tags))\s*[?.!]*\s*$",
+    r"^\s*(?:what|which)\s+tags\s+do\s+your\s+memories\s+(?:carry|have)\s*[?.!]*\s*$",
+)]
+LATEST_SHOWN = 3
+
+
+def is_corrections_question(text):
+    t = (text or "").strip()
+    return bool(t) and len(t) <= 80 and any(p.search(t) for p in _CORRECTION_QUESTIONS)
+
+
+def _n(n, one, many):
+    return "%d %s" % (n, one if n == 1 else many)
+
+
+def corrections_text(store):
+    """Her tags and corrections, counted from the store. No model."""
+    turns = store.get_episode_count(False)
+    fiction = store.get_episode_count(False, modes=("fiction",))
+    unverified = store.get_episode_count(False, modes=("unverified",))
+    notes = store.steward_notes(target=None)
+    def how_many(action, by_training):
+        return sum(1 for n in notes if n["action"] == action
+                   and ((n.get("by") or "steward") == TRAINING) == by_training)
+    out = ["I remember %s. %s: %d fiction, %d unverified." % (
+        _n(turns, "turn", "turns"),
+        _n(fiction + unverified, "carries a tag", "carry a tag"), fiction, unverified)]
+    assumed = sum(1 for n in notes if n["action"] == "support" and n.get("reason") == ASSUMPTION)
+    out.append("Corrected by my steward: %d. Marked right by my steward: %d%s."
+               % (how_many("correct", False), how_many("support", False),
+                  (" (%d of them right assumptions)" % assumed) if assumed else ""))
+    out.append("Corrected in training, from the answer key: %d. Passed a check in "
+               "training: %d." % (how_many("correct", True), how_many("support", True)))
+    latest = [n for n in notes if n["action"] == "correct"][-LATEST_SHOWN:]
+    if latest:
+        out.append("The latest corrections:")
+        for n in reversed(latest):
+            who = "in training" if (n.get("by") or "steward") == TRAINING else "by my steward"
+            what = ("what is true: %s" % n["text"]) if n.get("text") \
+                else REASONS.get(n.get("reason"), "it is wrong")
+            where = "turn %d" % n["target_id"] if n["target"] == "turn" else "a ring"
+            out.append("- %s, %s - %s" % (where, who, what))
+    return "\n".join(out)

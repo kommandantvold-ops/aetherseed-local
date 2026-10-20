@@ -1,0 +1,2 @@
+# Deliberately empty. The console is one Chromium, started by the kiosk unit
+# with `labwc -s`. Nothing else runs in this session.

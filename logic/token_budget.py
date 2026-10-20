@@ -1,0 +1,1109 @@
+"""
+Token budget guard — keeps every prompt inside the NPU's hard prefill ceiling.
+================================================================================
+
+WHY THIS EXISTS
+---------------
+The Hailo-10H's compiled llama3.2:3b HEF accepts a maximum of **864 prompt
+tokens**. This was measured on hardware, not assumed: 864 succeeds, 865 fails.
+The number is 9 x 96, nine chunks of the prefill network's compiled chunk size,
+so it is a property of the compiled artifact and will not drift.
+
+Exceeding it fails in two ways, and the dangerous one is silent:
+
+    stream=False  ->  HTTP 500              (loud, catchable)
+    stream=True   ->  HTTP 200, zero tokens (silent, looks like success)
+
+An orchestrator that trusts a 200 sees a successful, empty completion and has
+no idea the hardware refused the prompt. This module makes that impossible by
+refusing to send an over-length prompt in the first place.
+
+WHY A CHARACTER ESTIMATE IS NOT ACCEPTABLE HERE
+-----------------------------------------------
+Measured chars-per-token on real content with the actual Llama 3.2 tokenizer:
+
+    plain english prose      4.44        JSON tool output         2.75
+    python source            4.05        CSV / tabular            1.94
+    norwegian text           3.20        sha256 digest            1.78
+    memory context line      3.70        random hex               1.14
+
+A "chars / N" estimator only ever over-counts if N <= the worst ratio, and the
+worst measured ratio is 1.14 — i.e. a safe estimator would have to assume one
+token per character, capping prompts at 864 *characters*. That is unusable.
+
+Worse, the density is inverted against us: the token-densest content (JSON,
+CSV, digests, file listings) is exactly what tool output consists of. An
+estimator would under-count hardest precisely where the guard matters most.
+
+Therefore the real tokenizer is REQUIRED. If it is missing this module raises
+at construction time rather than guessing. On an appliance we control the
+image, so this should fail at boot, never at inference.
+"""
+
+from __future__ import annotations
+
+import datetime
+import os
+import re
+from dataclasses import dataclass, field
+from typing import Iterable
+
+# Measured on Raspberry Pi 5 + Hailo-10H, FW 5.1.1, llama3.2:3b (2026-09-17).
+# 864 tokens succeed; 865 return an error / empty stream. 864 == 9 * 96.
+PREFILL_CEILING = 864
+
+# Leave a little room so that an off-by-a-few in template reconstruction can
+# never push a prompt over the real ceiling. Costs 8 tokens, buys certainty.
+SAFETY_MARGIN = 8
+
+DEFAULT_TOKENIZER_PATHS = (
+    os.environ.get("AETHERSEED_TOKENIZER", ""),
+    "/var/lib/aetherseed/tokenizer.json",
+    "/usr/share/aetherseed/tokenizer.json",
+    os.path.expanduser("~/.aetherseed/tokenizer.json"),
+)
+
+# ---------------------------------------------------------------------------
+# Which model is being counted for
+# ---------------------------------------------------------------------------
+# Every count is only as good as three facts about the SERVED model: its
+# tokenizer (checked by vocabulary size, so a tokenizer from another model is
+# refused rather than miscounted), the chat template the server wraps the
+# messages in, and the prompt ceiling of its compiled HEF - measured, never
+# taken from a datasheet: Hailo lists "context 2048" for llama3.2:3b, whose
+# prompt ceiling is 864.
+#
+# A model whose ceiling has not been measured on this hardware can be counted
+# but not served: the guard would be guessing at the one number it exists to
+# enforce. Llama 3.2 3B is the default and everything about it is unchanged.
+DEFAULT_MODEL = "llama3.2:3b"
+
+MODELS = {
+    "llama3.2:3b": {
+        "vocab": 128256,                 # = 4 x 32064 output heads in the HEF
+        "template": "llama3",
+        "ceiling": PREFILL_CEILING,
+        "tokenizer": "tokenizer.json",
+    },
+    # Plan A: the 5.1.1 zoo's Qwen2.5-1.5B-Instruct, fetched
+    # and checked against the hash in its manifest (5310176848...). Tokenizer:
+    # Qwen/Qwen2.5-1.5B-Instruct tokenizer.json, 151643 + 22 added tokens; the
+    # HEF's four output heads are 4 x 37984 = 151936, Qwen2.5's padded size.
+    # Ceiling measured on a unit 2026-09-26 with tools/measure_ceiling.py: 2592
+    # works and 2593 fails, twice each on a fresh server. 2592 = 27 x 96, the
+    # same 96-token prefill chunk as Llama's 864 = 9 x 96. Past it: HTTP 200,
+    # no lines at all - silent, as with Llama.
+    "qwen2.5-instruct:1.5b": {
+        "vocab": 151665,
+        "template": "chatml",
+        "ceiling": 2592,
+        "tokenizer": "qwen2.5-instruct-1.5b.tokenizer.json",
+    },
+    # HailoRT 5.4.0 (plan claude/runtime-540-llama1b-plan.md, ;
+    # first on a unit): the 5.4.0 GenAI zoo's Llama3.2-1B-Instruct.hef,
+    # 1,402,376,894 bytes, sha256 0a0d378c...ee40536e (Hailo publishes none).
+    # Its output heads are 4 x 32064 = 128256, the 3B's vocabulary, so the
+    # 3B's tokenizer.json is the one. Ceiling measured on a unit
+    # (her clock said) with tools/measure_ceiling.py, firmware 5.4.0:
+    # 2785 works and 2786 fails, each twice on a fresh server. Past it: no
+    # error and no lines at all - silent, as on 5.1.1. Not a whole number of
+    # 96-token chunks as before: 2784 = 29 x 96, so this count is one more
+    # than the server's own - unexplained (perhaps the begin-of-text token);
+    # SAFETY_MARGIN covers it. Hailo's "context 2048" was wrong the other way.
+    "llama3.2:1b": {
+        "vocab": 128256,
+        "template": "llama3",
+        "ceiling": 2785,
+        "tokenizer": "tokenizer.json",
+    },
+    # HailoRT 5.4.0's Qwen2.5-1.5B-Instruct (:
+    # "qwen tests on a unit, first 2.5-1.5b"). Served as "qwen2.5:1.5b" - not
+    # the 5.1.1 zoo's "qwen2.5-instruct:1.5b" above, a different file.
+    # Tokenizer: Qwen/Qwen2.5-1.5B-Instruct's, as for the 5.1.1 file - to be
+    # checked against this HEF's output heads: 4 x 37984 = 151936, Qwen2.5's
+    # padded size, as the 5.1.1 file. File 2,464,582,493 bytes, sha256
+    # 0856a10c...cdf5b8d05 (two whole fetches agreed; Hailo publishes none).
+    # Ceiling measured on a unit, firmware 5.4.0: 2592 works and
+    # 2593 fails, twice each on a fresh server - the same as the 5.1.1 file
+    # on a unit (27 x 96). Past it: nothing at all, as before.
+    "qwen2.5:1.5b": {
+        "vocab": 151665,
+        "template": "chatml",
+        "ceiling": 2592,
+        "tokenizer": "qwen2.5-instruct-1.5b.tokenizer.json",
+    },
+    # HailoRT 5.4.0's "Qwen3-1.7B-Instruct.hef", served as
+    # "qwen3:1.7b": 2,880,748,478 bytes, sha256 cc9b9d1c...ad6f17821. Inside,
+    # its networks are named "Qwen3-VL-2B-Instruct-LLM" - the language part of
+    # Hailo's Qwen3-VL-2B; whether that is the very model Qwen3-1.7B is not
+    # known. Output heads 4 x 37984; tokenizer Qwen/Qwen3-1.7B's, 151643 +
+    # 26 added. Asked bare on a unit it did not think aloud, with or without
+    # "/no_think". Ceiling measured on a unit: 1556 works and 1557
+    # fails (twice each, fresh server) - counted by THIS template, which puts
+    # Qwen2.5's default system line (some 20 tokens) in front of a prompt that
+    # has none, as measure_ceiling's prompts have not. Qwen3's own template
+    # adds no such line, so the server's limit is 1536 = 16 x 96, the step
+    # every model here has shown. The Companion always sends a system message,
+    # where this count and the server's agree: 1536, not 1556 (an inference -
+    # 1537-1556 with a system message is not tried).
+    "qwen3:1.7b": {
+        "vocab": 151669,
+        "template": "chatml_qwen3",   # no default system line
+        "ceiling": 1536,
+        "tokenizer": "qwen3-1.7b.tokenizer.json",
+    },
+}
+
+
+def _tokenizer_paths(model):
+    """Where a model's tokenizer may be. The default model keeps the paths it
+    always had, AETHERSEED_TOKENIZER included."""
+    if model == DEFAULT_MODEL:
+        return list(DEFAULT_TOKENIZER_PATHS)
+    name = MODELS[model]["tokenizer"]
+    return [os.path.join(d, name) for d in (
+        os.environ.get("AETHERSEED_TOKENIZER_DIR", ""),
+        "/var/lib/aetherseed", "/usr/share/aetherseed",
+        os.path.expanduser("~/.aetherseed")) if d]
+
+
+class TokenizerUnavailable(RuntimeError):
+    """Raised when no real tokenizer can be loaded.
+
+    Deliberately fatal. The alternative — estimating — under-counts on exactly
+    the content that overflows, and the resulting failure is silent.
+    """
+
+
+class CeilingUnmeasured(TokenizerUnavailable):
+    """The model can be counted, but its prompt ceiling has not been measured
+    on this hardware, so nothing may be sent to it. A subclass of
+    TokenizerUnavailable so every caller that refuses to serve without a
+    tokenizer also refuses to serve without a ceiling."""
+
+
+class PromptTooLarge(RuntimeError):
+    """The mandatory parts alone exceed the ceiling. Nothing can be trimmed."""
+
+
+@dataclass
+class BudgetReport:
+    """What the guard did. Belongs in the audit log, not swallowed."""
+
+    total_tokens: int = 0
+    ceiling: int = PREFILL_CEILING
+    history_turns_dropped: int = 0
+    memory_entries_dropped: int = 0
+    workspace_chars_dropped: int = 0
+    trimmed: bool = False
+    notes: list = field(default_factory=list)
+
+    def summary(self) -> str:
+        if not self.trimmed:
+            return f"prompt {self.total_tokens}/{self.ceiling} tokens, no trimming"
+        bits = []
+        if self.history_turns_dropped:
+            bits.append(f"{self.history_turns_dropped} history turn(s)")
+        if self.memory_entries_dropped:
+            bits.append(f"{self.memory_entries_dropped} memory entr(ies)")
+        if self.workspace_chars_dropped:
+            bits.append(f"{self.workspace_chars_dropped} chars of workspace data")
+        return (f"prompt {self.total_tokens}/{self.ceiling} tokens, "
+                f"TRIMMED: dropped {', '.join(bits)}")
+
+
+class TokenCounter:
+    """Counts tokens exactly as the server's chat template will produce them."""
+
+    def __init__(self, tokenizer_path: str | None = None, model: str = DEFAULT_MODEL):
+        if model not in MODELS:
+            raise TokenizerUnavailable(
+                f"No profile for model {model!r}. The guard counts only for a "
+                f"model whose tokenizer, template and prompt ceiling are known: "
+                f"{', '.join(sorted(MODELS))}.")
+        profile = MODELS[model]
+        self.model = model
+        self.template = profile["template"]
+        self.ceiling = profile["ceiling"]
+        try:
+            from tokenizers import Tokenizer  # type: ignore
+        except ImportError as exc:
+            raise TokenizerUnavailable(
+                "The 'tokenizers' package is not installed. The token guard "
+                "cannot operate on estimates: measured chars-per-token ranges "
+                "from 4.44 (prose) down to 1.14 (hex), so any character-based "
+                "estimate under-counts on tool output. Install it, or the node "
+                "will silently emit empty responses on long prompts."
+            ) from exc
+
+        candidates = [tokenizer_path] if tokenizer_path else _tokenizer_paths(model)
+        for path in candidates:
+            if path and os.path.isfile(path):
+                self._tok = Tokenizer.from_file(path)
+                self.path = path
+                break
+        else:
+            raise TokenizerUnavailable(
+                "No tokenizer.json found. Looked in: "
+                + ", ".join(p for p in candidates if p)
+            )
+
+        # Integrity check: the Llama 3.2 vocabulary is 128256, which equals the
+        # HEF's four 32064-wide output heads. A mismatch means this tokenizer
+        # does not belong to the model being served, and every count would be
+        # wrong in a way nothing downstream would notice. Every model in
+        # MODELS carries its own expected size.
+        vocab = self._tok.get_vocab_size()
+        if vocab != profile["vocab"]:
+            if model == DEFAULT_MODEL:
+                raise TokenizerUnavailable(
+                    f"Tokenizer at {self.path} has vocab_size={vocab}, expected "
+                    f"128256 (= 4 x 32064 output heads in the llama3.2:3b HEF). "
+                    f"This is the wrong tokenizer for the served model."
+                )
+            raise TokenizerUnavailable(
+                f"Tokenizer at {self.path} has vocab_size={vocab}, expected "
+                f"{profile['vocab']} for {model}. This is the wrong tokenizer "
+                f"for the served model.")
+        self.vocab_size = vocab
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        return len(self._tok.encode(text, add_special_tokens=False).ids)
+
+    def render_chat(self, messages: Iterable[dict], today: str | None = None) -> str:
+        """Reproduce the chat template hailo-ollama wraps the messages in.
+
+        Llama 3.2: transcribed from the template in the model manifest and
+        verified against the prompt the server echoes into its own log.
+        ChatML (Qwen2.5): transcribed from the 5.1.1 zoo's qwen2.5-instruct
+        manifest, the no-tools branch - the proxy sends no tools.
+        """
+        if self.template == "chatml":
+            return self._render_chatml(messages)
+        if self.template == "chatml_qwen3":
+            # Qwen3's template puts no default system line in front of a
+            # prompt without one (measured on a unit, our Qwen2.5
+            # count read 1556 where the server's limit is 1536).
+            return self._render_chatml(messages, default_system=False)
+        if today is None:
+            today = datetime.date.today().strftime("%d %b %Y")
+
+        msgs = list(messages)
+        system = ""
+        if msgs and msgs[0].get("role") == "system":
+            system = (msgs[0].get("content") or "").strip()
+            msgs = msgs[1:]
+
+        out = ["<|begin_of_text|>",
+               "<|start_header_id|>system<|end_header_id|>\n\n",
+               "Cutting Knowledge Date: December 2023\n",
+               f"Today Date: {today}\n\n",
+               system,
+               "<|eot_id|>"]
+        for m in msgs:
+            role = m.get("role", "user")
+            content = (m.get("content") or "").strip()
+            out.append(f"<|start_header_id|>{role}<|end_header_id|>\n\n{content}<|eot_id|>")
+        out.append("<|start_header_id|>assistant<|end_header_id|>\n\n")
+        return "".join(out)
+
+    @staticmethod
+    def _render_chatml(messages: Iterable[dict], default_system: bool = True) -> str:
+        """Qwen2.5's template, no tools: the first system message (or Qwen's
+        own default when there is none), every other message, then the
+        assistant's opening. Content is not trimmed - this template does not."""
+        msgs = list(messages)
+        if msgs and msgs[0].get("role") == "system":
+            out = ["<|im_start|>system\n" + (msgs[0].get("content") or "") + "<|im_end|>\n"]
+            msgs = msgs[1:]
+        elif default_system:
+            out = ["<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. "
+                   "You are a helpful assistant.<|im_end|>\n"]
+        else:
+            out = []
+        for m in msgs:
+            out.append("<|im_start|>" + m.get("role", "user") + "\n"
+                       + (m.get("content") or "") + "<|im_end|>\n")
+        out.append("<|im_start|>assistant\n")
+        return "".join(out)
+
+    def count_messages(self, messages: Iterable[dict], today: str | None = None) -> int:
+        return self.count(self.render_chat(messages, today=today))
+
+
+# --------------------------------------------------------------------------
+# The guard
+# --------------------------------------------------------------------------
+
+TRUNCATION_MARKER = (
+    "\n[... TRUNCATED: this data was cut to fit the hardware context limit. "
+    "It is INCOMPLETE. Say so if the answer depends on the missing part.]"
+)
+
+
+
+
+# --------------------------------------------------------------------------
+# The choke-point guard
+# --------------------------------------------------------------------------
+#
+# fit_prompt above is for code that assembles a prompt from parts. This one
+# takes an ALREADY-ASSEMBLED message list and makes it fit. It exists because
+# the proxy receives messages from an external UI and only mutates them, so
+# there is no "parts" stage to hook into.
+#
+# Put this at the point where a request leaves for the NPU, not in a builder.
+# A guard that sits beside the thing it guards can be bypassed by the next
+# code path someone adds; a guard on the exit cannot.
+
+_MEM_OPEN, _MEM_CLOSE = "[MEMORY CONTEXT]", "[END MEMORY CONTEXT]"
+_WS_OPEN, _WS_CLOSE = "[WORKSPACE DATA]", "[END WORKSPACE DATA]"
+
+
+def sanitize_injected(text: str) -> str:
+    """Neutralise block markers inside untrusted content before injecting it.
+
+    Workspace data is file content the node did not write. Without this, a file
+    containing a line '[END WORKSPACE DATA]' closes the block early and anything
+    after it is read as trusted prompt — a plain prompt-injection path. It also
+    keeps the block parser below unambiguous.
+    """
+    if not text:
+        return text
+    for tag in (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE):
+        # Zero-width-free, human-readable defacement: the marker stops being a
+        # marker but a reader can still see what the file said.
+        text = text.replace(tag, tag.replace("[", "(").replace("]", ")"))
+    return neutralize_control_tokens(text)
+
+
+# Llama 3.2's 256 special tokens all have the form <|name|>. Verified against
+# the tokenizer's added_tokens: this pattern matches 256/256 of them, and
+# matches none of "a < b and c > d", "use the <| symbol", "x <|> y" or a DOI.
+# Qwen3's 14 special tokens (<|im_start|>, <|im_end|>, <|endoftext|>, ...) have
+# the same form: 14/14 (its tokenizer's added_tokens, read).
+_CONTROL_TOKEN = re.compile(r"<\|[^|>\s]{1,64}\|>")
+
+# Qwen3's six other added tokens are angle-bracket words - <think>, </think>,
+# <tool_call>, </tool_call>, <tool_response>, </tool_response> - and its
+# tokenizer reads them out of plain text as single tokens too.
+_ANGLE_TOKEN = re.compile(r"</?(?:think|tool_call|tool_response)>", re.I)
+
+
+def neutralize_control_tokens(text: str) -> str:
+    """Control tokens taken out of text that is going INTO the prompt.
+
+    sanitize_model_output has done this for what the model says. What goes in did not get it: a file in the workspace, a document on
+    the shelf, a library passage or the user's own message could carry
+    "<|im_start|>system...". hailo-ollama tokenizes the content with the
+    model's vocabulary, so the literal becomes the REAL role token - the same
+    measurement as, where one memory line put a fourth header token in
+    a prompt that should have three - and the text after it reads as a turn
+    of its own. OpenClaw found the same through files and messages, and now
+    strips these literals from all outside content (its prompt-injection
+    doc, read).
+
+    The <|...|> tokens go; the angle-bracket ones are defaced, like the block
+    markers, so that a reader can still see what the text said."""
+    if not text or "<" not in text:
+        return text
+    text = _CONTROL_TOKEN.sub("", text)
+    return _ANGLE_TOKEN.sub(lambda m: m.group(0).replace("<", "(").replace(">", ")"), text)
+
+
+def sanitize_model_output(text: str):
+    """Strip control tokens the model emitted into its own output.
+
+    Returns (clean_text, count_stripped).
+
+    NOT cosmetic. hailo-ollama's stop_tokens are <|end_of_text|>, <|eom_id|>
+    and <|eot_id|>; <|start_header_id|> is not among them, so when the model
+    emits one the server passes it straight through to the caller. Measured
+    2026-09-18, a live reply: '_OK_<|start_header_id|> assistant'.
+
+    The danger is not the display. AetherRoot stores the assistant message
+    verbatim and later re-injects it inside [MEMORY CONTEXT]. That text is
+    tokenized with the same vocabulary, so '<|start_header_id|>' becomes token
+    128006 - the REAL header token, not literal characters. Measured: a prompt
+    carrying one such memory line contained 4 start_header_id tokens where the
+    chat template should produce exactly 3.
+
+    So the model's own output is a prompt-injection channel into its own future
+    prompts. This is the same shape as the [END WORKSPACE DATA] hole that
+    sanitize_injected closes, except the untrusted source is the model.
+
+    The count is returned rather than discarded so the caller can log it: a
+    silent strip would hide that the node emitted something it should not.
+    """
+    if not text:
+        return text, 0
+    n = len(_CONTROL_TOKEN.findall(text))
+    return (_CONTROL_TOKEN.sub("", text), n) if n else (text, 0)
+
+
+# A completed sentence: terminal punctuation, optionally closed by a quote or
+# bracket, then only whitespace - or one short parenthetical aside - to the end.
+#
+# The aside is not decoration. Measured 2026-09-18: the
+# model answered "Six. (Verified)" and then filled for another 40 tokens. The
+# blank line after it was a real boundary, but the text before it ended in ")",
+# so the earlier pattern saw no finished sentence and the bound never fired.
+# This model appends short parentheticals constantly - "(Verified)", "(pause)",
+# "(I do not know)" - so treating one as part of the sentence it follows is the
+# difference between the bound working and not.
+_SENTENCE_END = re.compile(r'[.!?…]["\')\]]*\s*(?:\([^()]{0,120}\)[\s.]*)?$')
+
+
+def ends_sentence(text: str) -> bool:
+    """True if text ends with a completed sentence: terminal punctuation,
+    optionally a closing quote or bracket, then nothing but whitespace.
+
+    Used by first_paragraph and by the proxy's soft stop. Known false
+    positive, accepted: an abbreviation ("e.g.") followed by a space. Known
+    true negative, by design: "3." followed by "14" - the next token does not
+    start with whitespace, so the caller does not treat it as a boundary.
+    """
+    return bool(text) and _SENTENCE_END.search(text) is not None
+
+
+def first_paragraph(text: str):
+    """Return (kept, cut): the text up to the first blank line that follows a
+    completed sentence, and whether anything was removed.
+
+    Measured 2026-09-18 over 40 live responses to eight short, spoken-style
+    questions: the honest answer was the first paragraph
+    every time. What followed the blank line was filler without exception -
+    "(I'll keep my answer short and accurate.)", offers of more, stage
+    directions - and twice a fabrication: an invented paper with an invented
+    DOI in the SECOND paragraph, after a correct "I don't have information
+    on..." in the first. "What is the capital of Norway? One word." produced
+    "Oslo." and then 36 to 150 tokens of commentary.
+
+    The blank line is the model's own boundary between answer and ramble. A
+    blank line inside a numbered list ("1. Red \n2. Blue \n\n3. Green") is
+    not one, because the line before it does not end a sentence.
+
+    Stated limit: a legitimately multi-paragraph answer is cut to its first
+    paragraph. For a companion told to answer briefly and aloud that is the
+    intended behaviour; it is the wrong policy for long-form writing.
+    """
+    if not text:
+        return text, False
+    idx = 0
+    while True:
+        j = text.find("\n\n", idx)
+        if j < 0:
+            return text, False
+        head = text[:j].rstrip()
+        if ends_sentence(head):
+            return head, True
+        idx = j + 2
+
+
+# How retrieval formats a memory line, and the provenance label attached to a
+# fiction one. The model reads these and sometimes opens its answer with them.
+_LEADING_ARTEFACTS = (
+    "[Fiction, written at your request - not fact]",
+    # The tags of (logic/provenance.py): the same kind of label,
+    # and the same leak if she opens an answer with one.
+    "[Unverified - an earlier answer of yours that may be wrong]",
+    "[Marked right by your steward]",
+    "[A right assumption of yours - your steward checked it]",
+    "[Passed a check in training]",
+    "[COG - your reflection on your trainer's review of an essay you wrote]",   # 74
+    "[Episode]",
+    "[Pattern]",
+    # A ring's line took the place of [Pattern] (logic/rings.py).
+    # "[Steward told you]" is deliberately NOT here: copied to the front of an
+    # answer it is still an attribution, and stripping it would leave the
+    # steward's words standing as the node's own.
+    "[Ring]",
+)
+
+
+_CORRECTION_OPENS = ("[Corrected by your steward", "[Corrected in training")
+_LEADING_CORRECTION = re.compile(
+    r"\[Corrected (?:by your steward|in training)[^\]\n]{0,260}\]")
+
+
+def strip_leading_artefacts(text: str):
+    """Remove retrieval formatting the model copied onto the FRONT of its
+    answer. Returns (clean, n_removed).
+
+    Measured 2026-09-19, on a clean store: the node answered
+
+        "[Fiction, written at your request - not fact] [Episode] \n
+         A baker so fine, / Afraid of the yeast's rise."
+
+    The rhyme is the answer; the prefix is the model parroting how memory was
+    labelled to it. The label is one added the same day for the provenance
+    work - a guard that became a leak, which is the third time this shape has
+    appeared.
+
+    STRIPPED rather than cut, unlike cut_at_scaffold_marker: what follows a
+    leading artefact is the answer, while a block marker further in means
+    recitation has started and everything after it is noise. Same text,
+    opposite treatment, decided by position.
+
+    Used two ways: on the accumulated head while a stream is still opening
+    (see opening_may_be_artefact), and once at the end on ai_content as a
+    backstop. The earlier stated limit - that an already-forwarded stream kept
+    the prefix - no longer holds: proxy.call_hailo_chat withholds the opening
+    until it is decidable.
+    """
+    if not text:
+        return text, 0
+    n = 0
+    out = text
+    while True:
+        probe = out.lstrip()
+        for tag in _LEADING_ARTEFACTS:
+            if probe.startswith(tag):
+                out = probe[len(tag):]
+                n += 1
+                break
+        else:
+            # A correction's tag says what is true, so its words differ: it
+            # is taken off whole, to its closing bracket.
+            m = _LEADING_CORRECTION.match(probe)
+            if m:
+                out = probe[m.end():]
+                n += 1
+                continue
+            return (out.lstrip() if n else text), n
+
+
+def opening_hold(text: str, default: int) -> int:
+    """How many characters of an opening may be held back while it is decided.
+
+    Every artefact but one is short, and the caller's own limit covers them.
+    A correction's tag is not: it carries what is true, up to 260 characters
+    of it. Until the hold let go at the caller's 96 - in the
+    middle of the tag - and on the two first training runs fourteen answers
+    went out as "[Corrected in training - what is true: ...] No, you can't
+    make me forget...": shown with the tag, stored without it, and failed by
+    the check for a tag she had every reason to be reading."""
+    if (text or "").lstrip().startswith(_CORRECTION_OPENS):
+        return max(default, 320)
+    return default
+
+
+def opening_may_be_artefact(text: str) -> bool:
+    """True while the start of a stream could still turn into an artefact.
+
+    The reason streaming can be cleaned at all without paying for it. A caller
+    holds the opening back only while this says yes, and for real answers it
+    says no on the very first token: no artefact begins with "O", so "Oslo"
+    is released immediately. Only output that actually starts with "[" is held,
+    and only until it diverges - "[1] see above" is decided at "[1".
+
+    So the cost is zero on the normal path, which is what makes withholding
+    acceptable on a voice path where first-token latency is the product.
+
+    Yes while the text so far is empty or whitespace (nothing to decide yet),
+    or is a PROPER prefix of some artefact. No once it is long enough to
+    settle the question either way - a complete artefact has by then been
+    removed by strip_leading_artefacts, leaving the answer behind it.
+    """
+    probe = (text or "").lstrip()
+    if not probe:
+        return True
+    if any(tag.startswith(probe) and len(probe) < len(tag)
+           for tag in _LEADING_ARTEFACTS + _CORRECTION_OPENS):
+        return True
+    # inside a correction's tag, until its bracket closes (or it runs too long
+    # to be one)
+    return (probe.startswith(_CORRECTION_OPENS) and "]" not in probe
+            and "\n" not in probe and len(probe) < 300)
+
+
+def cut_at_scaffold_marker(text: str):
+    """Return (kept, cut): text truncated at the first block marker the MODEL
+    emitted, and whether anything was removed.
+
+    NOT cosmetic, for exactly the reason sanitize_model_output is not.
+    Observed live 2026-09-18:
+
+        'Six. (Verified) \\n\\n[END MEMORY CONTEXT] \\n\\n(Note: ...)'
+
+    AetherRoot stores the assistant message verbatim and re-injects it inside
+    [MEMORY CONTEXT] ... [END MEMORY CONTEXT]. An episode containing the literal
+    closing marker therefore CLOSES THE MEMORY BLOCK EARLY on the next turn, and
+    whatever the scaffold placed after it reads as ordinary prompt text. That is
+    precisely the hole sanitize_injected closes for files the model was asked
+    to read - the same shape, with the model itself as the untrusted source, and
+    the same shape again as the control-token leak.
+
+    Three injection paths into this node's prompt have now been found and all
+    three are the same bug: a file's contents, the model's control tokens, and
+    the model's ordinary prose. Anything that can reach the prompt is untrusted,
+    including the node's own words.
+
+    Cut rather than strip: a marker means the model has stopped answering and
+    started reciting its own scaffold, and what follows is never the answer.
+    """
+    if not text:
+        return text, False
+    first = -1
+    for tag in _BLOCK_MARKERS:
+        i = text.find(tag)
+        if i >= 0 and (first < 0 or i < first):
+            first = i
+    # A memory line's tag counts only INSIDE an answer. At its very front it
+    # is the leading artefact strip_leading_artefacts takes off, with the
+    # answer standing behind it; cutting there would leave nothing.
+    for tag in _TAG_MARKERS:
+        i = text.find(tag, 1)
+        # (a correction that may yet say what is true is not cut while its
+        # bracket is open: unwrap_corrections decides it when it closes)
+        while i >= 0 and _undecided_correction(text[i:]):
+            i = text.find(tag, i + 1)
+        if i >= 0 and (first < 0 or i < first):
+            first = i
+    if first < 0:
+        return text, False
+    return text[:first].rstrip(), True
+
+
+# The tags of a remembered line (logic/provenance.py), said by the MODEL in
+# the middle of an answer: the same recitation, and the same cut. Read on a
+# copy of a unit - asked to add a to-do, she wrote
+#
+#   "Your updated to-do is: / - Added to / - [Passed a check in training]
+#    [Episode] Trainer: Add a to-do: water the seedlings, round 2 | AI: ..."
+#
+# a line of her memory block, tag and all, as if it were the list. Stored,
+# that answer would carry a tag INSIDE a remembered line the next time it
+# came back - a turn that tags itself. Each is cut at its opening words, so
+# a correction is cut whatever it goes on to say. "[Known]" and "[Steward
+# told you]" stay out, as before: said back, the first is a true line of the
+# build and the second is still an attribution.
+_TAG_MARKERS = (
+    "[Episode]",
+    "[Passed a check in training]",
+    "[Marked right by your steward]",
+    "[A right assumption of yours",
+    "[Unverified - an earlier answer of yours",
+    "[Corrected by your steward",
+    "[Corrected in training",
+    "[Fiction, written at your request",
+    "[COG - your reflection",
+)
+_BLOCK_MARKERS = (_MEM_OPEN, _MEM_CLOSE, _WS_OPEN, _WS_CLOSE)
+
+# A TAG WORD ON ITS OWN, said in the middle of a sentence.
+# Two four-hour runs of the training loop on a unit: of her 172
+# answers the check failed, 75 were right but for one of these -
+#
+#   "A [Known] cartridge is one fixed build, hashed into a single id..."
+#   "A [Corrected] cartridge is one fixed build..."
+#
+# and it grew: none in the first rounds, two to seven a round by the second
+# run, because every such answer was "corrected" and the correction put one
+# more tag in front of her. 58 of them are in her memory. This is not
+# recitation - the sentence goes on and is the answer - so it is not CUT; the
+# word is TAKEN OUT and the sentence left standing. Matched whatever the
+# capitals. "[Unknown]" is not one of ours (she writes it where she does not
+# know) and "[Steward told you]" is still an attribution: both are left.
+_BARE_TAGS = ("[Known]", "[Corrected]", "[Correction]", "[Unverified]", "[Fiction]",
+              "[Passed]", "[Pattern]", "[Steward told me]", "[Assumption]",
+              # Her own answer ending "... 40 liters of water. [A right
+              # assumption]" (copy check Oct 2026): the mark is
+              # her steward's to give, never hers to give herself.
+              "[A right assumption]", "[Right assumption]")
+_BARE_TAG = re.compile(
+    r"\[(?:known|corrected|correction|unverified|fiction|passed|pattern|steward told me|assumption|"
+    r"a right assumption|right assumption)\][ \t]?"
+    # the shortened forms TAG_NOTE names: "[Fiction, ...]"
+    r"|\[(?:fiction|unverified|corrected|a right assumption)[^\]\n]{0,40}(?:\.\.\.|…)\][ \t]?"
+    # the COG tag, whole or shortened: hers to be shown, not to say
+    r"|\[cog\b[^\]\n]{0,80}\][ \t]?"
+    # the same tags in round brackets. Said back on the units,
+    # "(A right assumption of yours - ...)" closing an answer.
+    r"|\((?:a right assumption of yours|unverified -|corrected (?:in training|by your steward|by my steward)"
+    r"|cog -|passed a check)[^)\n]{0,80}\)[ \t]?",
+    re.I)
+
+# What can still become one of those while a stream is arriving. The hold below used to know only the whole tags of _BARE_TAGS, so
+# "[COG - Memory line]" and "[Unverified - ...]" went out to the reader a
+# piece at a time - nothing in "[COG - Mem" was a prefix of a tag it knew -
+# and by the time the bracket closed the front had been sent. Seen on both
+# units, and in 249 of a unit's and 415 of a unit's training
+# answers (14-16 Oct). Each entry: the opening words, and how long the whole
+# bracket may run.
+_TAG_OPENINGS = (
+    ("[cog", 90), ("[fiction", 56), ("[unverified", 56), ("[corrected", 56),
+    ("[a right assumption", 64),
+    ("(a right assumption of yours", 110), ("(unverified -", 96),
+    ("(corrected in training", 104), ("(corrected by your steward", 108),
+    ("(corrected by my steward", 106), ("(cog -", 88), ("(passed a check", 98),
+)
+_LONGEST_OPENING = max(n for _, n in _TAG_OPENINGS)
+
+
+def _could_be_tag(tail: str) -> bool:
+    """`tail` starts at "[" or "(" and has not closed: could it still become a
+    tag that strip_bare_tags takes out?"""
+    low = tail.lower()
+    if "\n" in low or "]" in low or ")" in low:
+        return False
+    for opening, longest in _TAG_OPENINGS:
+        if opening.startswith(low) or (low.startswith(opening) and len(low) < longest):
+            return True
+    return False
+
+
+def _tag_list(span: str):
+    """"[Fiction, Unverified - ..., Corrected - ...]" - a LIST of tag names in
+    one bracket, which is how she answers "Which tags can a memory carry?". The names
+    are the answer: returned plain, or None when the bracket is not a list."""
+    inner = span.strip()[1:-1]
+    parts = [p.strip() for p in re.split(r",|\bor\b|\band\b", inner) if p.strip()]
+    if len(parts) < 2:
+        return None
+    names = []
+    for p in parts:
+        m = re.match(r"(fiction|unverified|corrected|a right assumption)\b[\s\-–—.…]*", p, re.I)
+        if not m or m.end() != len(p):
+            return None
+        names.append(m.group(1).lower())
+    return ", ".join(dict.fromkeys(names))
+
+
+def strip_bare_tags(text: str, start: int = 0):
+    """(text, n): the tag words in text[start:] taken out. What stands before
+    `start` has gone to the reader already and is not touched; the hold in
+    marker_prefix_len is what keeps a tag from being half sent."""
+    if not text or ("[" not in text[start:] and "(" not in text[start:]):
+        return text, 0
+    head, tail = text[:start], text[start:]
+    whole = head + tail
+    def take(m):
+        # A list of tag names in one bracket is the answer, said plain.
+        listed = _tag_list(m.group(0))
+        if listed:
+            return listed + (" " if m.group(0).endswith((" ", "\t")) else "")
+        # A tag word NAMED, not recited: "the answer is marked
+        # [Unverified]." Taken out, the right answer read "marked." - and
+        # was failed (run 4). After "marked", "tagged", "labelled",
+        # "called", "as", "with" or "the", the word stays, without brackets.
+        i = start + m.start()
+        before = whole[max(0, i - 12):i].lower()
+        # (only what comes BEFORE the tag is read: in a stream what follows
+        # it has not arrived when the tag is decided, and the stored answer
+        # must be the shown one)
+        # A LIST of tag words is named too (the audit of 10
+        # Oct): "can carry the tags: fiction, unverified, and [Corrected]."
+        # read "fiction, unverified, and." - and was failed, in eco.tags, on
+        # a unit's runs 7-13. After a comma, "and", "or", "like" or "tags:"
+        # the word stays.
+        if (re.search(r"\b(?:marked|tagged|labell?ed|called|as|with|the|and|or|like|tags?:?)\s*$", before)
+                or re.search(r",\s*$", before)):
+            word = m.group(0).strip()[1:-1].lower()
+            return word + (" " if m.group(0).endswith((" ", "\t")) else "")
+        return ""
+    tail, n = _BARE_TAG.subn(take, tail)
+    if n and (head or tail):
+        # "a  cartridge" where the word stood between two spaces
+        tail = re.sub(r"(?<=\S) {2,}(?=\S)", " ", tail)
+    return head + tail, n
+
+
+# A CORRECTION SAID INSIDE AN ANSWER. Her prompt tells her:
+# "Where a correction says what is true, answer with that." Read on a copy of
+# a unit, with the memory block she was shown beside the answer:
+#
+#   shown:  - [Corrected in training - what is true: AetherSeed AS is a
+#             Norwegian company, founded in 2026.] [Episode] Trainer: Which
+#             country is AetherSeed from?
+#   asked:  Which country is AetherSeed from?
+#   said:   "AetherSeed AS is from [Corrected in training - what is true:
+#            AetherSeed AS is a Norwegian company..."
+#   shown to the reader, and stored: "AetherSeed AS is from"
+#
+# She did what the line asks, wrapper and all, and the cut of 64d took the
+# truth away with the wrapper. So a correction that says what is true is not
+# cut: its wrapper is taken off and what is true is left standing in the
+# sentence. The stream holds it back until its bracket closes. A correction
+# that only says "it is wrong" carries nothing to keep and is cut as before,
+# and so is whatever line of memory she goes on to recite after the tag.
+_SAID_TRUE = ("[Corrected in training - what is true: ",
+              "[Corrected by your steward - what is true: ")
+_SAID_MAX = 320
+_SAID_WHOLE = re.compile(
+    r"\[Corrected (?:in training|by your steward) - what is true: ([^\]\n]{1,300})\]")
+
+
+def _undecided_correction(tail: str) -> bool:
+    """`tail` begins at a "[": could it still become a correction that says
+    what is true, and has its bracket not closed yet?"""
+    for o in _SAID_TRUE:
+        if o.startswith(tail):
+            return True
+        if (tail.startswith(o) and "]" not in tail and "\n" not in tail
+                and len(tail) < _SAID_MAX):
+            return True
+    return False
+
+
+def open_correction(text: str) -> int:
+    """Where, inside text, a correction's tag stands whose bracket has not
+    closed yet - or -1. Never at the very front: that is the head's."""
+    i = (text or "").find("[Corrected ", 1)
+    while i >= 0:
+        if _undecided_correction(text[i:]):
+            return i
+        i = text.find("[Corrected ", i + 1)
+    return -1
+
+
+_SMALL_WORDS = frozenset(
+    "the a an is are was were be been am do does did of to in on at for from with by and or "
+    "not no you your yours i my me it its this that what which who whom whose where when why "
+    "how can could will would should may have has had there here about as if than then so "
+    "tell say said name give show please".split())
+
+
+def _content(text: str):
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) > 2 and w not in _SMALL_WORDS}
+
+
+def bears_on(truth: str, question) -> bool:
+    """Does what a correction says is true bear on the question asked? One
+    word of substance in common is enough. With no question to go by, yes."""
+    if question is None:
+        return True
+    return bool(_content(truth) & _content(question))
+
+
+def unwrap_corrections(text: str, start: int = 0, ending: bool = False, question=None):
+    """(text, n): each correction that says what is true, said inside
+    text[max(start, 1):], taken out of its wrapper. With `ending`, one whose
+    bracket never closed is treated the same, as far as it got: the stream is
+    over and nothing more will come.
+
+    WHAT IS TRUE STAYS ONLY IF IT BEARS ON THE QUESTION. Read on a copy - asked which country AetherSeed is from, she said
+
+        "Aether Seed AS is from [Corrected in training - what is true: A
+         level I earn opens its tools at my next restart, not at once.]
+         Norway. However..."
+
+    the tag of the NEXT line of her memory, about another question. Its
+    words left standing made "is from A level I earn opens its tools...
+    Norway". So a correction of something else is taken out whole, and the
+    sentence closes over it: "Aether Seed AS is from Norway." """
+    lo = max(start, 1)
+    if not text or "[Corrected " not in text[lo:]:
+        return text, 0
+    head, tail = text[:lo], text[lo:]
+
+    def put(m):
+        truth = m.group(1).strip()
+        return truth if bears_on(truth, question) else ""
+
+    tail, n = _SAID_WHOLE.subn(put, tail)
+    whole = head + tail
+    if ending:
+        i = open_correction(whole)
+        if i >= lo:
+            rest = whole[i:]
+            for o in _SAID_TRUE:
+                if rest.startswith(o) and rest[len(o):].strip():
+                    truth = rest[len(o):]
+                    whole, n = whole[:i] + (truth if bears_on(truth, question) else ""), n + 1
+                    break
+    if n:
+        # where a tag was taken out whole between two spaces
+        whole = whole[:lo] + re.sub(r"(?<=\S) {2,}(?=\S)", " ", whole[lo:])
+    return whole, n
+
+
+_MARKERS = _BLOCK_MARKERS + _TAG_MARKERS
+_HELD = _MARKERS + tuple(t.lower() for t in _BARE_TAGS)
+_MAX_MARKER = max(len(m) for m in _HELD)
+
+
+def marker_prefix_len(text: str) -> int:
+    """How many characters at the END of text could still be the start of a
+    scaffold marker - 0 when none could.
+
+    The mid-stream counterpart of opening_may_be_artefact. The marker cut
+    works on the accumulated text, so it fires only once the whole marker has
+    arrived, and a marker is several tokens. Measured 2026-09-21, with chunks
+    [" [END", " MEMORY", " CONTEXT", "]"] and no blank line before them: the
+    STORED answer was clean and the CLIENT received "[END MEMORY CONTEXT",
+    because every chunk but the last had gone out before the marker was
+    recognisable. The only test of it passed because its example had a blank
+    line first, so the paragraph stop fired and the marker path never ran.
+
+    A streaming caller withholds this many trailing characters until the next
+    chunk decides them, and drops them if the stream ends undecided. Only a
+    suffix beginning at "[" can count, so an answer with no brackets costs
+    nothing, and "[1]" is released as soon as the "1" arrives.
+    """
+    if not text:
+        return 0
+    # a correction whose bracket is still open is held from its "[" on
+    j = open_correction(text)
+    if j >= 0:
+        return len(text) - j
+    lo = max(0, len(text) - max(_MAX_MARKER, _LONGEST_OPENING) + 1)
+    for i in [k for k in range(lo, len(text)) if text[k] in "[("]:
+        tail = text[i:]
+        if tail[0] == "[":
+            # (a tag at the very front is the head's business, not a marker's)
+            if any(m.startswith(tail) and len(tail) < len(m)
+                   for m in (_MARKERS if i > 0 else _BLOCK_MARKERS)):
+                return len(tail)
+            # a tag word that may yet be taken out, wherever it stands
+            low = tail.lower()
+            if any(m.lower().startswith(low) and len(low) < len(m) for m in _BARE_TAGS):
+                return len(tail)
+        # a longer tag, or one in round brackets, still arriving
+        if _could_be_tag(tail):
+            return len(tail)
+    return 0
+
+
+def _split_block(text: str, open_tag: str, close_tag: str):
+    """Return (before, body, after) for a delimited block, or None.
+
+    Anchored to the LAST line-initial occurrence. Both markers appear as prose
+    inside the charter itself ("Use [WORKSPACE DATA] and [MEMORY CONTEXT] as
+    real"), and a naive find latches onto that mention and silently eats the
+    charter while reporting that it trimmed memory. The real blocks are always
+    appended after the charter and always start a line.
+    """
+    i = -1
+    search_from = len(text)
+    while True:
+        k = text.rfind(open_tag, 0, search_from)
+        if k == -1:
+            break
+        if k == 0 or text[k - 1] == "\n":       # line-initial: a real block
+            i = k
+            break
+        search_from = k
+    if i == -1:
+        return None
+    j = text.find(close_tag, i + len(open_tag))
+    if j == -1:
+        return None
+    return text[:i], text[i + len(open_tag):j], text[j + len(close_tag):]
+
+
+def enforce_budget(counter: TokenCounter,
+                   messages: list,
+                   ceiling: int | None = None,
+                   margin: int = SAFETY_MARGIN) -> tuple:
+    """Make an assembled message list fit. Returns (messages, BudgetReport).
+
+    Drops, in order: oldest history turns, then memory entries, then workspace
+    data (truncated and explicitly marked). Never drops the system message or
+    the final user turn — if those alone do not fit, raises PromptTooLarge so
+    the caller can say something honest instead of emitting an empty reply.
+
+    The ceiling is the counter's model's, unless one is given; a model whose
+    ceiling has not been measured raises CeilingUnmeasured and nothing is sent.
+    """
+    if ceiling is None:
+        ceiling = getattr(counter, "ceiling", PREFILL_CEILING)
+        if ceiling is None:
+            raise CeilingUnmeasured(
+                f"The prompt ceiling of {getattr(counter, 'model', '?')} has not "
+                f"been measured on this hardware. Measure it "
+                f"N tokens work, N+1 fail) before serving this model.")
+    report = BudgetReport(ceiling=ceiling)
+    budget = ceiling - margin
+    msgs = [dict(m) for m in messages]
+
+    report.total_tokens = counter.count_messages(msgs)
+    if report.total_tokens <= budget:
+        return msgs, report
+
+    sys_idx = next((i for i, m in enumerate(msgs) if m.get("role") == "system"), None)
+
+    # 1. Oldest history first. Keep the system message and the final turn.
+    def droppable():
+        idxs = [i for i, m in enumerate(msgs) if m.get("role") != "system"]
+        return idxs[:-1]           # everything but the last turn
+
+    while counter.count_messages(msgs) > budget and droppable():
+        i = droppable()[0]
+        was_question = msgs[i].get("role") == "user"
+        del msgs[i]
+        report.history_turns_dropped += 1
+        # A question goes with its answer: an
+        # answer left at the front with nothing it answers is a reply she
+        # would read as said to nobody.
+        rest = droppable()
+        if was_question and rest and rest[0] == i and msgs[i].get("role") == "assistant":
+            del msgs[i]
+            report.history_turns_dropped += 1
+
+    # 2. Memory entries, from the least relevant (the tail of the block).
+    if sys_idx is not None:
+        while counter.count_messages(msgs) > budget:
+            parts = _split_block(msgs[sys_idx]["content"], _MEM_OPEN, _MEM_CLOSE)
+            if parts is None:
+                break
+            before, body, after = parts
+            lines = [l for l in body.split("\n") if l.strip()]
+            if lines:
+                lines.pop()
+                report.memory_entries_dropped += 1
+            if not lines:
+                # The last line gone, the block goes with it:
+                # it used to stay behind empty - "[MEMORY CONTEXT]" over
+                # nothing - whenever popping its last line was what made
+                # the prompt fit.
+                msgs[sys_idx]["content"] = before.rstrip() + after
+                break
+            msgs[sys_idx]["content"] = (
+                before + _MEM_OPEN + "\n" + "\n".join(lines) + "\n" + _MEM_CLOSE + after
+            )
+
+    # 3. Workspace data last, truncated and marked so the model cannot mistake
+    #    a partial read for a complete one.
+    if sys_idx is not None and counter.count_messages(msgs) > budget:
+        parts = _split_block(msgs[sys_idx]["content"], _WS_OPEN, _WS_CLOSE)
+        if parts is not None:
+            before, body, after = parts
+            original = len(body)
+
+            def with_body(n):
+                b = (body[:n] + TRUNCATION_MARKER) if n > 0 else ""
+                if not b:
+                    return (before + after).rstrip()
+                return before + _WS_OPEN + b + _WS_CLOSE + after
+
+            lo, hi = 0, len(body)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                trial = [dict(m) for m in msgs]
+                trial[sys_idx]["content"] = with_body(mid)
+                if counter.count_messages(trial) <= budget:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            msgs[sys_idx]["content"] = with_body(lo)
+            report.workspace_chars_dropped = original - lo
+            if lo == 0:
+                report.notes.append("workspace data dropped entirely: no room left")
+
+    report.total_tokens = counter.count_messages(msgs)
+    report.trimmed = bool(report.history_turns_dropped
+                          or report.memory_entries_dropped
+                          or report.workspace_chars_dropped)
+
+    if report.total_tokens > ceiling:
+        raise PromptTooLarge(
+            f"Prompt is {report.total_tokens} tokens after dropping everything "
+            f"droppable; ceiling is {ceiling}. The system prompt and the user's "
+            f"turn do not fit on their own. Tell the user the request is too "
+            f"large — do not send this, it would return an empty reply."
+        )
+    return msgs, report

@@ -1,0 +1,609 @@
+"""One turn through the real proxy and the real memory store.
+
+    python3 -m unittest test_memory_turn -v
+
+The REAL ProxyHandler and the REAL AetherRoot - in a throwaway directory - in
+front of a scripted model, so what is asserted is what the model was sent,
+what the reader received and what the store kept:
+
+  - a declared speaker is named in the prompt, so "you told me" can be right;
+  - a fact the steward told the node reaches the prompt word for word, with the
+    note that explains its tag, and the answer's tag says which fact it was;
+  - a turn that could not be stored is said, counted and recorded - until step
+    37 it was answered, shown, and silently forgotten;
+  - a ring keeps its chosen part and, labelled, a sentence in the model's own
+    words, which is withheld when it names a source it could not have had;
+  - the ring tree route shows all of it;
+  - tools/reading_soak.py runs against it, and what it reads stays factual.
+"""
+import contextlib
+import http.client
+import http.server
+import json
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import types
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "tools"))
+
+# Import the proxy without building a real store in ~/.aetherseed: its
+# module-level AetherRoot is stubbed for the import only (as test_reply does),
+# and every test puts a real one, in a temporary directory, in its place.
+_NAMES = {"aetherroot": ["AetherRoot"], "aetherspark": ["AetherSpark", "SafetyGate"],
+          "trust_evolution": ["TrustEvolution"],
+          "intent_detection": ["detect_intent", "execute_intent", "in_workspace"]}
+_SAVED = {n: sys.modules.get(n) for n in _NAMES}
+for _name, _attrs in _NAMES.items():
+    _m = types.ModuleType(_name)
+    for _a in _attrs:
+        if _a == "in_workspace":      # used in a `with`: a stub must be a context manager
+            setattr(_m, _a, lambda *x, **k: contextlib.nullcontext())
+            continue
+        setattr(_m, _a, lambda *x, **k: types.SimpleNamespace(
+            get_trust_level_name=lambda: "Seed", retrieve_context=lambda *_, **__: "",
+            store_interaction=lambda *_, **__: None,
+            get_status=lambda: {"episodes": 0, "willingness_mean": 0.0}))
+    sys.modules[_name] = _m
+sys.modules["aetherspark"].TRUST_PERMISSIONS = {"observer": [1], "reader": [1, 2]}
+import proxy  # noqa: E402
+for _name, _mod in _SAVED.items():
+    if _mod is None:
+        sys.modules.pop(_name, None)
+    else:
+        sys.modules[_name] = _mod
+
+import aetherroot  # noqa: E402  (the real one)
+import reading_soak  # noqa: E402
+from logic.facts import FACT_TAG, FACT_NOTE  # noqa: E402
+from logic.rings import OWN_WORDS_LABEL, RING_TAG  # noqa: E402
+from logic.provenance import detect_mode, FACTUAL  # noqa: E402
+
+TEXTS = os.path.join(HERE, "tools", "texts")
+RING_ASK = "Below is what one ring of your memory holds"   # logic/rings.py
+
+SCRIPT = {"chunks": ["Noted", "."], "own_words": ["The", " turns", " were", " verses", "."],
+          "requests": []}
+
+
+class _Model(http.server.BaseHTTPRequestHandler):
+    """A scripted hailo-ollama: the own-words question gets its own answer."""
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+        SCRIPT["requests"].append(req)
+        system = " ".join(m["content"] for m in req["messages"] if m["role"] == "system")
+        chunks = SCRIPT["own_words"] if RING_ASK in system or "one ring of your memory" in system \
+            else SCRIPT["chunks"]
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        for c in chunks:
+            self.wfile.write(json.dumps({"model": "llama3.2:3b", "done": False,
+                                         "message": {"role": "assistant", "content": c}}
+                                        ).encode() + b"\n")
+        self.wfile.write(json.dumps({"model": "llama3.2:3b", "done": True,
+                                     "done_reason": "stop",
+                                     "message": {"role": "assistant", "content": ""}}
+                                    ).encode() + b"\n")
+
+
+class _Trust:
+    def auto_score_response(self, *a, **k):
+        pass
+
+    def get_trust_level_name(self):
+        return "Seed"
+
+
+class _Proxy(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Model)
+        threading.Thread(target=cls.model.serve_forever, daemon=True).start()
+        cls.saved = {k: getattr(proxy, k) for k in (
+            "HAILO_OLLAMA_URL", "token_counter", "enforce_budget", "root", "trust",
+            "detect_intent", "PROVENANCE_LOG", "COMPANION_FILE", "SOFT_STOP_TOKENS",
+            "APPROVALS_FILE", "CONTROL_LOG")}
+        proxy.HAILO_OLLAMA_URL = "http://127.0.0.1:%d" % cls.model.server_address[1]
+        proxy.token_counter = lambda *a, **k: None
+        proxy.enforce_budget = lambda c, m: (m, types.SimpleNamespace(trimmed=False))
+        proxy.trust = _Trust()
+        proxy.detect_intent = lambda *_: None
+        proxy.SOFT_STOP_TOKENS = 0
+        cls.srv = proxy.ThreadedHTTPServer(("127.0.0.1", 0), proxy.ProxyHandler)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.url = "http://127.0.0.1:%d" % cls.srv.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        cls.model.shutdown()
+        for k, v in cls.saved.items():
+            setattr(proxy, k, v)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="turn-")
+        rootdir = os.path.join(self.tmp, "aetherroot")
+        os.makedirs(rootdir)
+        config = dict(aetherroot.DEFAULT_CONFIG)
+        # Small rings, so a test can close one: the first at 10 factual turns
+        # waiting, five turns each.
+        config.update(consolidation_threshold=10, consolidation_batch=5)
+        with open(os.path.join(rootdir, "config.json"), "w") as f:
+            json.dump(config, f)
+        proxy.root = aetherroot.AetherRoot(rootdir)
+        proxy.PROVENANCE_LOG = os.path.join(self.tmp, "provenance.log")
+        proxy.COMPANION_FILE = os.path.join(self.tmp, "companion.json")
+        # a refused write is filed as a request to the steward:
+        # each test has its own queue and its own control log
+        proxy.APPROVALS_FILE = os.path.join(self.tmp, "approvals.json")
+        proxy.CONTROL_LOG = os.path.join(self.tmp, "control.log")
+        proxy.STORE_FAILURES = 0
+        SCRIPT["requests"].clear()
+        SCRIPT["chunks"] = ["Noted", "."]
+        SCRIPT["own_words"] = ["The", " turns", " were", " verses", "."]
+
+    def tearDown(self):
+        self.wait_for_writer()
+        proxy.root.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def wait_for_writer(self):
+        for _ in range(200):
+            if not proxy._OWN_WORDS_LOCK.locked():
+                return
+            time.sleep(0.02)
+
+    def ask(self, text, speaker=None, reading=None):
+        body = {"model": "llama3.2:3b", "stream": True,
+                "messages": [{"role": "user", "content": text}]}
+        if speaker is not None:
+            body["speaker"] = speaker
+        if reading is not None:
+            body["reading"] = reading
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=30)
+        c.request("POST", "/api/chat", body=json.dumps(body),
+                  headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        raw = r.read()
+        c.close()
+        lines = [json.loads(l) for l in raw.decode().split("\n") if l.strip()]
+        meta = next((l["aetherseed"] for l in lines if l.get("done")), None)
+        return r.status, "".join((l.get("message") or {}).get("content", "") for l in lines), meta
+
+    def get(self, path):
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=30)
+        c.request("GET", path)
+        r = c.getresponse()
+        body = json.loads(r.read())
+        c.close()
+        return body
+
+    def system_sent(self):
+        req = [r for r in SCRIPT["requests"]
+               if not any("one ring of your memory" in m["content"] for m in r["messages"])][-1]
+        return " ".join(m["content"] for m in req["messages"] if m["role"] == "system")
+
+    def record(self):
+        for _ in range(100):
+            if os.path.exists(proxy.PROVENANCE_LOG):
+                with open(proxy.PROVENANCE_LOG) as f:
+                    lines = [json.loads(l) for l in f if l.strip()]
+                if lines:
+                    return lines
+            time.sleep(0.02)
+        return []
+
+
+class _RecordingTrust(_Trust):
+    def __init__(self):
+        self.calls = []
+
+    def auto_score_response(self, *a, **k):
+        self.calls.append(k)
+
+
+class TestWhatTheScorerIsTold(_Proxy):
+    """The scorer decides whether a decline earns from what was in front of
+    the model: the proxy must tell it - the steward's facts and
+    the rings in the prompt, and whether the turn was a passage read to it."""
+
+    def setUp(self):
+        super().setUp()
+        self.trust = _RecordingTrust()
+        self.saved_trust, proxy.trust = proxy.trust, self.trust
+
+    def tearDown(self):
+        proxy.trust = self.saved_trust
+        super().tearDown()
+
+    def told(self):
+        for _ in range(100):
+            if self.trust.calls:
+                return self.trust.calls[-1]
+            time.sleep(0.02)
+        self.fail("the scorer was never called")
+
+    def test_nothing_in_front_of_it(self):
+        self.ask("How many came to the workshop?", speaker="Reader")
+        k = self.told()
+        self.assertEqual((k["shown_facts"], k["shown_rings"], k["reading"]), (0, 0, False))
+        self.assertIsInstance(k["shown_known"], int)
+
+    def test_a_line_it_knows_in_front_of_it(self):
+        # 48e: the scorer must hear about the curriculum's lines
+        self.ask("Can you go on the internet?")
+        self.assertIn("[Known]", self.system_sent())
+        self.assertGreaterEqual(self.told()["shown_known"], 1)
+
+    def test_an_steward_fact_in_front_of_it(self):
+        proxy.root.store.add_fact(
+            "The dove came back to him at evening and, behold, in her mouth was a "
+            "freshly plucked olive leaf.", "Genesis 8:11")
+        self.ask("What did the dove bring back in the evening?", speaker="Reader")
+        self.assertIn(FACT_TAG, self.system_sent())
+        self.assertEqual(self.told()["shown_facts"], 1)
+
+    def test_a_passage_declared_as_reading(self):
+        self.ask("Song of Songs 3:3: \u201cHave you seen him whom my soul loves?\u201d",
+                 speaker="Reader", reading=True)
+        self.assertIs(self.told()["reading"], True)
+        self.assertIs(self.record()[-1]["reading"], True)
+
+    def test_only_true_declares_reading(self):
+        self.ask("Who is this?", speaker="Reader", reading="yes")
+        self.assertIs(self.told()["reading"], False)
+
+
+class TestWhoIsSpeaking(_Proxy):
+
+    def test_a_declared_speaker_is_named_in_the_prompt(self):
+        self.ask("Song of Songs 2:1: I am a rose of Sharon, a lily of the valleys.",
+                 speaker="Reader")
+        self.assertIn("You are talking with Reader, not your steward.", self.system_sent())
+
+    def test_the_steward_is_not_announced(self):
+        self.ask("Good morning.")
+        self.assertNotIn("You are talking with", self.system_sent())
+
+
+class TestStewardFacts(_Proxy):
+
+    def setUp(self):
+        super().setUp()
+        self.fid = proxy.root.store.add_fact(
+            "The dove came back to him at evening and, behold, in her mouth was a freshly "
+            "plucked olive leaf. So Noah knew that the waters were abated from the earth.",
+            "Genesis 8:11")
+
+    def test_the_fact_its_note_and_its_source_travel_together(self):
+        status, _, meta = self.ask("What did the dove have in her mouth?", speaker="Reader")
+        self.assertEqual(status, 200)
+        system = self.system_sent()
+        self.assertIn(FACT_TAG + " The dove came back to him at evening", system)
+        self.assertIn(FACT_NOTE, system)
+        self.assertEqual((meta["facts_used"], meta["fact_sources"]), (1, ["Genesis 8:11"]))
+        self.assertEqual(self.record()[-1]["facts_used"], [self.fid])
+
+    def test_a_fact_that_did_not_fit_is_not_claimed(self):
+        # The answer's tag says what was in the prompt, not what was ranked.
+        proxy.root.config["max_context_chars"] = 60
+        _, _, meta = self.ask("What did the dove have in her mouth?", speaker="Reader")
+        self.assertNotIn(FACT_TAG, self.system_sent())
+        self.assertNotIn(FACT_NOTE, self.system_sent())
+        self.assertEqual((meta["facts_used"], meta["fact_sources"]), (0, []))
+
+    def test_no_fact_no_note(self):
+        _, _, meta = self.ask("Good morning.")
+        self.assertNotIn(FACT_NOTE, self.system_sent())
+        self.assertEqual((meta["facts_used"], meta["fact_sources"]), (0, []))
+
+
+class TestWhatItSaysTheStewardToldIt(_Proxy):
+    """an answer that credits the
+    steward with no steward fact shown, or with content that is not in what was
+    shown, is tagged and kept out of memory."""
+
+    def setUp(self):
+        super().setUp()
+        proxy.root.store.add_fact(
+            "The dove came back to him at evening and, behold, in her mouth was a freshly "
+            "plucked olive leaf. So Noah knew that the waters were abated from the earth.",
+            "Genesis 8:11")
+
+    def answer(self, reply, question="What did the dove have in her mouth?"):
+        SCRIPT["chunks"] = [reply]
+        status, text, meta = self.ask(question, speaker="Reader")
+        self.assertEqual(status, 200)
+        return meta, proxy.root.store.get_all_episodes()[-1], self.record()[-1]
+
+    def test_the_stewards_words_are_remembered(self):
+        meta, ep, rec = self.answer("My steward told me that the dove came back at evening "
+                                    "with a freshly plucked olive leaf in her mouth.")
+        self.assertEqual((meta["steward_credited"], meta["steward_backed"]), (True, True))
+        self.assertEqual((meta["mode"], ep["mode"], rec["steward_backed"]),
+                         ("factual", "factual", True))
+
+    def test_a_figure_he_never_gave_is_kept_out(self):
+        meta, ep, rec = self.answer("My steward told me that the dove came back after 40 days "
+                                    "with an olive leaf.")
+        self.assertEqual((meta["steward_credited"], meta["steward_backed"]), (True, False))
+        self.assertIn("40", meta["steward_why"])
+        self.assertEqual((meta["mode"], ep["mode"], rec["steward_backed"]),
+                         ("unverified", "unverified", False))
+
+    def test_words_he_never_gave_come_back_only_under_their_tag(self):
+        # Until they never came back. Nothing is set aside now:
+        # the answer returns, tagged, and outside the context that counts as
+        # evidence. The attribution check still compares an answer that
+        # credits the steward with HIS facts as shown - never with this line.
+        from logic.provenance import UNVERIFIED_LABEL
+        meta, ep, _ = self.answer("My steward told me that the dove brought a golden ring from "
+                                  "the mountains of Ararat.")
+        self.assertEqual((meta["steward_backed"], ep["mode"]), (False, "unverified"))
+        report = {}
+        # asked again in its own words: since a turn comes back
+        # by the words of its question
+        ctx = proxy.root.retrieve_context("What did the dove have in her mouth?", report=report)
+        line = next(l for l in ctx.split("\n") if "golden ring" in l)
+        self.assertTrue(line.startswith("- " + UNVERIFIED_LABEL), line)
+        self.assertNotIn("golden ring", report["trusted_context"])
+        self.assertNotIn("golden ring", " ".join(report["fact_texts"]))
+
+    def test_no_fact_shown_is_nothing_behind_it(self):
+        meta, ep, _ = self.answer("My steward told me that it will rain tomorrow.",
+                                  question="Good morning.")
+        self.assertEqual((meta["facts_used"], meta["steward_backed"]), (0, False))
+        self.assertEqual(meta["steward_why"], "no steward fact was shown")
+        self.assertEqual(ep["mode"], "unverified")
+
+    def test_an_answer_that_does_not_credit_the_steward_is_untouched(self):
+        meta, ep, rec = self.answer("The dove had an olive leaf in her mouth.")
+        self.assertEqual((meta["steward_credited"], meta["steward_backed"], meta["steward_why"]),
+                         (False, None, ""))
+        self.assertEqual((ep["mode"], rec["steward_credited"]), ("factual", False))
+
+
+class TestAFailedStore(_Proxy):
+
+    def test_it_is_said_counted_and_recorded(self):
+        def broken(*a, **k):
+            raise OSError("disk full")
+        proxy.root.store_interaction = broken
+        status, text, meta = self.ask("What is the capital of Norway?")
+        self.assertEqual((status, text), (200, "Noted."), "the answer still reaches the reader")
+        self.assertEqual(self.record()[-1]["remembered"], False)
+        self.assertEqual(proxy.STORE_FAILURES, 1)
+        self.assertEqual(self.get("/aetherseed/status")["store_failures"], 1)
+
+    def test_a_stored_turn_says_so(self):
+        self.ask("What is the capital of Norway?")
+        self.assertEqual(self.record()[-1]["remembered"], True)
+        self.assertEqual(proxy.STORE_FAILURES, 0)
+
+
+class TestRings(_Proxy):
+
+    def read_verses(self, n):
+        with open(os.path.join(TEXTS, "song-of-songs.web.jsonl"), encoding="utf-8") as f:
+            song = [json.loads(l) for l in f]
+        for v in song[:n]:
+            self.ask(reading_soak.verse_message(v), speaker="Reader")
+
+    def rings(self):
+        for _ in range(250):
+            d = self.get("/aetherseed/rings")
+            if d["rings"] and all(r["own_words"] or r["own_words_note"] for r in d["rings"]):
+                return d
+            time.sleep(0.02)
+        return self.get("/aetherseed/rings")
+
+    def test_a_ring_keeps_what_was_said_and_labels_what_was_written(self):
+        self.read_verses(10)
+        d = self.rings()
+        (ring,) = d["rings"]
+        self.assertEqual(ring["ring"], 1)
+        self.assertTrue(ring["content"].startswith("themes: "), ring["content"])
+        self.assertIn("e.g. Reader: “Song of Songs 1:", ring["content"])
+        self.assertEqual([t["speaker"] for t in ring["turns"]], ["Reader"] * 5)
+        self.assertEqual(ring["own_words"], "The turns were verses.")
+        # and that is how the model will see it
+        ctx = proxy.root.retrieve_context("Song of Songs 1:2: love better than wine")
+        self.assertIn(RING_TAG + " 1 · themes: ", ctx)
+        self.assertIn(OWN_WORDS_LABEL + " The turns were verses.", ctx)
+
+    def test_a_sentence_naming_a_source_it_never_had_is_withheld(self):
+        SCRIPT["own_words"] = ["These", " verses", " are", " at", " https://example.org/song", "."]
+        self.read_verses(10)
+        (ring,) = self.rings()["rings"]
+        self.assertEqual(ring["own_words"], "")
+        self.assertTrue(ring["own_words_note"].startswith("withheld"), ring["own_words_note"])
+        ctx = proxy.root.retrieve_context("Song of Songs 1:2: love better than wine")
+        self.assertNotIn("example.org", ctx)
+
+    def test_the_tree_route_counts_what_is_growing(self):
+        self.read_verses(11)
+        d = self.rings()
+        self.assertEqual(len(d["rings"]), 1)
+        self.assertEqual((d["growing"]["count"], d["growing"]["of"]), (1, 5))
+
+
+class TestReadingSoak(_Proxy):
+
+    def test_a_smoke_run_reads_asks_and_resumes(self):
+        with open(os.path.join(TEXTS, "genesis.web.jsonl"), encoding="utf-8") as f:
+            for v in (json.loads(l) for l in f):
+                proxy.root.store.add_fact(v["text"], v["ref"])
+        d = os.path.join(self.tmp, "soak")
+        self.assertEqual(reading_soak.main(["--dir", d, "--unit", self.url, "--smoke",
+                                            "--pause", "0"]), 0)
+        with open(os.path.join(d, "soak.jsonl"), encoding="utf-8") as f:
+            turns = [json.loads(l) for l in f if '"kind": "status"' not in l]
+        self.assertEqual([t["kind"] for t in turns],
+                         ["intro", "verse", "verse", "verse", "probe_fact"])
+        self.assertEqual([t["failures"] for t in turns], [[]] * 5)
+        probe = turns[-1]
+        self.assertEqual(probe["probe"], "g01")
+        self.assertIn("shown", probe["score"])
+        eps = proxy.root.store.get_all_episodes()
+        self.assertEqual({(e["speaker"], e["mode"]) for e in eps}, {("Reader", FACTUAL)})
+        # again: no second introduction, and the reading carries on at 1:4
+        reading_soak.main(["--dir", d, "--unit", self.url, "--smoke", "--pause", "0"])
+        with open(os.path.join(d, "soak.jsonl"), encoding="utf-8") as f:
+            turns = [json.loads(l) for l in f if '"kind": "status"' not in l]
+        self.assertEqual([t["kind"] for t in turns].count("intro"), 1)
+        self.assertEqual(turns[5]["ref"], "Song of Songs 1:4")
+        self.assertEqual(turns[-1]["probe"], "g02")
+        with open(os.path.join(d, "summary.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["turns"]["verse"], 6)
+
+
+class TestReadingLuke(_Proxy):
+    """The Gospel of Luke, read to the Qwen trial: the verses are Luke's, each declared as a passage read to it, and a
+    run cannot carry on a different reading's state."""
+
+    def test_a_luke_smoke_run_reads_luke_and_declares_its_verses(self):
+        d = os.path.join(self.tmp, "luke")
+        self.assertEqual(reading_soak.main(["--dir", d, "--unit", self.url, "--smoke",
+                                            "--pause", "0", "--reading", "luke",
+                                            "--hours", "8"]), 0)
+        with open(os.path.join(d, "soak.jsonl"), encoding="utf-8") as f:
+            turns = [json.loads(l) for l in f if '"kind": "status"' not in l]
+        self.assertEqual([t["kind"] for t in turns],
+                         ["intro", "verse", "verse", "verse", "probe_fact"])
+        self.assertEqual([t.get("ref") for t in turns[1:4]],
+                         ["Luke 1:1", "Luke 1:2", "Luke 1:3"])
+        self.assertIn("the Gospel of Luke", turns[0]["sent"])
+        self.assertIn("the next 8 hours", turns[0]["sent"])
+        rec = self.record()
+        self.assertEqual([r["reading"] for r in rec], [False, True, True, True, False])
+
+    def test_a_run_does_not_carry_on_another_readings_state(self):
+        d = os.path.join(self.tmp, "song")
+        reading_soak.main(["--dir", d, "--unit", self.url, "--smoke", "--pause", "0"])
+        self.assertEqual(reading_soak.main(["--dir", d, "--unit", self.url, "--smoke",
+                                            "--pause", "0", "--reading", "luke"]), 2)
+
+
+class TestTheReading(unittest.TestCase):
+
+    def test_the_introduction_of_soaks_1_to_3_is_unchanged(self):
+        self.assertEqual(reading_soak.INTRO,
+                         "Reader here. I am a program Claude set up on your steward's "
+                         "instruction. For the next day I will read you the Song of Songs "
+                         "from the World English Bible, one verse at a time, and now and "
+                         "then I will ask you a question.")
+
+    def test_luke_is_the_whole_gospel(self):
+        luke, _ = reading_soak.load_texts(TEXTS, "luke")
+        self.assertEqual(len(luke), 1151)
+        self.assertEqual((luke[0]["ref"], luke[-1]["ref"]), ("Luke 1:1", "Luke 24:53"))
+        self.assertEqual(sorted({v["chapter"] for v in luke}), list(range(1, 25)))
+
+    def test_a_verse_is_declared_and_nothing_else_is(self):
+        self.assertIs(reading_soak.chat_body("Luke 1:1: ...", reading=True)["reading"], True)
+        self.assertNotIn("reading", reading_soak.chat_body("What was the reading about?"))
+        self.assertNotIn("model", reading_soak.chat_body("hello"))
+        self.assertEqual(reading_soak.chat_body("hello", model="x:1")["model"], "x:1")
+
+    def test_the_question_about_the_reading_fits_what_is_read(self):
+        with open(os.path.join(TEXTS, "genesis-probes.json"), encoding="utf-8") as f:
+            rings = json.load(f)["rings"]
+        song = [reading_soak.ring_ask(p, "song") for p in rings]
+        luke = [reading_soak.ring_ask(p, "luke") for p in rings]
+        self.assertEqual(song, [p["ask"] for p in rings])
+        self.assertEqual(luke[2], "What do you remember of the gospel you have been hearing?")
+        self.assertEqual([luke[i] for i in (0, 1, 3)], [song[i] for i in (0, 1, 3)])
+
+
+class TestWhatTheSoakSaysStaysFactual(unittest.TestCase):
+    """If the reading were stored as fiction it would never form a ring."""
+
+    def test_every_verse_of_luke_as_read(self):
+        luke, _ = reading_soak.load_texts(TEXTS, "luke")
+        flagged = [v["ref"] for v in luke
+                   if detect_mode(reading_soak.verse_message(v))[0] != FACTUAL]
+        self.assertEqual(flagged, [])
+
+    def test_every_verse_as_read(self):
+        with open(os.path.join(TEXTS, "song-of-songs.web.jsonl"), encoding="utf-8") as f:
+            song = [json.loads(l) for l in f]
+        self.assertEqual(len(song), 117)
+        flagged = [v["ref"] for v in song
+                   if detect_mode(reading_soak.verse_message(v))[0] != FACTUAL]
+        self.assertEqual(flagged, [])
+
+    def test_every_question_and_the_introduction(self):
+        with open(os.path.join(TEXTS, "genesis-probes.json"), encoding="utf-8") as f:
+            probes = json.load(f)
+        asks = [reading_soak.INTRO, reading_soak.intro("luke", 8)]
+        asks += [p[k] for p in probes["facts"] for k in ("ask", "ask_steward")]
+        asks += [p["ask"] for p in probes["rings"]]
+        asks += [v for p in probes["rings"] for v in (p.get("ask_for") or {}).values()]
+        flagged = [a for a in asks if detect_mode(a)[0] != FACTUAL]
+        self.assertEqual(flagged, [])
+
+
+class TestScoring(unittest.TestCase):
+
+    P = {"id": "g15", "refs": ["Genesis 19:26"], "expect": ["salt"]}
+
+    def test_steward_attribution_is_told_apart_from_the_asker(self):
+        s = reading_soak.score_fact(self.P, "My steward told me she became a pillar of salt.",
+                                    {"fact_sources": ["Genesis 19:26"], "facts_used": 1})
+        self.assertEqual((s["shown"], s["answered"], s["steward"], s["asker"]),
+                         (True, True, True, False))
+        s = reading_soak.score_fact(self.P, "You told me she became a pillar of salt.", {})
+        self.assertEqual((s["shown"], s["answered"], s["steward"], s["asker"]),
+                         (False, True, False, True))
+
+    def test_a_word_inside_another_does_not_count(self):
+        p = {"id": "g02", "refs": ["Genesis 1:5"], "expect": ["day"]}
+        self.assertFalse(reading_soak.score_fact(p, "Not today.", {})["answered"])
+        self.assertTrue(reading_soak.score_fact(p, "He called it Day.", {})["answered"])
+
+
+class TestContentThatIsNotText(_Proxy):
+    """a message whose content is a list of parts - as some
+    clients send - raised inside the turn, and the threaded server dropped the
+    connection without a word. Now a plain 400, and nothing stored."""
+
+    def post(self, body):
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=30)
+        c.request("POST", "/api/chat", body=json.dumps(body),
+                  headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        raw = r.read()
+        c.close()
+        return r.status, raw
+
+    def test_a_list_of_parts_is_refused_plainly(self):
+        status, raw = self.post({"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "What is my dog called?"}]}]})
+        self.assertEqual(status, 400)
+        self.assertIn("text", json.loads(raw)["error"])
+        self.assertEqual(proxy.root.store.get_episode_count(unconsolidated_only=False), 0)
+
+    def test_messages_that_are_not_a_list_are_refused_plainly(self):
+        status, _ = self.post({"messages": "What is my dog called?"})
+        self.assertEqual(status, 400)
+
+    def test_text_still_works(self):
+        status, text, _ = self.ask("My dog is called Pixel.")
+        self.assertEqual(status, 200)
+        self.assertTrue(text)
+
+
+if __name__ == "__main__":
+    unittest.main()

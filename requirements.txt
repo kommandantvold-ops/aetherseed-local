@@ -1,0 +1,4 @@
+# Runtime dependencies of the application (installed by install.sh into a venv).
+numpy>=1.24
+# Counts prompt tokens against the model's hard prompt limit.
+tokenizers>=0.15

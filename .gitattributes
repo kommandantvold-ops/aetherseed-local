@@ -1,0 +1,12 @@
+# Line endings: LF everywhere.
+* text=auto eol=lf
+
+*.pdf binary
+*.gz binary
+*.tar binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.onnx binary
+*.hef binary
+*.bin binary

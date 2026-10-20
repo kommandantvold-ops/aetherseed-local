@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The kiosk's own labwc config. The kiosk unit passes `-C` with this directory,
+  so the system desktop config in /etc/xdg/labwc is never read.
+
+  Until 25 Sep 2026 it was read, and the console ran the Pi desktop behind
+  Chromium: pcmanfm-pi, wf-panel-pi, kanshi, and an inhibitor that took the
+  power key away from logind and bound it to `pwrkey`, which opens a
+  shutdown dialog - a modal on a device nobody sits at.
+
+  NO <default/> AND NO SHORTCUTS. A guest at the console gets the page and
+  nothing else: no terminal (C-A-t), no run box (A-F2), no closing the
+  browser (A-F4). Ctrl+Alt+F2 to the getty on tty2 is handled by labwc itself,
+  not by a keybind, so it survives this.
+
+  THE POWER KEY. Bound to None here so the compositor swallows it instead of
+  passing it to Chromium; logind reads the key from the device directly and,
+  with nothing inhibiting it, does what logind.conf says: HandlePowerKey=poweroff,
+  an orderly shutdown. One press off; with the board off, one press on.
+-->
+<labwc_config>
+  <keyboard>
+    <numlock>off</numlock>
+    <keybind key="XF86PowerOff">
+      <action name="None" />
+    </keybind>
+  </keyboard>
+</labwc_config>
